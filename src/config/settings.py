@@ -232,6 +232,14 @@ GINLIX_DATA_ENABLED: bool = bool(GINLIX_DATA_URL)
 # Feature Flags
 # =============================================================================
 
+def get_market_data_providers() -> list[dict]:
+    """Return the ordered provider list from ``market_data.providers`` in config.yaml.
+
+    Defaults to FMP-only when no config exists — backward compatible.
+    """
+    return get_nested_config("market_data.providers", [{"name": "fmp", "markets": ["all"]}])
+
+
 def is_result_log_db_enabled() -> bool:
     """Check if result logging to database is enabled."""
     return bool(get_config('result_log_db_enabled', True))

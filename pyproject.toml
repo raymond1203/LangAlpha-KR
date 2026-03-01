@@ -82,6 +82,9 @@ packages = ["src/ptc_agent"]
 [tool.uv]
 required-version = ">=0.6.15"
 
+[tool.ruff.lint]
+ignore = ["E741"]  # allow short names like l, O, I (common in OHLCV code)
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.1",

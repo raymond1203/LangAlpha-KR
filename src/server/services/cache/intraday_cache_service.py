@@ -16,7 +16,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.config.settings import get_ohlcv_ttl
-from src.data_client import get_price_provider
+from src.data_client import get_market_data_provider
 from src.server.services.cache._ohlcv_envelope import (
     _EMPTY_RESULT_TTL,
     _build_envelope,
@@ -60,11 +60,13 @@ class IntradayCacheKeyBuilder:
         interval: str = "1min",
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> str:
         symbol = symbol.upper()
+        src = f"{source}:" if source else ""
         if cls._is_live(to_date):
-            return f"{cls.PREFIX}:stock:{symbol}:{interval}"
-        return f"{cls.PREFIX}:stock:{symbol}:{interval}:{from_date}:{to_date}"
+            return f"{cls.PREFIX}:{src}stock:{symbol}:{interval}"
+        return f"{cls.PREFIX}:{src}stock:{symbol}:{interval}:{from_date}:{to_date}"
 
     @classmethod
     def index_key(
@@ -73,11 +75,13 @@ class IntradayCacheKeyBuilder:
         interval: str = "1min",
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> str:
         normalized = symbol.lstrip("^").upper()
+        src = f"{source}:" if source else ""
         if cls._is_live(to_date):
-            return f"{cls.PREFIX}:index:{normalized}:{interval}"
-        return f"{cls.PREFIX}:index:{normalized}:{interval}:{from_date}:{to_date}"
+            return f"{cls.PREFIX}:{src}index:{normalized}:{interval}"
+        return f"{cls.PREFIX}:{src}index:{normalized}:{interval}:{from_date}:{to_date}"
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +154,10 @@ class IntradayCacheService:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         user_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        provider = await get_price_provider()
-        return await provider.get_intraday(
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Fetch intraday data and return ``(bars, source_name)``."""
+        provider = await get_market_data_provider()
+        data, source = await provider.get_intraday_with_source(
             symbol=symbol,
             interval=interval,
             from_date=from_date,
@@ -160,6 +165,7 @@ class IntradayCacheService:
             is_index=is_index,
             user_id=user_id,
         )
+        return data, source
 
     # -- delta refresh ----------------------------------------------------
 
@@ -199,7 +205,7 @@ class IntradayCacheService:
                 # Use the date portion of the watermark (YYYY-MM-DD prefix)
                 delta_from = watermark[:10] if watermark and len(watermark) >= 10 else None
 
-                delta = await self._fetch_data(
+                delta, _source = await self._fetch_data(
                     symbol, is_index, interval,
                     from_date=delta_from,
                     to_date=None,
@@ -212,7 +218,7 @@ class IntradayCacheService:
                     merged = delta
 
                 # Build new envelope
-                complete = closed and len(delta) == 0 and len(merged) > 0
+                complete = closed and len(merged) > 0
                 base_ttl = self._ttl_for(interval)
                 effective = self._effective_ttl(base_ttl, complete)
                 new_envelope = _build_envelope(merged, phase, complete, stored_ttl=effective)
@@ -260,6 +266,33 @@ class IntradayCacheService:
             user_id=user_id,
         )
 
+    def _build_key(
+        self, symbol: str, is_index: bool, interval: str,
+        from_date: Optional[str], to_date: Optional[str],
+        source: Optional[str] = None,
+    ) -> str:
+        if is_index:
+            return IntradayCacheKeyBuilder.index_key(symbol, interval, from_date, to_date, source=source)
+        return IntradayCacheKeyBuilder.stock_key(symbol, interval, from_date, to_date, source=source)
+
+    async def _find_cached(
+        self, symbol: str, is_index: bool, interval: str,
+        from_date: Optional[str], to_date: Optional[str],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Try cache lookup across all known data sources.
+
+        Returns ``(cache_key, envelope)`` on hit, ``(None, None)`` on miss.
+        """
+        cache = get_cache_client()
+        provider = await get_market_data_provider()
+        for source in provider.source_names:
+            key = self._build_key(symbol, is_index, interval, from_date, to_date, source=source)
+            raw = await cache.get(key)
+            envelope = _parse_envelope(raw) if raw else None
+            if envelope is not None:
+                return key, envelope
+        return None, None
+
     async def _get_intraday(
         self,
         symbol: str,
@@ -271,18 +304,14 @@ class IntradayCacheService:
     ) -> IntradayFetchResult:
         normalized = symbol.lstrip("^").upper()
 
-        if is_index:
-            cache_key = IntradayCacheKeyBuilder.index_key(symbol, interval, from_date, to_date)
-        else:
-            cache_key = IntradayCacheKeyBuilder.stock_key(symbol, interval, from_date, to_date)
-
         base_ttl = self._ttl_for(interval)
         cache = get_cache_client()
         phase = current_market_phase()
 
-        # --- Try cache ---
-        raw = await cache.get(cache_key)
-        envelope = _parse_envelope(raw) if raw else None
+        # --- Try cache (across all known sources) ---
+        cache_key, envelope = await self._find_cached(
+            normalized, is_index, interval, from_date, to_date,
+        )
 
         if envelope is not None:
             bars = envelope["bars"]
@@ -314,10 +343,13 @@ class IntradayCacheService:
 
         # --- Cache miss: full fetch ---
         try:
-            data = await self._fetch_data(normalized, is_index, interval, from_date, to_date, user_id=user_id)
+            data, source = await self._fetch_data(
+                normalized, is_index, interval, from_date, to_date, user_id=user_id,
+            )
+            cache_key = self._build_key(normalized, is_index, interval, from_date, to_date, source=source)
 
             closed = phase == "closed"
-            complete = closed
+            complete = closed and len(data) > 0
             effective_ttl = self._effective_ttl(base_ttl, complete)
 
             # Use short TTL for empty results so we retry quickly
@@ -349,7 +381,6 @@ class IntradayCacheService:
                 cached=False,
                 ttl_remaining=None,
                 background_refresh_triggered=False,
-                cache_key=cache_key,
                 market_phase=phase,
                 error=str(e),
             )
@@ -403,28 +434,22 @@ class IntradayCacheService:
         cache = get_cache_client()
         phase = current_market_phase()
 
-        # Map symbols to (normalized, cache_key)
-        symbol_info: Dict[str, Tuple[str, str]] = {}
-        for sym in symbols:
-            normalized = sym.lstrip("^").upper()
-            if is_index:
-                key = IntradayCacheKeyBuilder.index_key(sym, interval, from_date, to_date)
-            else:
-                key = IntradayCacheKeyBuilder.stock_key(sym, interval, from_date, to_date)
-            symbol_info[sym] = (normalized, key)
-
-        # Phase 1: parallel cache lookups
+        # Phase 1: parallel cache lookups (try all source-namespaced keys)
         cache_misses: List[str] = []
+        # cache_key resolved per symbol (set during hit or fetch)
+        resolved_keys: Dict[str, str] = {}
 
         async def check_cache(sym: str) -> None:
             nonlocal cache_hits, background_refreshes
-            normalized, key = symbol_info[sym]
+            normalized = sym.lstrip("^").upper()
 
-            raw = await cache.get(key)
-            envelope = _parse_envelope(raw) if raw else None
+            key, envelope = await self._find_cached(
+                normalized, is_index, interval, from_date, to_date,
+            )
 
             if envelope is not None:
                 results[normalized] = envelope["bars"]
+                resolved_keys[sym] = key
                 cache_hits += 1
                 if _needs_refresh(envelope, base_ttl):
                     background_refreshes += 1
@@ -438,18 +463,21 @@ class IntradayCacheService:
 
         # Phase 2: fetch misses with semaphore
         if cache_misses:
-            provider = await get_price_provider()
+            provider = await get_market_data_provider()
 
             async def fetch_from_api(sym: str) -> None:
-                normalized, key = symbol_info[sym]
+                normalized = sym.lstrip("^").upper()
                 async with self._semaphore:
                     try:
-                        data = await provider.get_intraday(
+                        data, source = await provider.get_intraday_with_source(
                             symbol=normalized, interval=interval,
                             from_date=from_date, to_date=to_date,
                             is_index=is_index, user_id=user_id,
                         )
                         results[normalized] = data
+                        key = self._build_key(
+                            normalized, is_index, interval, from_date, to_date, source=source,
+                        )
 
                         closed = phase == "closed"
                         complete = closed
@@ -461,7 +489,7 @@ class IntradayCacheService:
 
                     except Exception as e:
                         logger.error(f"Failed to fetch {sym}: {e}")
-                        errors[normalized] = str(e)
+                        errors[sym.lstrip("^").upper()] = str(e)
 
             await asyncio.gather(*[fetch_from_api(s) for s in cache_misses])
 

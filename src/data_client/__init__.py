@@ -15,54 +15,102 @@ MCP convention:
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 import importlib
 from typing import Any
 
 from .fmp import FMPClient
-from .base import PriceDataProvider
+from .base import MarketDataSource, PriceDataProvider  # noqa: F401 — re-export alias
 
+logger = logging.getLogger(__name__)
 
 MCP_SERVER_NAME = "price_data"
 
 # ---------------------------------------------------------------------------
-# Price data provider factory
+# Source registry — maps config name → (availability_check, async_constructor)
 # ---------------------------------------------------------------------------
 
-_price_provider: PriceDataProvider | None = None
-_price_provider_lock = asyncio.Lock()
+
+def _ginlix_data_available() -> bool:
+    from src.config.settings import GINLIX_DATA_URL
+    return bool(GINLIX_DATA_URL)
 
 
-async def get_price_provider() -> PriceDataProvider:
-    """Return the active :class:`PriceDataProvider` singleton.
+def _fmp_available() -> bool:
+    return bool(os.getenv("FMP_API_KEY"))
 
-    When ``GINLIX_DATA_ENABLED`` is true, returns a
-    :class:`GinlixDataPriceProvider` backed by the ginlix-data REST API.
-    Otherwise falls back to :class:`FMPPriceProvider`.
+
+async def _build_ginlix_data_source() -> MarketDataSource:
+    from .ginlix_data import get_ginlix_data_client
+    from .ginlix_data.data_source import GinlixDataSource
+    client = await get_ginlix_data_client()
+    return GinlixDataSource(client)
+
+
+async def _build_fmp_source() -> MarketDataSource:
+    from .fmp.data_source import FMPDataSource
+    return FMPDataSource()
+
+
+_SOURCE_REGISTRY: dict[str, tuple[Any, Any]] = {
+    "ginlix-data": (_ginlix_data_available, _build_ginlix_data_source),
+    "fmp": (_fmp_available, _build_fmp_source),
+}
+
+# ---------------------------------------------------------------------------
+# Market data provider factory
+# ---------------------------------------------------------------------------
+
+_market_data_provider: MarketDataSource | None = None
+_market_data_provider_lock = asyncio.Lock()
+
+
+async def get_market_data_provider() -> MarketDataSource:
+    """Return the active :class:`MarketDataSource` singleton.
+
+    Builds an ordered chain from ``market_data.providers`` in config.yaml.
+    Each provider that passes its availability check is included.
+    When multiple sources are available, requests are routed by market
+    region with automatic fallback.
     """
-    global _price_provider
-    if _price_provider is not None:
-        return _price_provider
+    global _market_data_provider
+    if _market_data_provider is not None:
+        return _market_data_provider
 
-    async with _price_provider_lock:
-        if _price_provider is not None:
-            return _price_provider
+    async with _market_data_provider_lock:
+        if _market_data_provider is not None:
+            return _market_data_provider
 
-        from src.config.settings import GINLIX_DATA_ENABLED
+        from src.config.settings import get_market_data_providers
+        from .market_data_provider import MarketDataProvider, ProviderEntry
 
-        if GINLIX_DATA_ENABLED:
-            from .ginlix_data import get_ginlix_data_client
-            from .ginlix_data.price_adapter import GinlixDataPriceProvider
+        provider_configs = get_market_data_providers()
+        entries: list[ProviderEntry] = []
 
-            client = await get_ginlix_data_client()
-            _price_provider = GinlixDataPriceProvider(client)
-        else:
-            from .fmp.price_adapter import FMPPriceProvider
+        for cfg in provider_configs:
+            name = cfg["name"]
+            markets = set(cfg.get("markets", ["all"]))
+            reg = _SOURCE_REGISTRY.get(name)
+            if reg and reg[0]():  # availability check
+                source = await reg[1]()
+                entries.append(ProviderEntry(name=name, source=source, markets=markets))
+                logger.info("market_data.source.registered | name=%s markets=%s", name, markets)
+            else:
+                logger.info("market_data.source.skipped | name=%s (unavailable)", name)
 
-            _price_provider = FMPPriceProvider()
+        if not entries:
+            raise RuntimeError("No market data source available — check config and credentials")
 
-        return _price_provider
+        _market_data_provider = MarketDataProvider(entries)
+
+        return _market_data_provider
+
+
+# Backward-compatible alias
+get_price_provider = get_market_data_provider
 
 
 class FinancialDataBackendError(RuntimeError):

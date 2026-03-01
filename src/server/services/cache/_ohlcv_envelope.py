@@ -56,6 +56,8 @@ def _merge_bars(
     """
     if not existing:
         return delta
+    if not delta:
+        return existing
 
     # Find split point via bisect on the "date" field
     dates = [b["date"] for b in existing]

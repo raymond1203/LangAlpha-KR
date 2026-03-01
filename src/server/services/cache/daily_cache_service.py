@@ -14,7 +14,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from src.config.settings import get_ohlcv_ttl
-from src.data_client import get_price_provider
+from src.data_client import get_market_data_provider
 from src.server.services.cache._ohlcv_envelope import (
     _EMPTY_RESULT_TTL,
     _build_envelope,
@@ -52,11 +52,13 @@ class DailyCacheKeyBuilder:
         symbol: str,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> str:
         symbol = symbol.upper()
+        src = f"{source}:" if source else ""
         if cls._is_live(to_date):
-            return f"{cls.PREFIX}:stock:{symbol}:1day"
-        return f"{cls.PREFIX}:stock:{symbol}:1day:{from_date}:{to_date}"
+            return f"{cls.PREFIX}:{src}stock:{symbol}:1day"
+        return f"{cls.PREFIX}:{src}stock:{symbol}:1day:{from_date}:{to_date}"
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +125,30 @@ class DailyCacheService:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         user_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        provider = await get_price_provider()
-        return await provider.get_daily(
+    ) -> tuple:
+        """Fetch daily data and return ``(bars, source_name)``."""
+        provider = await get_market_data_provider()
+        data, source = await provider.get_daily_with_source(
             symbol=symbol, from_date=from_date, to_date=to_date, user_id=user_id,
         )
+        return data, source
+
+    async def _find_cached(
+        self, symbol: str, from_date: Optional[str], to_date: Optional[str],
+    ) -> tuple:
+        """Try cache lookup across all known data sources.
+
+        Returns ``(cache_key, envelope)`` on hit, ``(None, None)`` on miss.
+        """
+        cache = get_cache_client()
+        provider = await get_market_data_provider()
+        for source in provider.source_names:
+            key = DailyCacheKeyBuilder.stock_key(symbol, from_date, to_date, source=source)
+            raw = await cache.get(key)
+            envelope = _parse_envelope(raw) if raw else None
+            if envelope is not None:
+                return key, envelope
+        return None, None
 
     # -- delta refresh ----------------------------------------------------
 
@@ -159,14 +180,14 @@ class DailyCacheService:
                 # For daily data, watermark IS a date — use it directly
                 delta_from = watermark[:10] if watermark and len(watermark) >= 10 else None
 
-                delta = await self._fetch_data(symbol, from_date=delta_from, to_date=None, user_id=user_id)
+                delta, _source = await self._fetch_data(symbol, from_date=delta_from, to_date=None, user_id=user_id)
 
                 if watermark and existing_bars:
                     merged = _merge_bars(existing_bars, delta, watermark)
                 else:
                     merged = delta
 
-                complete = closed and len(delta) == 0 and len(merged) > 0
+                complete = closed and len(merged) > 0
                 base = self._base_ttl()
                 eff = self._effective_ttl(base, complete)
                 env = _build_envelope(merged, phase, complete, stored_ttl=eff)
@@ -191,15 +212,13 @@ class DailyCacheService:
         user_id: Optional[str] = None,
     ) -> DailyFetchResult:
         normalized = symbol.upper()
-        cache_key = DailyCacheKeyBuilder.stock_key(normalized, from_date, to_date)
 
         base_ttl = self._base_ttl()
         cache = get_cache_client()
         phase = current_market_phase()
 
-        # --- Try cache ---
-        raw = await cache.get(cache_key)
-        envelope = _parse_envelope(raw) if raw else None
+        # --- Try cache (across all known sources) ---
+        cache_key, envelope = await self._find_cached(normalized, from_date, to_date)
 
         if envelope is not None:
             bars = envelope["bars"]
@@ -230,10 +249,11 @@ class DailyCacheService:
 
         # --- Cache miss: full fetch ---
         try:
-            data = await self._fetch_data(normalized, from_date, to_date, user_id=user_id)
+            data, source = await self._fetch_data(normalized, from_date, to_date, user_id=user_id)
+            cache_key = DailyCacheKeyBuilder.stock_key(normalized, from_date, to_date, source=source)
 
             closed = phase == "closed"
-            complete = closed
+            complete = closed and len(data) > 0
             eff_ttl = self._effective_ttl(base_ttl, complete)
             if not data:
                 eff_ttl = _EMPTY_RESULT_TTL
@@ -261,7 +281,6 @@ class DailyCacheService:
                 cached=False,
                 ttl_remaining=None,
                 background_refresh_triggered=False,
-                cache_key=cache_key,
                 market_phase=phase,
                 error=str(e),
             )

@@ -109,6 +109,20 @@ redis:
 
 
 # =============================================================================
+# MARKET DATA CONFIGURATION
+# =============================================================================
+# Ordered provider chain — requests try each provider in order.
+# Each provider declares which markets it covers.
+# "all" is a catch-all that matches any market.
+market_data:
+  providers:
+    - name: ginlix-data
+      markets: [us]          # US equities only
+    - name: fmp
+      markets: [all]         # FMP — global coverage, catch-all fallback
+
+
+# =============================================================================
 # GITHUB BOT CONFIGURATION
 # =============================================================================
 # GitHub bot for agent self-improvement (issue reporting, PR proposals)

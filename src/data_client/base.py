@@ -1,6 +1,6 @@
-"""Abstract price data provider protocol.
+"""Abstract market data source protocol.
 
-All OHLCV price data providers (FMP, ginlix-data) implement this protocol
+All OHLCV data sources (FMP, ginlix-data) implement this protocol
 so that cache services and routes are backend-agnostic.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 
-class PriceDataProvider(Protocol):
+class MarketDataSource(Protocol):
     """Unified interface for OHLCV price data fetching."""
 
     async def get_intraday(
@@ -43,5 +43,9 @@ class PriceDataProvider(Protocol):
         ...
 
     async def close(self) -> None:
-        """Release resources held by the provider."""
+        """Release resources held by the data source."""
         ...
+
+
+# Backward-compatible alias
+PriceDataProvider = MarketDataSource

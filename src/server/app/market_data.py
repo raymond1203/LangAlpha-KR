@@ -193,6 +193,12 @@ async def get_batch_stocks_intraday(
     user_id: CurrentUserId,
 ) -> BatchIntradayResponse:
     """Get intraday data for multiple stocks."""
+    if request.interval == "1s":
+        raise HTTPException(
+            status_code=422,
+            detail="1s interval is not supported for batch requests. Use the single-symbol endpoint instead.",
+        )
+
     # Validate interval
     if request.interval not in STOCK_INTERVALS:
         raise HTTPException(
@@ -310,6 +316,12 @@ async def get_batch_indexes_intraday(
     user_id: CurrentUserId,
 ) -> BatchIntradayResponse:
     """Get intraday data for multiple indexes."""
+    if request.interval == "1s":
+        raise HTTPException(
+            status_code=422,
+            detail="1s interval is not supported for batch requests. Use the single-symbol endpoint instead.",
+        )
+
     # Validate interval
     if request.interval not in INDEX_INTERVALS:
         raise HTTPException(
