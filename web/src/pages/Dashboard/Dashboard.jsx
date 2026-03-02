@@ -4,7 +4,6 @@ import {
   getCurrentUser,
   getIndices,
   normalizeIndexSymbol,
-  getInfoFlowResults,
   getNews,
 } from './utils/api';
 import { useCallback, useEffect, useState } from 'react';
@@ -13,27 +12,22 @@ import { useToast } from '@/components/ui/use-toast';
 import { getFlashWorkspace } from '../ChatAgent/utils/api';
 import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
+import { Input } from '../../components/ui/input';
 import DashboardHeader from './components/DashboardHeader';
 import ConfirmDialog from './components/ConfirmDialog';
 import IndexMovementCard from './components/IndexMovementCard';
-import PopularCard from './components/PopularCard';
-import TopNewsCard from './components/TopNewsCard';
-import TopResearchCard from './components/TopResearchCard';
+import AIDailyBriefCard from './components/AIDailyBriefCard';
+import NewsFeedCard from './components/NewsFeedCard';
 import ChatInputCard from './components/ChatInputCard';
-import WatchlistCard from './components/WatchlistCard';
+import EarningsCalendarCard from './components/EarningsCalendarCard';
+import PortfolioWatchlistCard from './components/PortfolioWatchlistCard';
+import NewsDetailModal from './components/NewsDetailModal';
 import AddWatchlistItemDialog from './components/AddWatchlistItemDialog';
 import AddPortfolioHoldingDialog from './components/AddPortfolioHoldingDialog';
-import PortfolioCard from './components/PortfolioCard';
 import { useWatchlistData } from './hooks/useWatchlistData';
 import { usePortfolioData } from './hooks/usePortfolioData';
+import { useTickerNews } from './hooks/useTickerNews';
 import './Dashboard.css';
-
-const POPULAR_ITEMS = [
-    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: true },
-    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
-    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
-    { title: 'Comparison Report', description: 'A comprehensive analysis comparing industries.', duration: '20-30min', isHighlighted: false },
-  ];
 
 const NEWS_ITEMS = [
     { title: 'Federal Reserve Signals Potential Rate Cuts Amid Economic Uncertainty', time: '5 min ago', isHot: true },
@@ -46,12 +40,6 @@ const NEWS_ITEMS = [
     { title: 'Renewable Energy Investments Reach All-Time High in Q4', time: '5 hrs ago', isHot: true },
   ];
 
-const RESEARCH_ITEMS = [
-    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-    { title: 'Retail Sales Slump Takes Toll on Market, Stocks Dip', time: '10 min ago' },
-  ];
 
 const ONBOARDING_IGNORE_STORAGE_KEY = 'langalpha-onboarding-ignored-at';
 const ONBOARDING_IGNORE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -77,10 +65,8 @@ function setOnboardingIgnoredFor24h() {
 }
 
 // Module-level caches (survive navigation, clear on page refresh)
-let popularCache = null; // { items, hasMore, offset }
-let newsCache = null;    // { items }
-let researchCache = null; // { items }
-let indicesCache = null; // [ index objects ]
+let newsCache = null;          // { items }
+let indicesCache = null;       // [ index objects ]
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return '';
@@ -100,27 +86,21 @@ function Dashboard() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  
+
   // Onboarding check state
   const [showOnboardingDialog, setShowOnboardingDialog] = useState(false);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
-  
+
+  // News modal state
+  const [selectedNewsId, setSelectedNewsId] = useState(null);
+
   const [indices, setIndices] = useState(() =>
     indicesCache || INDEX_SYMBOLS.map((s) => fallbackIndex(normalizeIndexSymbol(s)))
   );
   const [indicesLoading, setIndicesLoading] = useState(!indicesCache);
 
-  const [popularItems, setPopularItems] = useState(() => popularCache?.items || POPULAR_ITEMS);
-  const [popularLoading, setPopularLoading] = useState(!popularCache);
-  const [popularHasMore, setPopularHasMore] = useState(() => popularCache?.hasMore || false);
-  const [popularOffset, setPopularOffset] = useState(() => popularCache?.offset || 0);
-  const POPULAR_PAGE_SIZE = 10;
-
   const [newsItems, setNewsItems] = useState(() => newsCache?.items || NEWS_ITEMS);
   const [newsLoading, setNewsLoading] = useState(!newsCache);
-
-  const [researchItems, setResearchItems] = useState(() => researchCache?.items || RESEARCH_ITEMS);
-  const [researchLoading, setResearchLoading] = useState(!researchCache);
 
   const fetchNews = useCallback(async () => {
     setNewsLoading(true);
@@ -134,6 +114,8 @@ function Dashboard() {
           isHot: r.has_sentiment,
           source: r.source?.name || '',
           favicon: r.source?.favicon_url || null,
+          image: r.image_url || null,
+          tickers: r.tickers || [],
         }));
         setNewsItems(mapped);
         newsCache = { items: mapped };
@@ -147,48 +129,9 @@ function Dashboard() {
     }
   }, []);
 
-  const fetchPopular = useCallback(async (offset = 0, append = false) => {
-    if (!append) setPopularLoading(true);
-    try {
-      const data = await getInfoFlowResults('hot_topic', POPULAR_PAGE_SIZE, offset);
-      if (data.results && data.results.length > 0) {
-        const newItems = data.results.map((r) => ({
-          indexNumber: r.indexNumber,
-          title: r.title,
-          description: r.summary || '',
-          tags: r.tags || [],
-          event_timestamp: r.event_timestamp || '',
-          image: r.images?.[0]?.url || r.images?.[0] || null,
-        }));
-        const newOffset = offset + data.results.length;
-        setPopularItems((prev) => {
-          const updated = append ? [...prev, ...newItems] : newItems;
-          popularCache = { items: updated, hasMore: data.has_more, offset: newOffset };
-          return updated;
-        });
-        setPopularHasMore(data.has_more);
-        setPopularOffset(newOffset);
-      } else if (!append) {
-        setPopularItems(POPULAR_ITEMS);
-        setPopularHasMore(false);
-      }
-    } catch {
-      if (!append) setPopularItems(POPULAR_ITEMS);
-    } finally {
-      setPopularLoading(false);
-    }
-  }, []);
-
-  const loadMorePopular = useCallback(() => {
-    if (popularHasMore) {
-      fetchPopular(popularOffset, true);
-    }
-  }, [popularHasMore, popularOffset, fetchPopular]);
-
   useEffect(() => {
-    if (!popularCache) fetchPopular(0, false);
     if (!newsCache) fetchNews();
-  }, [fetchPopular, fetchNews]);
+  }, [fetchNews]);
 
   const fetchIndices = useCallback(async () => {
     if (!indicesCache) setIndicesLoading(true);
@@ -207,32 +150,23 @@ function Dashboard() {
   }, []);
 
   useEffect(() => {
-    // Fetch immediately on mount
     fetchIndices();
-    
-    // Set up interval to fetch every minute (60000ms)
     const intervalId = setInterval(() => {
       console.log('[Dashboard] Refreshing Index Movement data');
       fetchIndices();
-    }, 60000); // 60 seconds = 1 minute
-    
-    // Cleanup interval on unmount
-    return () => {
-      clearInterval(intervalId);
-    };
+    }, 60000);
+    return () => clearInterval(intervalId);
   }, [fetchIndices]);
 
   /**
    * Check onboarding completion status on every Dashboard mount.
-   * Refetches so we pick up onboarding_completed after ChatAgent completes it.
-   * Only shows dialog if onboarding is incomplete AND user hasn't clicked Ignore for 24h (persisted in localStorage).
    */
   useEffect(() => {
     const checkOnboarding = async () => {
       try {
         const userData = await getCurrentUser();
         const onboardingCompleted = userData?.user?.onboarding_completed;
-        
+
         if (onboardingCompleted === true) {
           setShowOnboardingDialog(false);
           return;
@@ -294,53 +228,8 @@ function Dashboard() {
   const watchlist = useWatchlistData();
   const portfolio = usePortfolioData();
 
-  const fetchWatchlistNews = useCallback(async () => {
-    setResearchLoading(true);
-    try {
-      // Collect tickers from watchlist + portfolio
-      const tickers = new Set();
-      if (watchlist.rows) watchlist.rows.forEach((r) => r.symbol && tickers.add(r.symbol));
-      if (portfolio.rows) portfolio.rows.forEach((r) => r.symbol && tickers.add(r.symbol));
-
-      const tickerList = [...tickers];
-      const tickerKey = [...tickers].sort().join(',');
-      const data = tickerList.length
-        ? await getNews({ tickers: tickerList, limit: 50 })
-        : await getNews({ limit: 50 });
-
-      if (data.results && data.results.length > 0) {
-        const mapped = data.results.map((r) => ({
-          id: r.id,
-          title: r.title,
-          time: formatRelativeTime(r.published_at),
-          image: r.image_url || null,
-          source: r.source?.name || '',
-          favicon: r.source?.favicon_url || null,
-        }));
-        setResearchItems(mapped);
-        researchCache = { items: mapped, tickerKey };
-      } else {
-        setResearchItems(RESEARCH_ITEMS);
-      }
-    } catch {
-      setResearchItems(RESEARCH_ITEMS);
-    } finally {
-      setResearchLoading(false);
-    }
-  }, [watchlist.rows, portfolio.rows]);
-
-  useEffect(() => {
-    // Build current ticker fingerprint to detect watchlist/portfolio changes
-    const tickers = new Set();
-    if (watchlist.rows) watchlist.rows.forEach((r) => r.symbol && tickers.add(r.symbol));
-    if (portfolio.rows) portfolio.rows.forEach((r) => r.symbol && tickers.add(r.symbol));
-    const tickerKey = [...tickers].sort().join(',');
-
-    if (researchCache?.tickerKey !== tickerKey) {
-      researchCache = null;
-    }
-    if (!researchCache) fetchWatchlistNews();
-  }, [fetchWatchlistNews, watchlist.rows, portfolio.rows]);
+  const portfolioNews = useTickerNews(portfolio.rows, 'portfolio');
+  const watchlistNews = useTickerNews(watchlist.rows, 'watchlist');
 
   const [deleteConfirm, setDeleteConfirm] = useState({
     open: false,
@@ -363,6 +252,71 @@ function Dashboard() {
 
   return (
     <div className="dashboard-container min-h-screen">
+      {/* Main content area */}
+      <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+        <DashboardHeader onModifyPreferences={navigateToModifyPreferences} onStartOnboarding={navigateToOnboarding} />
+
+        <div className="mx-auto max-w-[1920px] w-full p-6 pb-32">
+          {/* Market Overview heading */}
+          <h1
+            className="text-2xl font-bold mb-6"
+            style={{ color: 'var(--color-text-primary)' }}
+          >
+            Market Overview
+          </h1>
+
+          {/* Index Movement — full width */}
+          <div className="mb-8">
+            <IndexMovementCard indices={indices} loading={indicesLoading} />
+          </div>
+
+          {/* 3-column grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Left 2/3 */}
+            <div className="lg:col-span-2 space-y-8">
+              <AIDailyBriefCard />
+              <NewsFeedCard
+                marketItems={newsItems}
+                marketLoading={newsLoading}
+                portfolioItems={portfolioNews.items}
+                portfolioLoading={portfolioNews.loading}
+                watchlistItems={watchlistNews.items}
+                watchlistLoading={watchlistNews.loading}
+                onNewsClick={setSelectedNewsId}
+              />
+            </div>
+
+            {/* Right 1/3 — sticky sidebar */}
+            <div className="lg:col-span-1">
+              <div className="lg:sticky lg:top-24 space-y-6">
+                <EarningsCalendarCard />
+                <div className="lg:h-[calc(100vh-420px)]">
+                  <PortfolioWatchlistCard
+                    watchlistRows={watchlist.rows}
+                    watchlistLoading={watchlist.loading}
+                    onWatchlistAdd={() => watchlist.setModalOpen(true)}
+                    onWatchlistDelete={watchlist.handleDelete}
+                    portfolioRows={portfolio.rows}
+                    portfolioLoading={portfolio.loading}
+                    hasRealHoldings={portfolio.hasRealHoldings}
+                    onPortfolioAdd={() => portfolio.setModalOpen(true)}
+                    onPortfolioDelete={handleDeletePortfolioItem}
+                    onPortfolioEdit={portfolio.openEdit}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Floating chat */}
+        <ChatInputCard />
+      </main>
+
+      {/* News Detail Modal */}
+      <NewsDetailModal newsId={selectedNewsId} onClose={() => setSelectedNewsId(null)} />
+
+      {/* Dialogs */}
       <ConfirmDialog
         open={deleteConfirm.open}
         title={deleteConfirm.title}
@@ -370,7 +324,7 @@ function Dashboard() {
         confirmLabel={t('common.delete')}
         onConfirm={runDeleteConfirm}
         onOpenChange={(open) => !open && setDeleteConfirm((p) => ({ ...p, open: false }))}
-            />
+      />
 
       {/* Onboarding Incomplete Dialog */}
       <Dialog open={showOnboardingDialog} onOpenChange={setShowOnboardingDialog}>
@@ -406,73 +360,77 @@ function Dashboard() {
               style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
             >
               {isCreatingWorkspace ? t('dashboard.settingUp') : t('dashboard.proceed')}
-                    </button>
-                  </div>
+            </button>
+          </div>
         </DialogContent>
       </Dialog>
 
-      <DashboardHeader onModifyPreferences={navigateToModifyPreferences} onStartOnboarding={navigateToOnboarding} />
-
-      <div className="flex-1 min-h-0 overflow-auto lg:overflow-hidden flex flex-col">
-        <div className="w-full flex-1 min-h-0 flex justify-center">
-          <div className="w-full lg:h-full min-h-0 max-w-[1400px] px-3 sm:px-6 py-4 flex flex-col">
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4 flex-1 min-h-0 lg:h-full">
-              <div className="w-full flex flex-col gap-4 lg:h-full min-h-0 overflow-auto lg:overflow-hidden">
-                <div className="dashboard-enter dashboard-enter-d1">
-                  <IndexMovementCard indices={indices} loading={indicesLoading} />
-                </div>
-                <div className="dashboard-enter dashboard-enter-d2">
-                  <PopularCard items={popularItems} loading={popularLoading} hasMore={popularHasMore} onLoadMore={loadMorePopular} />
-                </div>
-                <div className="dashboard-enter dashboard-enter-d3 w-full grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1 min-h-0 overflow-hidden">
-                  <TopNewsCard items={newsItems} loading={newsLoading} />
-                  <TopResearchCard items={researchItems} loading={researchLoading} />
-                </div>
-                <div className="dashboard-enter dashboard-enter-d4">
-                  <ChatInputCard />
-                </div>
-              </div>
-
-              <div className="w-full flex flex-col gap-4 h-full min-h-0 overflow-hidden">
-                <div className="dashboard-enter dashboard-enter-d5 flex flex-col flex-1 min-h-0">
-                  <WatchlistCard
-                    rows={watchlist.rows}
-                    loading={watchlist.loading}
-                    onHeaderAddClick={() => watchlist.setModalOpen(true)}
-                    onDeleteItem={watchlist.handleDelete}
-                  />
-                </div>
-                <AddWatchlistItemDialog
-                  open={watchlist.modalOpen}
-                  onClose={() => watchlist.setModalOpen(false)}
-                  onAdd={watchlist.handleAdd}
-                  watchlistId={watchlist.currentWatchlistId}
-                />
-                <div className="dashboard-enter dashboard-enter-d6 flex flex-col flex-1 min-h-0">
-                  <PortfolioCard
-                    rows={portfolio.rows}
-                    loading={portfolio.loading}
-                    hasRealHoldings={portfolio.hasRealHoldings}
-                    onHeaderAddClick={() => portfolio.setModalOpen(true)}
-                    editRow={portfolio.editRow}
-                    editForm={portfolio.editForm}
-                    onEditFormChange={portfolio.setEditForm}
-                    onEditSubmit={portfolio.handleUpdate}
-                    onEditClose={() => portfolio.openEdit(null)}
-                    onDeleteItem={handleDeletePortfolioItem}
-                    onEditItem={portfolio.openEdit}
-                  />
-                </div>
-                <AddPortfolioHoldingDialog
-                  open={portfolio.modalOpen}
-                  onClose={() => portfolio.setModalOpen(false)}
-                  onAdd={portfolio.handleAdd}
-                />
-              </div>
-                </div>
+      {/* Portfolio Edit Dialog */}
+      <Dialog open={!!portfolio.editRow} onOpenChange={(open) => !open && portfolio.openEdit(null)}>
+        <DialogContent className="sm:max-w-sm border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
+          <DialogHeader>
+            <DialogTitle className="dashboard-title-font" style={{ color: 'var(--color-text-primary)' }}>Edit holding — {portfolio.editRow?.symbol}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 py-2" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); portfolio.handleUpdate?.(); } }}>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--color-text-secondary)' }}>Quantity *</label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="e.g. 10.5"
+                value={portfolio.editForm.quantity ?? ''}
+                onChange={(e) => portfolio.setEditForm?.({ ...portfolio.editForm, quantity: e.target.value })}
+                className="border"
+                style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--color-text-secondary)' }}>Average Cost Per Share *</label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="e.g. 175.50"
+                value={portfolio.editForm.averageCost ?? ''}
+                onChange={(e) => portfolio.setEditForm?.({ ...portfolio.editForm, averageCost: e.target.value })}
+                className="border"
+                style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
+              />
+            </div>
+            <div>
+              <label className="text-xs block mb-1" style={{ color: 'var(--color-text-secondary)' }}>Notes</label>
+              <Input
+                placeholder="Optional"
+                value={portfolio.editForm.notes ?? ''}
+                onChange={(e) => portfolio.setEditForm?.({ ...portfolio.editForm, notes: e.target.value })}
+                className="border"
+                style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
+              />
+            </div>
           </div>
-        </div>
-      </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={() => portfolio.openEdit(null)} className="px-3 py-1.5 rounded text-sm border hover:bg-foreground/10" style={{ color: 'var(--color-text-primary)', borderColor: 'var(--color-border-default)' }}>
+              Cancel
+            </button>
+            <button type="button" onClick={portfolio.handleUpdate} className="px-3 py-1.5 rounded text-sm font-medium hover:opacity-90" style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}>
+              Save
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AddWatchlistItemDialog
+        open={watchlist.modalOpen}
+        onClose={() => watchlist.setModalOpen(false)}
+        onAdd={watchlist.handleAdd}
+        watchlistId={watchlist.currentWatchlistId}
+      />
+      <AddPortfolioHoldingDialog
+        open={portfolio.modalOpen}
+        onClose={() => portfolio.setModalOpen(false)}
+        onAdd={portfolio.handleAdd}
+      />
     </div>
   );
 }

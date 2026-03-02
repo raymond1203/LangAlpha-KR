@@ -12,17 +12,10 @@
   min-height: 100vh;
   height: 100vh;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   box-sizing: border-box;
-  overflow-y: auto;
+  overflow: hidden;
   background-color: var(--color-bg-page);
-  background-image: radial-gradient(
-    circle at center,
-    var(--color-dot-grid) 0.75px,
-    transparent 0.75px
-  );
-  background-size: 18px 18px;
-  background-position: 0 0;
 }
 
 /* Dashboard-specific scrollbar styling */
@@ -163,4 +156,30 @@
   background: var(--color-loss-soft);
   border-radius: 4px;
   padding: 2px 6px;
+}
+
+/* === Glassmorphism card === */
+.dashboard-glass-card {
+  background: var(--color-bg-card);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--color-border-muted);
+  border-radius: 1.5rem;
+}
+.dashboard-glass-card:hover {
+  border-color: var(--color-border-default);
+}
+
+/* === Floating chat input === */
+.dashboard-floating-chat {
+  background: var(--color-bg-elevated);
+  backdrop-filter: blur(48px);
+  border: 1px solid var(--color-border-muted);
+  border-radius: 9999px;
+  box-shadow: 0 0 30px var(--color-accent-soft);
+  transition: all 0.3s;
+}
+.dashboard-floating-chat:focus-within {
+  border-color: var(--color-accent-overlay);
+  border-radius: 1rem;
+  box-shadow: 0 0 30px var(--color-accent-soft);
 }

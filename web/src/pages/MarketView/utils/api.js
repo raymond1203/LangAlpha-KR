@@ -7,6 +7,9 @@ import { supabase } from '@/lib/supabase';
 
 const baseURL = api.defaults.baseURL;
 
+/** Strip leading ^ from index symbols to match backend batch response keys. */
+const normalizeSymbolKey = (sym) => sym.replace(/^\^/, '');
+
 /**
  * Build the WebSocket URL for the market data aggregate stream.
  * Converts the HTTP baseURL (e.g. http://localhost:8000) to ws:// scheme.
@@ -83,13 +86,15 @@ export async function fetchStockData(symbol, interval = '1hour', fromDate, toDat
   }
 
   const symbolUpper = symbol.trim().toUpperCase();
+  const isIndex = symbolUpper.startsWith('^');
 
   try {
     // Use daily endpoint for 1day interval, intraday endpoint for everything else
     const isDaily = interval === '1day';
+    const market = isIndex ? 'indexes' : 'stocks';
     const url = isDaily
-      ? `/api/v1/market-data/daily/stocks/${encodeURIComponent(symbolUpper)}`
-      : `/api/v1/market-data/intraday/stocks/${encodeURIComponent(symbolUpper)}`;
+      ? `/api/v1/market-data/daily/${market}/${encodeURIComponent(symbolUpper)}`
+      : `/api/v1/market-data/intraday/${market}/${encodeURIComponent(symbolUpper)}`;
     const params = isDaily ? {} : { interval };
 
     if (fromDate) params.from = fromDate;
@@ -167,16 +172,21 @@ export async function fetchRealTimePrice(symbol, { signal } = {}) {
   }
 
   const symbolUpper = symbol.trim().toUpperCase();
+  const isIndex = symbolUpper.startsWith('^');
 
   try {
     // Use batch endpoint to get latest price
-    const { data } = await api.post('/api/v1/market-data/intraday/stocks', {
+    const batchEndpoint = isIndex
+      ? '/api/v1/market-data/intraday/indexes'
+      : '/api/v1/market-data/intraday/stocks';
+    const { data } = await api.post(batchEndpoint, {
       symbols: [symbolUpper],
       interval: '1min',
     }, { signal });
 
     const results = data?.results || {};
-    const points = results[symbolUpper];
+    const lookupKey = normalizeSymbolKey(symbolUpper);
+    const points = results[lookupKey];
 
     if (!Array.isArray(points) || points.length === 0) {
       throw new Error('No price data available');
@@ -226,17 +236,22 @@ export async function fetchStockInfo(symbol, { signal } = {}) {
   }
 
   const symbolUpper = symbol.trim().toUpperCase();
+  const isIndex = symbolUpper.startsWith('^');
 
   try {
     // Use intraday endpoint to get basic info
     // In a full implementation, this would call a dedicated profile endpoint
-    const { data } = await api.post('/api/v1/market-data/intraday/stocks', {
+    const batchEndpoint = isIndex
+      ? '/api/v1/market-data/intraday/indexes'
+      : '/api/v1/market-data/intraday/stocks';
+    const { data } = await api.post(batchEndpoint, {
       symbols: [symbolUpper],
       interval: '1min',
     }, { signal });
 
     const results = data?.results || {};
-    const points = results[symbolUpper];
+    const lookupKey = normalizeSymbolKey(symbolUpper);
+    const points = results[lookupKey];
 
     if (!Array.isArray(points) || points.length === 0) {
       return {
@@ -315,10 +330,11 @@ export async function fetchStockQuote(symbol, { signal } = {}) {
   }
 
   const symbolUpper = symbol.trim().toUpperCase();
+  const isIndex = symbolUpper.startsWith('^');
   const fallbackInfo = {
     Symbol: symbolUpper,
     Name: `${symbolUpper} Corp`,
-    Exchange: 'NASDAQ',
+    Exchange: isIndex ? '' : 'NASDAQ',
     Price: 0,
     Open: 0,
     High: 0,
@@ -332,13 +348,17 @@ export async function fetchStockQuote(symbol, { signal } = {}) {
   };
 
   try {
-    const { data } = await api.post('/api/v1/market-data/intraday/stocks', {
+    const batchEndpoint = isIndex
+      ? '/api/v1/market-data/intraday/indexes'
+      : '/api/v1/market-data/intraday/stocks';
+    const { data } = await api.post(batchEndpoint, {
       symbols: [symbolUpper],
       interval: '1min',
     }, { signal });
 
     const results = data?.results || {};
-    const points = results[symbolUpper];
+    const lookupKey = normalizeSymbolKey(symbolUpper);
+    const points = results[lookupKey];
 
     if (!Array.isArray(points) || points.length === 0) {
       return { stockInfo: fallbackInfo, realTimePrice: null };

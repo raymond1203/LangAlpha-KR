@@ -12,7 +12,7 @@
 .app-main {
   width: 100%;
   min-height: 100vh;
-  padding-left: 72px;
+  padding-left: 80px;
   background-color: hsl(var(--bg-main));
   overflow: auto;
   box-sizing: border-box;

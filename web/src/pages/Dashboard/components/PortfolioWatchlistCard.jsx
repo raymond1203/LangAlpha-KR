@@ -1,0 +1,390 @@
+import React, { useState } from 'react';
+import { Plus, ArrowUpRight, ArrowDownRight, Trash2, Pencil, Eye, EyeOff } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+function ContextMenu({ menu, onClose, items }) {
+  if (!menu) return null;
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div
+        className="fixed z-50 min-w-[120px] rounded-lg border py-1 shadow-lg"
+        style={{ left: menu.x, top: menu.y, backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}
+      >
+        {items.map((item, i) => (
+          <button
+            key={i}
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors"
+            style={{ color: 'var(--color-text-primary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+            onClick={item.onClick}
+          >
+            {item.icon}
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function WatchlistItem({ item, index, onDelete }) {
+  const [menu, setMenu] = useState(null); // { x, y } or null
+  const pos = item.isPositive;
+  const pctStr = (pos ? '+' : '') + Number(item.changePercent).toFixed(2) + '%';
+
+  const handleContextMenu = (e) => {
+    if (!item.watchlist_item_id) return;
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0, x: -10 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ delay: index * 0.05 }}
+        className="flex items-center justify-between p-3 rounded-xl border border-transparent transition-all cursor-default"
+        style={{ backgroundColor: 'transparent' }}
+        onContextMenu={handleContextMenu}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
+          e.currentTarget.style.borderColor = 'var(--color-border-muted)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.backgroundColor = 'transparent';
+          e.currentTarget.style.borderColor = 'transparent';
+        }}
+      >
+        <div>
+          <div className="font-bold text-sm" style={{ color: 'var(--color-text-primary)' }}>
+            {item.symbol}
+          </div>
+          <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>Stock</div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="text-sm font-medium dashboard-mono" style={{ color: 'var(--color-text-primary)' }}>
+              {Number(item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="text-xs font-medium dashboard-mono" style={{ color: pos ? 'var(--color-profit)' : 'var(--color-loss)' }}>
+              {(pos ? '+' : '') + Number(item.change).toFixed(2)}
+            </div>
+          </div>
+
+          <div
+            className="w-16 py-1 rounded-lg text-center text-xs font-bold"
+            style={{
+              backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+              color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
+            }}
+          >
+            {pctStr}
+          </div>
+        </div>
+      </motion.div>
+
+      <ContextMenu
+        menu={menu}
+        onClose={() => setMenu(null)}
+        items={[{ icon: <Trash2 className="h-3.5 w-3.5" style={{ color: 'var(--color-text-secondary)' }} />, label: 'Delete', onClick: () => { setMenu(null); onDelete?.(String(item.watchlist_item_id)); } }]}
+      />
+    </>
+  );
+}
+
+function PortfolioItem({ item, index, onEdit, onDelete, valuesHidden }) {
+  const [menu, setMenu] = useState(null); // { x, y } or null
+  const pos = item.isPositive;
+  const plStr =
+    item.unrealizedPlPercent != null
+      ? (pos ? '+' : '') + Number(item.unrealizedPlPercent).toFixed(2) + '%'
+      : '—';
+
+  const handleContextMenu = (e) => {
+    if (!item.user_portfolio_id) return;
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0, x: -10 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ delay: index * 0.05 }}
+        className="flex items-center justify-between p-3 rounded-xl border border-transparent transition-all cursor-default"
+        style={{ backgroundColor: 'transparent' }}
+        onContextMenu={handleContextMenu}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
+          e.currentTarget.style.borderColor = 'var(--color-border-muted)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.backgroundColor = 'transparent';
+          e.currentTarget.style.borderColor = 'transparent';
+        }}
+      >
+        <div>
+          <div className="font-bold text-sm" style={{ color: 'var(--color-text-primary)' }}>
+            {item.symbol}
+          </div>
+          <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+            {valuesHidden ? '*** shares' : item.quantity != null ? `${Number(item.quantity).toLocaleString()} shares` : ''}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="text-sm font-medium dashboard-mono" style={{ color: 'var(--color-text-primary)' }}>
+              {valuesHidden ? '******' : `$${Number(item.marketValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </div>
+            <div className="text-xs dashboard-mono" style={{ color: 'var(--color-text-secondary)' }}>
+              {valuesHidden ? '***' : `@${Number(item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </div>
+          </div>
+
+          <div
+            className="w-16 py-1 rounded-lg text-center text-xs font-bold"
+            style={{
+              backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+              color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
+            }}
+          >
+            {plStr}
+          </div>
+        </div>
+      </motion.div>
+
+      <ContextMenu
+        menu={menu}
+        onClose={() => setMenu(null)}
+        items={[
+          { icon: <Pencil className="h-3.5 w-3.5" style={{ color: 'var(--color-text-secondary)' }} />, label: 'Edit', onClick: () => { setMenu(null); onEdit?.(item); } },
+          { icon: <Trash2 className="h-3.5 w-3.5" style={{ color: 'var(--color-text-secondary)' }} />, label: 'Delete', onClick: () => { setMenu(null); onDelete?.(String(item.user_portfolio_id)); } },
+        ]}
+      />
+    </>
+  );
+}
+
+function AddNewButton({ label, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center justify-center gap-2 w-full py-3 mt-2 rounded-xl border border-dashed text-sm font-medium transition-all"
+      style={{
+        borderColor: 'var(--color-border-default)',
+        color: 'var(--color-text-secondary)',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--color-border-elevated)';
+        e.currentTarget.style.color = 'var(--color-text-primary)';
+        e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--color-border-default)';
+        e.currentTarget.style.color = 'var(--color-text-secondary)';
+        e.currentTarget.style.backgroundColor = '';
+      }}
+    >
+      <Plus size={16} /> {label}
+    </button>
+  );
+}
+
+function PortfolioWatchlistCard({
+  watchlistRows = [],
+  watchlistLoading = false,
+  onWatchlistAdd,
+  onWatchlistDelete,
+  portfolioRows = [],
+  portfolioLoading = false,
+  hasRealHoldings = false,
+  onPortfolioAdd,
+  onPortfolioDelete,
+  onPortfolioEdit,
+}) {
+  const [activeTab, setActiveTabRaw] = useState(() => localStorage.getItem('portfolio_active_tab') || 'watchlist');
+  const [valuesHidden, setValuesHiddenRaw] = useState(() => localStorage.getItem('portfolio_values_hidden') === 'true');
+
+  const setActiveTab = (tab) => {
+    setActiveTabRaw(tab);
+    localStorage.setItem('portfolio_active_tab', tab);
+  };
+  const setValuesHidden = (updater) => {
+    setValuesHiddenRaw((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      localStorage.setItem('portfolio_values_hidden', String(next));
+      return next;
+    });
+  };
+
+  // Compute portfolio summary
+  const totalValue = portfolioRows.reduce((sum, r) => sum + (r.marketValue || 0), 0);
+  const totalCost = portfolioRows.reduce(
+    (sum, r) => sum + (r.average_cost != null ? r.average_cost * (r.quantity || 0) : 0),
+    0
+  );
+  const totalPl = totalCost > 0 ? totalValue - totalCost : 0;
+  const totalPlPct = totalCost > 0 ? ((totalValue - totalCost) / totalCost) * 100 : 0;
+  const isPlPositive = totalPl >= 0;
+
+  return (
+    <div className="dashboard-glass-card p-6 h-full flex flex-col">
+      {/* Header with tab switcher */}
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+          {activeTab === 'watchlist' ? 'Watchlist' : 'Portfolio'}
+        </h2>
+        <div className="flex rounded-lg p-1" style={{ backgroundColor: 'var(--color-bg-tag)' }}>
+          <button
+            onClick={() => setActiveTab('watchlist')}
+            className="px-3 py-1 text-xs font-medium rounded-md transition-all"
+            style={{
+              backgroundColor: activeTab === 'watchlist' ? 'var(--color-bg-elevated)' : 'transparent',
+              color: activeTab === 'watchlist' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+            }}
+          >
+            Watch
+          </button>
+          <button
+            onClick={() => setActiveTab('portfolio')}
+            className="px-3 py-1 text-xs font-medium rounded-md transition-all"
+            style={{
+              backgroundColor: activeTab === 'portfolio' ? 'var(--color-bg-elevated)' : 'transparent',
+              color: activeTab === 'portfolio' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+            }}
+          >
+            Holdings
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto pr-1 space-y-1">
+        <AnimatePresence mode="wait">
+          {activeTab === 'watchlist' ? (
+            <motion.div
+              key="watchlist"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="flex flex-col gap-1"
+            >
+              {watchlistLoading
+                ? Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 animate-pulse">
+                      <div className="flex-1">
+                        <div
+                          className="h-4 rounded mb-1"
+                          style={{ backgroundColor: 'var(--color-border-default)', width: '40%' }}
+                        />
+                        <div
+                          className="h-3 rounded"
+                          style={{ backgroundColor: 'var(--color-border-default)', width: '25%' }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                : watchlistRows.map((item, i) => (
+                    <WatchlistItem
+                      key={item.watchlist_item_id ?? item.symbol}
+                      item={item}
+                      index={i}
+                      onDelete={onWatchlistDelete}
+                    />
+                  ))}
+              <AddNewButton label="Add Symbol" onClick={onWatchlistAdd} />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="portfolio"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="flex flex-col gap-1"
+            >
+              {/* Summary card */}
+              {hasRealHoldings && (
+                <div
+                  className="p-4 rounded-2xl border mb-4"
+                  style={{
+                    background: `linear-gradient(135deg, var(--color-accent-soft) 0%, var(--color-bg-card) 100%)`,
+                    borderColor: 'var(--color-accent-overlay)',
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                      Net Asset Value
+                    </div>
+                    <button
+                      onClick={() => setValuesHidden((h) => !h)}
+                      className="p-1 rounded-md transition-colors"
+                      style={{ color: 'var(--color-text-secondary)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                    >
+                      {valuesHidden ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                  <div
+                    className="text-2xl font-bold mb-2 dashboard-mono"
+                    style={{ color: 'var(--color-text-primary)' }}
+                  >
+                    {valuesHidden ? '********' : `$${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  </div>
+                  {!valuesHidden && (
+                    <div
+                      className="flex items-center gap-2 text-xs font-medium w-fit px-2 py-1 rounded-full"
+                      style={{
+                        backgroundColor: isPlPositive ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+                        color: isPlPositive ? 'var(--color-profit)' : 'var(--color-loss)',
+                      }}
+                    >
+                      {isPlPositive ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                      {isPlPositive ? '+' : '-'}${Math.abs(totalPl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({totalPlPct.toFixed(1)}%)
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {portfolioLoading
+                ? Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 animate-pulse">
+                      <div className="flex-1">
+                        <div
+                          className="h-4 rounded mb-1"
+                          style={{ backgroundColor: 'var(--color-border-default)', width: '40%' }}
+                        />
+                        <div
+                          className="h-3 rounded"
+                          style={{ backgroundColor: 'var(--color-border-default)', width: '25%' }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                : portfolioRows.map((item, i) => (
+                    <PortfolioItem
+                      key={item.user_portfolio_id ?? item.symbol}
+                      item={item}
+                      index={i}
+                      onEdit={onPortfolioEdit}
+                      onDelete={onPortfolioDelete}
+                      valuesHidden={valuesHidden}
+                    />
+                  ))}
+              <AddNewButton label="Add Transaction" onClick={onPortfolioAdd} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
+export default PortfolioWatchlistCard;

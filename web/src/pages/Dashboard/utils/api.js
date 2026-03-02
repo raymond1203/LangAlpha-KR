@@ -7,39 +7,14 @@ import * as portfolioApi from './portfolio';
 import * as watchlistApi from './watchlist';
 import * as watchlistItemsApi from './watchlistItems';
 
-const baseURL = api.defaults.baseURL;
-
 // --- Market data (see docs/ptc-agent-api/market data) ---
 
 /** Index symbols: normalized (GSPC, IXIC, DJI, RUT). Index.yml / Index Batch.yml use these. */
-const INDEX_SYMBOLS = ['GSPC', 'IXIC', 'DJI', 'RUT'];
-const INDEX_NAMES = { GSPC: 'S&P 500', IXIC: 'NASDAQ 100', DJI: 'Dow Jones', RUT: 'Russell 2000' };
+const INDEX_SYMBOLS = ['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX'];
+const INDEX_NAMES = { GSPC: 'S&P 500', IXIC: 'NASDAQ 100', DJI: 'Dow Jones', RUT: 'Russell 2000', VIX: 'VIX' };
 
 function normalizeIndexSymbol(s) {
   return String(s).replace(/^\^/, '').toUpperCase();
-}
-
-function parseDataPoints(pts, norm) {
-  if (!Array.isArray(pts) || !pts.length) {
-    return null;
-  }
-  const first = pts[0];
-  const last = pts[pts.length - 1];
-  const open = Number(first?.open ?? 0);
-  const close = Number(last?.close ?? 0);
-  const change = close - open;
-  const changePercent = open ? (change / open) * 100 : 0;
-
-  const result = {
-    symbol: norm,
-    name: INDEX_NAMES[norm] ?? norm,
-    price: Math.round(close * 100) / 100,
-    change: Math.round(change * 100) / 100,
-    changePercent: Math.round(changePercent * 100) / 100,
-    isPositive: change >= 0,
-  };
-
-  return result;
 }
 
 function fallbackIndex(norm) {
@@ -50,6 +25,7 @@ function fallbackIndex(norm) {
     change: 0,
     changePercent: 0,
     isPositive: true,
+    sparklineData: [],
   };
 }
 
@@ -87,6 +63,7 @@ export async function getIndex(symbol, opts = {}) {
       change: Math.round(change * 100) / 100,
       changePercent: Math.round(changePercent * 100) / 100,
       isPositive: change >= 0,
+      sparklineData: pts.map((p) => Number(p.close)).reverse(),
     };
 
     return result;
@@ -460,5 +437,24 @@ export async function getInfoFlowDetail(indexNumber) {
   } catch (e) {
     console.error('[API] getInfoFlowDetail failed:', e?.message);
     return null;
+  }
+}
+
+// --- Earnings Calendar ---
+
+/**
+ * GET /api/v1/calendar/earnings?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Returns { data: [{ symbol, date, epsEstimated, revenueEstimated, ... }], count }
+ */
+export async function getEarningsCalendar({ from, to } = {}) {
+  try {
+    const params = {};
+    if (from) params.from = from;
+    if (to) params.to = to;
+    const { data } = await api.get('/api/v1/calendar/earnings', { params });
+    return data || { data: [], count: 0 };
+  } catch (e) {
+    console.error('[API] getEarningsCalendar failed:', e?.message);
+    return { data: [], count: 0 };
   }
 }
