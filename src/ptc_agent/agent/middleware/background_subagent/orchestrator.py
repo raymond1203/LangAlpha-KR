@@ -4,7 +4,6 @@ This module provides an orchestrator that wraps the agent and handles
 re-invocation when background subagent tasks complete.
 """
 
-import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -66,7 +65,7 @@ class BackgroundSubagentOrchestrator:
 
     async def ainvoke(
         self,
-        input_state: dict[str, Any],
+        input_state: dict[str, Any] | None,
         config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Invoke agent with automatic re-invocation for background task completion.
@@ -74,11 +73,11 @@ class BackgroundSubagentOrchestrator:
         This method:
         1. Invokes the agent with the input state
         2. After agent ends, waits for any pending background tasks
-        3. If tasks completed, re-invokes agent with notification
+        3. If tasks completed, injects notification via aupdate_state and resumes
         4. Returns the final result
 
         Args:
-            input_state: Initial state for the agent
+            input_state: Initial state for the agent (None to resume from checkpoint)
             config: Optional config dict for the agent
 
         Returns:
@@ -95,11 +94,16 @@ class BackgroundSubagentOrchestrator:
             logger.info(
                 "Orchestrator invoking agent",
                 iteration=iteration,
-                has_messages="messages" in current_state,
+                has_messages=bool(current_state and "messages" in current_state),
             )
 
             # Invoke the agent - agent turn ends here
             result = await self.agent.ainvoke(current_state, config)
+
+            # After first iteration, strip checkpoint_id so subsequent
+            # aupdate_state/ainvoke calls use the latest checkpoint.
+            if iteration == 1:
+                config.get("configurable", {}).pop("checkpoint_id", None)
 
             # Single source of truth for "agent awareness" is check_and_get_notification(),
             # which also syncs completion state from underlying asyncio tasks.
@@ -110,14 +114,15 @@ class BackgroundSubagentOrchestrator:
                     iteration=iteration,
                 )
 
-                messages = result.get("messages", [])
-                notification_message = HumanMessage(content=notification)
-
-                # Preserve all state keys from the previous run, not just messages.
-                current_state = {
-                    **result,
-                    "messages": [*messages, notification_message],
-                }
+                notification_message = HumanMessage(
+                    content=notification, name="orchestrator"
+                )
+                await self.agent.aupdate_state(
+                    config,
+                    {"messages": [notification_message]},
+                    as_node="__start__",
+                )
+                current_state = None  # Resume from updated checkpoint
                 continue
 
             # If there are still pending background tasks, wait for them.
@@ -141,14 +146,15 @@ class BackgroundSubagentOrchestrator:
                         iteration=iteration,
                     )
 
-                    messages = result.get("messages", [])
-                    notification_message = HumanMessage(content=notification)
-
-                    # Preserve all state keys from the previous run, not just messages.
-                    current_state = {
-                        **result,
-                        "messages": [*messages, notification_message],
-                    }
+                    notification_message = HumanMessage(
+                        content=notification, name="orchestrator"
+                    )
+                    await self.agent.aupdate_state(
+                        config,
+                        {"messages": [notification_message]},
+                        as_node="__start__",
+                    )
+                    current_state = None  # Resume from updated checkpoint
                     continue
 
             logger.debug(
@@ -187,7 +193,7 @@ class BackgroundSubagentOrchestrator:
 
     async def astream(
         self,
-        input_state: dict[str, Any],
+        input_state: dict[str, Any] | None,
         config: dict[str, Any] | None = None,
         *,
         stream_mode: str | list[str] | None = None,
@@ -197,10 +203,12 @@ class BackgroundSubagentOrchestrator:
         """Stream agent responses with background task handling.
 
         Streams the agent's responses, handling background tasks between
-        invocations. Fully compatible with LangGraph's streaming API.
+        invocations. Uses ``aupdate_state`` + resume (``astream(None)``) for
+        re-invocation so that notification messages create ``source=update``
+        checkpoints instead of ``source=input``, avoiding phantom user turns.
 
         Args:
-            input_state: Initial state for the agent
+            input_state: Initial state for the agent (None to resume from checkpoint)
             config: Optional config dict for the agent
             stream_mode: Stream mode(s) - "values", "updates", "messages", or list
             subgraphs: Whether to include subgraph events
@@ -236,6 +244,11 @@ class BackgroundSubagentOrchestrator:
             ):
                 yield event
 
+            # After first iteration, strip checkpoint_id so subsequent
+            # aupdate_state/astream calls use the latest checkpoint.
+            if iteration == 1:
+                config.get("configurable", {}).pop("checkpoint_id", None)
+
             # Single source of truth for "agent awareness" is check_and_get_notification().
             # This catches tasks that completed during the stream (i.e. no longer "pending").
             notification = await self.check_and_get_notification()
@@ -245,21 +258,15 @@ class BackgroundSubagentOrchestrator:
                     iteration=iteration,
                 )
 
-                try:
-                    state_snapshot = await asyncio.wait_for(
-                        self.agent.aget_state(config), timeout=10.0
-                    )
-                except asyncio.TimeoutError:
-                    logger.error("aget_state timed out after stream completion")
-                    return
-                state_values = state_snapshot.values
-                messages = state_values.get("messages", [])
-
-                notification_message = HumanMessage(content=notification)
-                current_state = {
-                    **state_values,
-                    "messages": [*messages, notification_message],
-                }
+                notification_message = HumanMessage(
+                    content=notification, name="orchestrator"
+                )
+                await self.agent.aupdate_state(
+                    config,
+                    {"messages": [notification_message]},
+                    as_node="__start__",
+                )
+                current_state = None  # Resume from updated checkpoint
                 continue
 
             # After streaming completes, check for pending background tasks
@@ -296,21 +303,15 @@ class BackgroundSubagentOrchestrator:
                 iteration=iteration,
             )
 
-            try:
-                state_snapshot = await asyncio.wait_for(
-                    self.agent.aget_state(config), timeout=10.0
-                )
-            except asyncio.TimeoutError:
-                logger.error("aget_state timed out after wait_for_all")
-                return
-            state_values = state_snapshot.values
-            messages = state_values.get("messages", [])
-
-            notification_message = HumanMessage(content=notification)
-            current_state = {
-                **state_values,
-                "messages": [*messages, notification_message],
-            }
+            notification_message = HumanMessage(
+                content=notification, name="orchestrator"
+            )
+            await self.agent.aupdate_state(
+                config,
+                {"messages": [notification_message]},
+                as_node="__start__",
+            )
+            current_state = None  # Resume from updated checkpoint
 
             # NOTE: Do NOT clear registry here - agent needs to call TaskOutput()
             # to retrieve results in the next iteration.
