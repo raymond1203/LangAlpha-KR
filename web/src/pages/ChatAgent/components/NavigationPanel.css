@@ -1,0 +1,87 @@
+/* NavigationPanel Styles */
+
+@keyframes gentle-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.nav-panel-agent-pulse {
+  animation: gentle-pulse 2s ease-in-out infinite;
+}
+
+.nav-panel {
+  background: transparent;
+}
+
+/* Add background when panel overlaps the centered message column */
+@container (max-width: 1407px) {
+  .nav-panel {
+    background: var(--color-bg-page);
+    border-right: 1px solid var(--color-border-muted);
+  }
+}
+
+.nav-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 6px;
+  transition: background-color 0.15s ease;
+  min-height: 32px;
+}
+
+.nav-panel-row:hover {
+  background-color: var(--color-border-muted);
+}
+
+.nav-panel-row-active {
+  background-color: var(--color-border-muted);
+  border-radius: 8px;
+}
+
+.nav-panel-row-active:hover {
+  background-color: var(--color-border-muted);
+}
+
+/* Agent group — visually nested under thread with a left guide line */
+.nav-panel-agent-group {
+  margin-left: 44px;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--color-border-muted);
+}
+
+.nav-panel-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 1px 0;
+  transition: background-color 0.15s ease;
+  min-height: 26px;
+}
+
+.nav-panel-agent-row:hover {
+  background-color: var(--color-border-muted);
+}
+
+/* Dismiss buttons (minimize + fold) */
+.nav-panel-dismiss-btn {
+  opacity: 0.4;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.nav-panel-dismiss-btn:hover {
+  opacity: 1;
+  background-color: var(--color-border-muted) !important;
+}

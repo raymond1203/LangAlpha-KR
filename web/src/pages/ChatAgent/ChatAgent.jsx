@@ -100,7 +100,7 @@ function ChatAgent() {
     const cachedWorkspaceName = workspaceCacheRef.current[workspaceId]?.workspaceName
       || location.state?.workspaceName
       || '';
-    content = <ChatView key={workspaceId} workspaceId={workspaceId} threadId={threadId} onBack={handleBackToThreadGallery} workspaceName={cachedWorkspaceName} />;
+    content = <ChatView key={`${workspaceId}-${threadId}`} workspaceId={workspaceId} threadId={threadId} onBack={handleBackToThreadGallery} workspaceName={cachedWorkspaceName} />;
   } else if (workspaceId) {
     content = (
       <ThreadGallery

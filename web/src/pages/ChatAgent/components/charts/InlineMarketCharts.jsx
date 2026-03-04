@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 const GREEN = 'var(--color-profit)';
 const RED = 'var(--color-loss)';
 const TEXT_COLOR = 'var(--color-text-tertiary)';
-const CARD_BG = 'var(--color-bg-elevated)';
+const CARD_BG = 'var(--color-bg-tool-card)';
 const CARD_BORDER = 'var(--color-border-muted)';
 
 export const INLINE_ARTIFACT_TOOLS = new Set([

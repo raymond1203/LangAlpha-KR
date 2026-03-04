@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, FolderOpen, Bot, StopCircle, ScrollText, AlertTriangle, CheckCircle2, Circle, Loader2, TextSelect } from 'lucide-react';
+import { ArrowLeft, FolderOpen, StopCircle, ScrollText, AlertTriangle, CheckCircle2, Circle, Loader2, TextSelect, Minus, PanelLeftOpen } from 'lucide-react';
 import { ScrollArea } from '../../../components/ui/scroll-area';
 import { useAuth } from '../../../contexts/AuthContext';
 import { updateCurrentUser } from '../../Dashboard/utils/api';
@@ -17,13 +17,18 @@ import { attachmentsToImageContexts } from '../utils/fileUpload';
 import DetailPanel from './DetailPanel';
 import MessageList, { normalizeSubagentText } from './MessageList';
 import Markdown from './Markdown';
-import AgentSidebar from './AgentSidebar';
+import NavigationPanel from './NavigationPanel';
+import { useNavigationData } from '../hooks/useNavigationData';
 import ShareButton from './ShareButton';
 import { WorkspaceProvider } from '../contexts/WorkspaceContext';
 import SubagentStatusBar from './SubagentStatusBar';
 import TodoDrawer from './TodoDrawer';
 import { parseErrorMessage } from '../utils/parseErrorMessage';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// Module-level nav panel state — survives ChatView remount on thread navigation
+let _navPanelVisible = false;
+let _navLocked = false;
 
 // Static main agent object — never changes, so defined once at module level
 const MAIN_AGENT = {
@@ -141,8 +146,31 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
   const DIVIDER_WIDTH = 4; // px – matches .chat-split-divider
   // Active agent in main view (default: 'main')
   const [activeAgentId, setActiveAgentId] = useState('main');
-  // Sidebar visibility
-  const [sidebarVisible, setSidebarVisible] = useState(false);
+  // Navigation panel visibility (hover-triggered overlay)
+  // Initialize from module-level state to survive remounts on thread navigation
+  const [navPanelVisible, setNavPanelVisible] = useState(_navPanelVisible);
+  const navHideTimerRef = useRef(null);
+  const navLockedRef = useRef(_navLocked);
+  const contentAreaRef = useRef(null);
+  // Skip nav panel slide-in on mount if it was already open (thread navigation);
+  // allow animation on subsequent hover opens.
+  const skipNavAnimRef = useRef(_navPanelVisible);
+  useEffect(() => { skipNavAnimRef.current = false; return () => clearTimeout(navHideTimerRef.current); }, []);
+  // Auto-close nav panel when content area shrinks below threshold (e.g., right panel opens)
+  useEffect(() => {
+    const container = contentAreaRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0].contentRect.width;
+      if (width < 800 && _navPanelVisible) {
+        clearTimeout(navHideTimerRef.current);
+        _navPanelVisible = false;
+        setNavPanelVisible(false);
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
   // Tool call detail panel state
   const [detailToolCall, setDetailToolCall] = useState(null);
   // Plan detail panel state
@@ -210,11 +238,10 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     });
   }, [activeAgentId, getScrollContainer]);
 
-  // Reset sidebar and active agent on thread change
+  // Reset module-level nav lock on thread change (state resets happen via remount from key change)
   useEffect(() => {
-    setActiveAgentId('main');
-    setSidebarVisible(false);
-    scrollPositionsRef.current = {}; // Clear saved positions for new thread
+    _navLocked = false;
+    navLockedRef.current = false;
   }, [threadId]);
 
   // Direct URL navigation fallback: detect flash workspace and resolve name from API
@@ -271,6 +298,28 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     error: filesError,
     refresh: refreshFiles,
   } = useWorkspaceFiles(isFlashMode ? null : workspaceId, { includeSystem: showSystemFiles });
+
+  // Navigation panel data — workspaces + threads for the overlay sidebar
+  const {
+    workspaces: navWorkspaces,
+    workspaceThreads: navWorkspaceThreads,
+    expandWorkspace: navExpandWorkspace,
+    hasMore: navHasMore,
+    loadAll: navLoadAll,
+  } = useNavigationData(workspaceId);
+
+  // Navigate to a different thread from the navigation panel
+  const handleNavigateThread = useCallback((wsId, tid) => {
+    // Find workspace name from nav data for route state
+    const ws = navWorkspaces.find((w) => w.workspace_id === wsId);
+    navigate(`/chat/${wsId}/${tid}`, {
+      state: {
+        workspaceName: ws?.name || workspaceName || '',
+        workspaceStatus: ws?.status || null,
+        ...(ws?.status === 'flash' ? { agentMode: 'flash' } : {}),
+      },
+    });
+  }, [navigate, navWorkspaces, workspaceName]);
 
   // Chat messages management - receives updateTodoListCard and updateSubagentCard from floating cards hook
   const {
@@ -449,7 +498,6 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     const wasLoading = prevLoadingRef.current;
     prevLoadingRef.current = isLoading;
     if (isLoading && !wasLoading) {
-      setSidebarVisible(true);
       setWasInterrupted(false);
     }
     if (!isLoading && wasLoading) {
@@ -550,14 +598,6 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     });
   }, [activeAgent, cards, updateSubagentCard]);
 
-  // Show sidebar when new subagent spawns (don't auto-switch activeAgentId)
-  const prevSubagentCountRef = useRef(0);
-  useEffect(() => {
-    if (subagentAgents.length > prevSubagentCountRef.current) {
-      setSidebarVisible(true);
-    }
-    prevSubagentCountRef.current = subagentAgents.length;
-  }, [subagentAgents.length]);
 
   // Handle drag panel width
   const handleDividerMouseDown = useCallback((e) => {
@@ -717,9 +757,39 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     return () => document.removeEventListener('mousedown', handler);
   }, [msgSelectionTooltip]);
 
-  // Toggle sidebar visibility
-  const handleToggleSidebar = useCallback(() => {
-    setSidebarVisible(prev => !prev);
+  // Navigation panel hover handlers with 30s hide delay
+  const handleNavEnter = useCallback(() => {
+    if (navLockedRef.current) return; // locked after explicit minimize
+    // Don't open if content area is too narrow (e.g., right panel consuming space)
+    if ((contentAreaRef.current?.offsetWidth ?? Infinity) < 800) return;
+    clearTimeout(navHideTimerRef.current);
+    _navPanelVisible = true;
+    setNavPanelVisible(true);
+  }, []);
+
+  const handleNavLeave = useCallback(() => {
+    if (navLockedRef.current) return;
+    navHideTimerRef.current = setTimeout(() => {
+      _navPanelVisible = false;
+      setNavPanelVisible(false);
+    }, 30000);
+  }, []);
+
+  const handleNavMinimize = useCallback(() => {
+    clearTimeout(navHideTimerRef.current);
+    navLockedRef.current = true;
+    _navLocked = true;
+    _navPanelVisible = false;
+    setNavPanelVisible(false);
+  }, []);
+
+  // Expand button explicitly unlocks and opens the panel
+  const handleNavExpand = useCallback(() => {
+    navLockedRef.current = false;
+    _navLocked = false;
+    clearTimeout(navHideTimerRef.current);
+    _navPanelVisible = true;
+    setNavPanelVisible(true);
   }, []);
 
   // Refresh subagent card with latest data from history or inline status.
@@ -800,7 +870,6 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     refreshSubagentCard(agentId, { description, prompt, type, status });
 
     switchAgent(agentId);
-    setSidebarVisible(true);
   }, [resolveSubagentIdToAgentId, updateSubagentCard, refreshSubagentCard, switchAgent]);
 
   // Handle removing an agent from sidebar (just hide from display, don't affect state)
@@ -985,7 +1054,7 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
   return (
     <WorkspaceProvider workspaceId={workspaceId}>
     <motion.div
-      initial={{ y: 10 }}
+      initial={_navPanelVisible ? false : { y: 10 }}
       animate={{ y: 0 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       className="flex h-screen w-full overflow-hidden"
@@ -1034,40 +1103,113 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
                 <FolderOpen className="h-5 w-5" />
               </button>
             )}
-            <button
-              onClick={handleToggleSidebar}
-              className="p-2 rounded-md transition-colors"
-              style={{ color: 'var(--color-text-primary)', backgroundColor: sidebarVisible ? 'var(--color-border-muted)' : undefined }}
-              title={t('chat.agents')}
-              onMouseEnter={(e) => { if (!sidebarVisible) e.currentTarget.style.backgroundColor = 'var(--color-border-muted)'; }}
-              onMouseLeave={(e) => { if (!sidebarVisible) e.currentTarget.style.backgroundColor = ''; }}
-            >
-              <Bot className="h-5 w-5" />
-            </button>
           </div>
         </div>
 
-        {/* Content area: Sidebar + Chat Window */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Agent Sidebar */}
-          <AnimatePresence>
-            {sidebarVisible && (
-              <motion.div
-                initial={{ width: 0, opacity: 0 }}
-                animate={{ width: 'auto', opacity: 1 }}
-                exit={{ width: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-                style={{ overflow: 'hidden', flexShrink: 0 }}
-              >
-                <AgentSidebar
-                  agents={agents}
-                  activeAgentId={activeAgentId}
-                  onSelectAgent={handleSelectAgent}
-                  onRemoveAgent={handleRemoveAgent}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+        {/* Content area: Navigation Panel Overlay + Chat Window */}
+        <div ref={contentAreaRef} className="flex-1 flex overflow-hidden" style={{ position: 'relative', containerType: 'inline-size' }}>
+          {/* Navigation trigger strip — hover zone clamped to left margin of centered content column */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 'max(16px, calc((100% - 768px) / 2))',
+              zIndex: 41,
+              pointerEvents: navPanelVisible ? 'none' : 'auto',
+            }}
+            onMouseEnter={handleNavEnter}
+          />
+          {/* Expand tab — always visible when panel is hidden */}
+          {!navPanelVisible && (
+            <button
+              onClick={handleNavExpand}
+              className="nav-panel-dismiss-btn"
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                zIndex: 42,
+                padding: '6px 2px',
+                background: 'var(--color-bg-elevated)',
+                border: '1px solid var(--color-border-muted)',
+                borderLeft: 'none',
+                cursor: 'pointer',
+                borderRadius: '0 6px 6px 0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Open navigation panel"
+            >
+              <PanelLeftOpen className="h-3.5 w-3.5" style={{ color: 'var(--color-text-tertiary)' }} />
+            </button>
+          )}
+          {/* Navigation panel area — responsive width, interactive only when visible */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 'min(320px, calc(100% - 48px))',
+              zIndex: 40,
+              pointerEvents: navPanelVisible ? 'auto' : 'none',
+            }}
+            onMouseEnter={handleNavEnter}
+            onMouseLeave={handleNavLeave}
+          >
+            <AnimatePresence>
+              {navPanelVisible && (
+                <motion.div
+                  initial={skipNavAnimRef.current ? false : { x: '-100%', opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: '-100%', opacity: 0 }}
+                  transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                  style={{ width: '100%', height: '100%', position: 'absolute', left: 0, top: 0 }}
+                >
+                  {/* Minimize button — top right corner */}
+                  <button
+                    onClick={handleNavMinimize}
+                    className="nav-panel-dismiss-btn"
+                    style={{
+                      position: 'absolute',
+                      top: 8,
+                      right: 8,
+                      zIndex: 2,
+                      padding: 4,
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      borderRadius: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    title="Minimize panel"
+                  >
+                    <Minus className="h-4 w-4" style={{ color: 'var(--color-text-tertiary)' }} />
+                  </button>
+                  <NavigationPanel
+                    workspaces={navWorkspaces}
+                    workspaceThreads={navWorkspaceThreads}
+                    currentWorkspaceId={workspaceId}
+                    currentThreadId={currentThreadId || threadId}
+                    agents={agents}
+                    activeAgentId={activeAgentId}
+                    expandWorkspace={navExpandWorkspace}
+                    onSelectAgent={handleSelectAgent}
+                    onRemoveAgent={handleRemoveAgent}
+                    onNavigateThread={handleNavigateThread}
+                    hasMore={navHasMore}
+                    onLoadMore={navLoadAll}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* Chat Window */}
           <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -1106,6 +1248,7 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
                       <MessageList
                         messages={messages}
                         isLoading={isLoading}
+                        isLoadingHistory={isLoadingHistory}
                         onOpenFile={handleOpenFileFromChat}
                         onOpenDir={handleOpenDirFromChat}
                         onToolCallDetailClick={handleToolCallDetailClick}

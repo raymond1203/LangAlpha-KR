@@ -2,7 +2,7 @@ import React from 'react';
 import { Check, Loader2, ArrowRight, RotateCw, RefreshCw } from 'lucide-react';
 import iconRobo from '../../../assets/img/icon-robo.png';
 import iconRoboSing from '../../../assets/img/icon-robo-sing.png';
-import './AgentSidebar.css';
+import './NavigationPanel.css';
 
 /**
  * Extract a short one-line summary from a full task description.
@@ -64,7 +64,7 @@ function SubagentTaskMessageContent({
   return (
     <div
       style={{
-        background: 'var(--color-bg-elevated)',
+        background: 'var(--color-bg-tool-card)',
         border: `1px solid ${CARD_BORDER}`,
         borderRadius: 8,
         padding: '12px 14px',
@@ -82,7 +82,7 @@ function SubagentTaskMessageContent({
           <img
             src={isCompleted ? iconRobo : iconRoboSing}
             alt="Subagent"
-            className={isRunning ? 'agent-tab-active-pulse' : ''}
+            className={isRunning ? 'nav-panel-agent-pulse' : ''}
             style={{ width: 20, height: 20 }}
           />
           {isRunning && (

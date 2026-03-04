@@ -33,6 +33,7 @@
   --color-icon-muted: #78716C;
 
   --color-bg-elevated: #1A1A1A;
+  --color-bg-tool-card: #1A1A1A;
 
   --Labels-Secondary: rgba(255, 255, 255, 0.5);
   --Labels-Tertiary: rgba(255, 255, 255, 0.45);
@@ -151,6 +152,7 @@
   --color-icon-muted: #9B958E;
 
   --color-bg-elevated: #E8E2DB;
+  --color-bg-tool-card: #FFFCF9;
 
   --Labels-Secondary: rgba(45, 43, 40, 0.5);
   --Labels-Tertiary: rgba(45, 43, 40, 0.45);

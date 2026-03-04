@@ -190,7 +190,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     return workspaceId ? getStoredThreadId(workspaceId) : '__default__';
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(
+    () => !!(initialThreadId && initialThreadId !== '__default__')
+  );
   const [hasActiveSubagents, setHasActiveSubagents] = useState(false);  // Subagent streams open after main agent finished
   const [workspaceStarting, setWorkspaceStarting] = useState(false);  // Workspace is starting up (stopped/archived sandbox)
   const [isCompacting, setIsCompacting] = useState(false);  // Context compaction in progress (summarization/offload)

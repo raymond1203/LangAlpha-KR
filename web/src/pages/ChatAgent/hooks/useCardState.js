@@ -5,7 +5,7 @@ import { useState } from 'react';
  *
  * Manages state for subagent cards and todo list data.
  * The floating card UI (draggable, minimizable cards) has been removed —
- * subagents render via AgentSidebar + MessageList, and todos via TodoDrawer.
+ * subagents render via NavigationPanel + MessageList, and todos via TodoDrawer.
  * This hook still stores card data keyed by cardId for those consumers.
  *
  * @param {Object} initialCards - Initial cards configuration

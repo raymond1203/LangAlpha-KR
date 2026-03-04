@@ -11,7 +11,7 @@ const YELLOW = 'var(--color-warning)';
 const RED = 'var(--color-loss)';
 const BLUE = 'var(--color-info)';
 const TEXT_COLOR = 'var(--color-text-tertiary)';
-const CARD_BG = 'var(--color-bg-elevated)';
+const CARD_BG = 'var(--color-bg-tool-card)';
 const CARD_BORDER = 'var(--color-border-muted)';
 
 const cardStyle = {

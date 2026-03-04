@@ -5,7 +5,7 @@ import iconRobo from '../../../assets/img/icon-robo.png';
 import iconRoboSing from '../../../assets/img/icon-robo-sing.png';
 import Markdown from './Markdown';
 import { sendSubagentMessage } from '../utils/api';
-import './AgentSidebar.css';
+import './NavigationPanel.css';
 
 /**
  * SubagentStatusBar Component
@@ -131,7 +131,7 @@ function SubagentStatusBar({ agent, threadId, onInstructionSent }) {
         <div
           className={cn(
             "w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0",
-            isActive && !isCompleted && "agent-tab-active-pulse"
+            isActive && !isCompleted && "nav-panel-agent-pulse"
           )}
           style={{
             backgroundColor: isActive && !isCompleted

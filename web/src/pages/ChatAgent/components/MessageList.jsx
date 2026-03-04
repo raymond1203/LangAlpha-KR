@@ -180,10 +180,41 @@ function NotificationDivider({ message, content }) {
  * - Streaming indicators
  * - Error state styling
  */
-function MessageList({ messages, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent }) {
+function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent }) {
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {
     if (isSubagentView) return null;
+    if (isLoadingHistory) {
+      return (
+        <div className="space-y-6 py-4 animate-pulse">
+          {/* User message skeleton */}
+          <div className="flex justify-end">
+            <div className="rounded-2xl" style={{ background: 'var(--color-border-muted)', width: '55%', height: 40 }} />
+          </div>
+          {/* Assistant message skeleton */}
+          <div className="flex gap-4">
+            <div className="w-8 h-8 rounded-full flex-shrink-0" style={{ background: 'var(--color-border-muted)' }} />
+            <div className="flex-1 space-y-3">
+              <div className="rounded" style={{ background: 'var(--color-border-muted)', width: '80%', height: 14 }} />
+              <div className="rounded" style={{ background: 'var(--color-border-muted)', width: '65%', height: 14 }} />
+              <div className="rounded" style={{ background: 'var(--color-border-muted)', width: '40%', height: 14 }} />
+            </div>
+          </div>
+          {/* Second user message skeleton */}
+          <div className="flex justify-end">
+            <div className="rounded-2xl" style={{ background: 'var(--color-border-muted)', width: '40%', height: 40 }} />
+          </div>
+          {/* Second assistant skeleton */}
+          <div className="flex gap-4">
+            <div className="w-8 h-8 rounded-full flex-shrink-0" style={{ background: 'var(--color-border-muted)' }} />
+            <div className="flex-1 space-y-3">
+              <div className="rounded" style={{ background: 'var(--color-border-muted)', width: '90%', height: 14 }} />
+              <div className="rounded" style={{ background: 'var(--color-border-muted)', width: '70%', height: 14 }} />
+            </div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col items-center justify-center min-h-full py-12">
         <Bot className="h-12 w-12 mb-4" style={{ color: 'var(--color-accent-primary)', opacity: 0.5 }} />
