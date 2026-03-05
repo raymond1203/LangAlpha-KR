@@ -3,6 +3,7 @@
  * All backend endpoints used by the Dashboard page
  */
 import { api } from '@/api/client';
+import { utcMsToETDate, utcMsToETTime } from '@/lib/utils';
 import * as portfolioApi from './portfolio';
 import * as watchlistApi from './watchlist';
 import * as watchlistItemsApi from './watchlistItems';
@@ -45,15 +46,15 @@ export async function getIndex(symbol, opts = {}) {
       throw new Error(`No intraday data for ${norm}`);
     }
 
-    // Sort ascending by date (backend may return in either order depending on index)
-    const sorted = [...pts].sort((a, b) => a.date.localeCompare(b.date));
+    // Sort ascending by time (Unix ms)
+    const sorted = [...pts].sort((a, b) => a.time - b.time);
 
     // Isolate the most recent trading day, regular hours only (9:30–16:00)
-    const latestDate = sorted[sorted.length - 1].date.split(' ')[0];
+    const latestDate = utcMsToETDate(sorted[sorted.length - 1].time);
     const todayPoints = sorted.filter((p) => {
-      if (!p.date.startsWith(latestDate)) return false;
-      const time = p.date.split(' ')[1];
-      return time >= '09:30' && time <= '16:00';
+      if (utcMsToETDate(p.time) !== latestDate) return false;
+      const t = utcMsToETTime(p.time);
+      return t >= '09:30' && t <= '16:00';
     });
 
     const oldest = todayPoints[0];
@@ -73,7 +74,7 @@ export async function getIndex(symbol, opts = {}) {
       isPositive: change >= 0,
       sparklineData: todayPoints
         .filter((p) => Number(p.close) > 0)
-        .map((p) => ({ time: p.date.split(' ')[1]?.slice(0, 5), val: Number(p.close) })),
+        .map((p) => ({ time: utcMsToETTime(p.time), val: Number(p.close) })),
     };
 
     return result;
@@ -85,37 +86,53 @@ export async function getIndex(symbol, opts = {}) {
 }
 
 /**
- * Fetches indices data by making individual GET calls for each symbol.
- * Uses GET /api/v1/market-data/intraday/indexes/:symbol endpoint.
+ * Fetches indices data: snapshot batch for price/change, intraday for sparklines.
  * Returns { indices, failedCount }.
  */
 export async function getIndices(symbols = INDEX_SYMBOLS, opts = {}) {
   const list = symbols.map((s) => normalizeIndexSymbol(String(s).trim()));
 
-  // Make individual GET requests for each symbol (no query params per API docs)
-  const promises = list.map(async (norm) => {
-    try {
-      const result = await getIndex(norm);
-      return { success: true, symbol: norm, data: result };
-    } catch (error) {
-      console.error(`[API] getIndices - Failed to fetch ${norm}:`, error?.message);
-      return { success: false, symbol: norm, error };
+  // Fetch snapshot (price/change) and intraday (sparklines) in parallel
+  const [snapshots, sparklineResults] = await Promise.all([
+    getSnapshotIndexes(list),
+    Promise.all(list.map(async (norm) => {
+      try {
+        const result = await getIndex(norm);
+        return { symbol: norm, sparklineData: result.sparklineData };
+      } catch {
+        return { symbol: norm, sparklineData: [] };
+      }
+    })),
+  ]);
+
+  const sparklineMap = Object.fromEntries(sparklineResults.map((r) => [r.symbol, r.sparklineData]));
+  const snapshotList = snapshots?.snapshots || snapshots?.results || snapshots?.data || [];
+  const snapshotMap = Array.isArray(snapshotList)
+    ? Object.fromEntries(snapshotList.map((s) => [normalizeIndexSymbol(s.symbol), s]))
+    : {};
+
+  let failedCount = 0;
+  const indices = list.map((norm) => {
+    const snap = snapshotMap[norm];
+    if (snap && snap.price != null) {
+      const change = snap.change ?? 0;
+      const changePct = snap.change_percent ?? (snap.previous_close ? ((change / snap.previous_close) * 100) : 0);
+      return {
+        symbol: norm,
+        name: INDEX_NAMES[norm] ?? snap.name ?? norm,
+        price: Math.round(snap.price * 100) / 100,
+        change: Math.round(change * 100) / 100,
+        changePercent: Math.round(changePct * 100) / 100,
+        isPositive: change >= 0,
+        previousClose: snap.previous_close ?? null,
+        sparklineData: sparklineMap[norm] || [],
+      };
     }
+    failedCount++;
+    return { ...fallbackIndex(norm), sparklineData: sparklineMap[norm] || [] };
   });
 
-  const results = await Promise.all(promises);
-
-  const indices = results.map((result) => {
-    if (result.success) {
-      return result.data;
-    } else {
-      return fallbackIndex(result.symbol);
-    }
-  });
-
-  const failed = results.filter((r) => !r.success).length;
-
-  return { indices, failedCount: failed };
+  return { indices, failedCount };
 }
 
 export { INDEX_NAMES, INDEX_SYMBOLS, fallbackIndex, normalizeIndexSymbol };
@@ -224,35 +241,49 @@ export async function deleteWatchlistItem(itemId, watchlistId = 'default') {
   return watchlistItemsApi.deleteWatchlistItem(watchlistId, itemId);
 }
 
+// --- Snapshot & market status ---
+
+/**
+ * GET /api/v1/market-data/snapshots/indexes?symbols=GSPC,IXIC,...
+ * Returns batch snapshot for index symbols.
+ */
+export async function getSnapshotIndexes(symbols = INDEX_SYMBOLS) {
+  const list = symbols.map((s) => normalizeIndexSymbol(String(s).trim()));
+  try {
+    const { data } = await api.get('/api/v1/market-data/snapshots/indexes', {
+      params: { symbols: list.join(',') },
+    });
+    return data || {};
+  } catch (e) {
+    console.error('[API] getSnapshotIndexes failed:', e?.message);
+    return {};
+  }
+}
+
+/**
+ * GET /api/v1/market-data/snapshots/stocks?symbols=AAPL,TSLA,...
+ * Returns batch snapshot for stock symbols.
+ */
+export async function getSnapshotStocks(symbols) {
+  const list = [...(symbols || [])].map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+  if (!list.length) return {};
+  try {
+    const { data } = await api.get('/api/v1/market-data/snapshots/stocks', {
+      params: { symbols: list.join(',') },
+    });
+    return data || {};
+  } catch (e) {
+    console.error('[API] getSnapshotStocks failed:', e?.message);
+    return {};
+  }
+}
+
 // --- Stock prices (batch, for watchlist) ---
 
 const DEFAULT_WATCHLIST_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'TSLA'];
 const DEFAULT_WATCHLIST_NAMES = { AAPL: 'Apple', MSFT: 'Microsoft', NVDA: 'NVIDIA', AMZN: 'Amazon', TSLA: 'Tesla' };
 
 export { DEFAULT_WATCHLIST_SYMBOLS, DEFAULT_WATCHLIST_NAMES };
-
-/**
- * Search for stocks by keyword (symbol or company name).
- * GET /api/v1/market-data/search/stocks
- * @param {string} query - Search keyword (e.g., "AAPL", "Apple", "Micro")
- * @param {number} limit - Maximum number of results (default: 50, max: 100)
- * @returns {Promise<Object>} { query: string, results: Array, count: number }
- */
-export async function searchStocks(query, limit = 50) {
-  if (!query || !query.trim()) {
-    return { query: '', results: [], count: 0 };
-  }
-  try {
-    const params = new URLSearchParams();
-    params.append('query', query.trim());
-    params.append('limit', String(Math.min(Math.max(1, limit), 100)));
-    const { data } = await api.get('/api/v1/market-data/search/stocks', { params });
-    return data || { query: query.trim(), results: [], count: 0 };
-  } catch (e) {
-    console.error('Search stocks failed:', e?.response?.status, e?.response?.data, e?.message);
-    return { query: query.trim(), results: [], count: 0 };
-  }
-}
 
 /**
  * Get company names for a list of stock symbols (FMP profile companyName).
@@ -274,37 +305,29 @@ export async function getStockPrices(symbols) {
   const list = [...(symbols || [])].map((s) => String(s).trim().toUpperCase()).filter(Boolean);
   if (!list.length) return [];
   try {
-    const { data } = await api.post('/api/v1/market-data/intraday/stocks', { symbols: list, interval: '1min' });
-    const results = data?.results ?? {};
+    const snapshots = await getSnapshotStocks(list);
+    const snapList = snapshots?.snapshots || snapshots?.results || snapshots?.data || [];
+    const snapMap = Array.isArray(snapList)
+      ? Object.fromEntries(snapList.map((s) => [String(s.symbol).toUpperCase(), s]))
+      : {};
+
     return list.map((sym) => {
-      const pts = results[sym];
-      if (!Array.isArray(pts) || !pts.length) {
-        return { symbol: sym, price: 0, change: 0, changePercent: 0, isPositive: true };
+      const snap = snapMap[sym];
+      if (snap && snap.price != null) {
+        const change = snap.change ?? 0;
+        const changePct = snap.change_percent ?? 0;
+        return {
+          symbol: sym,
+          price: Math.round(snap.price * 100) / 100,
+          change: Math.round(change * 100) / 100,
+          changePercent: Math.round(changePct * 100) / 100,
+          isPositive: change >= 0,
+          previousClose: snap.previous_close ?? null,
+          earlyTradingChangePercent: snap.early_trading_change_percent ?? null,
+          lateTradingChangePercent: snap.late_trading_change_percent ?? null,
+        };
       }
-
-      // Sort ascending by date for consistent processing
-      const sorted = [...pts].sort((a, b) => new Date(a.date) - new Date(b.date));
-
-      // Isolate the latest trading day
-      const latestDate = sorted[sorted.length - 1].date.split(' ')[0];
-      const todayPoints = sorted.filter(p => p.date.startsWith(latestDate));
-      const close = Number(todayPoints[todayPoints.length - 1]?.close ?? 0);
-
-      // Change vs previous day's close (consistent with header's fetchStockQuote)
-      const prevDayPoints = sorted.filter(p => !p.date.startsWith(latestDate));
-      const previousClose = prevDayPoints.length > 0
-        ? Number(prevDayPoints[prevDayPoints.length - 1]?.close ?? 0)
-        : Number(todayPoints[0]?.open ?? 0);
-      const change = close - previousClose;
-      const pct = previousClose ? (change / previousClose) * 100 : 0;
-
-      return {
-        symbol: sym,
-        price: Math.round(close * 100) / 100,
-        change: Math.round(change * 100) / 100,
-        changePercent: Math.round(pct * 100) / 100,
-        isPositive: change >= 0,
-      };
+      return { symbol: sym, price: 0, change: 0, changePercent: 0, isPositive: true };
     });
   } catch {
     return list.map((sym) => ({ symbol: sym, price: 0, change: 0, changePercent: 0, isPositive: true }));

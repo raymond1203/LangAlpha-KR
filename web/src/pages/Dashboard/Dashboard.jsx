@@ -6,7 +6,8 @@ import {
   normalizeIndexSymbol,
   getNews,
 } from './utils/api';
-import { useCallback, useEffect, useState } from 'react';
+import { fetchMarketStatus } from '@/lib/marketUtils';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '@/components/ui/use-toast';
 import { getFlashWorkspace } from '../ChatAgent/utils/api';
@@ -29,17 +30,6 @@ import { useWatchlistData } from './hooks/useWatchlistData';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useTickerNews } from './hooks/useTickerNews';
 import './Dashboard.css';
-
-const NEWS_ITEMS = [
-    { title: 'Federal Reserve Signals Potential Rate Cuts Amid Economic Uncertainty', time: '5 min ago', isHot: true },
-    { title: 'Tech Stocks Rally as AI Companies Report Record Quarterly Earnings', time: '12 min ago', isHot: false },
-    { title: 'Oil Prices Surge Following OPEC Production Cut Announcement', time: '18 min ago', isHot: true },
-    { title: 'Cryptocurrency Market Volatility Increases as Regulatory News Emerges', time: '25 min ago', isHot: false },
-    { title: 'Global Supply Chain Disruptions Impact Manufacturing Sector Performance', time: '1 hr ago', isHot: true },
-    { title: 'Housing Market Shows Signs of Cooling as Mortgage Rates Climb', time: '2 hrs ago', isHot: false },
-    { title: 'European Central Bank Maintains Current Interest Rate Policy', time: '3 hrs ago', isHot: false },
-    { title: 'Renewable Energy Investments Reach All-Time High in Q4', time: '5 hrs ago', isHot: true },
-  ];
 
 
 const ONBOARDING_IGNORE_STORAGE_KEY = 'langalpha-onboarding-ignored-at';
@@ -103,7 +93,7 @@ function Dashboard() {
   );
   const [indicesLoading, setIndicesLoading] = useState(!indicesCache);
 
-  const [newsItems, setNewsItems] = useState(() => newsCache?.items || NEWS_ITEMS);
+  const [newsItems, setNewsItems] = useState(() => newsCache?.items || []);
   const [newsLoading, setNewsLoading] = useState(!newsCache);
 
   const fetchNews = useCallback(async () => {
@@ -123,11 +113,9 @@ function Dashboard() {
         }));
         setNewsItems(mapped);
         newsCache = { items: mapped };
-      } else {
-        setNewsItems(NEWS_ITEMS);
       }
     } catch {
-      setNewsItems(NEWS_ITEMS);
+      // Keep existing items on error; empty array if first load
     } finally {
       setNewsLoading(false);
     }
@@ -153,13 +141,31 @@ function Dashboard() {
     }
   }, []);
 
+  // Adaptive polling: 30s during market hours, 60s during extended/closed
+  const marketStatusRef = useRef(null);
+  const [marketStatus, setMarketStatus] = useState(null);
+  useEffect(() => {
+    const pollMarketStatus = () =>
+      fetchMarketStatus().then((s) => { marketStatusRef.current = s; setMarketStatus(s); }).catch(() => {});
+    pollMarketStatus();
+    const statusId = setInterval(pollMarketStatus, 60000);
+    return () => clearInterval(statusId);
+  }, []);
+
   useEffect(() => {
     fetchIndices();
-    const intervalId = setInterval(() => {
-      console.log('[Dashboard] Refreshing Index Movement data');
-      fetchIndices();
-    }, 60000);
-    return () => clearInterval(intervalId);
+    let intervalId = null;
+    const schedule = () => {
+      const isMarketOpen = marketStatusRef.current?.market === 'open'
+        || (marketStatusRef.current && !marketStatusRef.current.afterHours && !marketStatusRef.current.earlyHours && marketStatusRef.current.market !== 'closed');
+      const delay = isMarketOpen ? 30000 : 60000;
+      intervalId = setTimeout(() => {
+        if (!document.hidden) fetchIndices();
+        schedule();
+      }, delay);
+    };
+    schedule();
+    return () => { if (intervalId) clearTimeout(intervalId); };
   }, [fetchIndices]);
 
   /**
@@ -306,6 +312,7 @@ function Dashboard() {
                     onPortfolioAdd={() => portfolio.setModalOpen(true)}
                     onPortfolioDelete={handleDeletePortfolioItem}
                     onPortfolioEdit={portfolio.openEdit}
+                    marketStatus={marketStatus}
                   />
                 </div>
               </div>

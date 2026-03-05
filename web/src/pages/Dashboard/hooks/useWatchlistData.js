@@ -47,6 +47,8 @@ export function useWatchlistData() {
               change: p.change ?? 0,
               changePercent: p.changePercent ?? 0,
               isPositive: p.isPositive ?? true,
+              earlyTradingChangePercent: p.earlyTradingChangePercent ?? null,
+              lateTradingChangePercent: p.lateTradingChangePercent ?? null,
             };
           })
         : [];
@@ -62,6 +64,7 @@ export function useWatchlistData() {
   useEffect(() => {
     fetchWatchlist();
     const intervalId = setInterval(() => {
+      if (document.hidden) return;
       fetchWatchlist();
     }, 60000);
     return () => clearInterval(intervalId);

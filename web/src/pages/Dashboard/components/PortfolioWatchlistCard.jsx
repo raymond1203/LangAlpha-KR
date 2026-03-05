@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, ArrowUpRight, ArrowDownRight, Trash2, Pencil, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getExtendedHoursInfo } from '@/lib/marketUtils';
 
 function ContextMenu({ menu, onClose, items }) {
   if (!menu) return null;
@@ -30,10 +31,13 @@ function ContextMenu({ menu, onClose, items }) {
   );
 }
 
-function WatchlistItem({ item, index, onDelete }) {
+function WatchlistItem({ item, index, onDelete, marketStatus }) {
   const [menu, setMenu] = useState(null); // { x, y } or null
   const pos = item.isPositive;
   const pctStr = (pos ? '+' : '') + Number(item.changePercent).toFixed(2) + '%';
+
+  // Extended hours: show when not regular session and data available
+  const { extPct, extLabel } = getExtendedHoursInfo(marketStatus, item, { shortLabels: true });
 
   const handleContextMenu = (e) => {
     if (!item.watchlist_item_id) return;
@@ -76,14 +80,21 @@ function WatchlistItem({ item, index, onDelete }) {
             </div>
           </div>
 
-          <div
-            className="w-16 py-1 rounded-lg text-center text-xs font-bold"
-            style={{
-              backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
-              color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
-            }}
-          >
-            {pctStr}
+          <div className="text-right">
+            <div
+              className="w-16 py-1 rounded-lg text-center text-xs font-bold"
+              style={{
+                backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+                color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
+              }}
+            >
+              {pctStr}
+            </div>
+            {extLabel && extPct != null && (
+              <div className="text-[10px] mt-0.5 text-center" style={{ color: extLabel === 'PM' ? '#fbbf24' : '#3b82f6' }}>
+                {extLabel}: {extPct >= 0 ? '+' : ''}{extPct.toFixed(2)}%
+              </div>
+            )}
           </div>
         </div>
       </motion.div>
@@ -97,13 +108,16 @@ function WatchlistItem({ item, index, onDelete }) {
   );
 }
 
-function PortfolioItem({ item, index, onEdit, onDelete, valuesHidden }) {
+function PortfolioItem({ item, index, onEdit, onDelete, valuesHidden, marketStatus }) {
   const [menu, setMenu] = useState(null); // { x, y } or null
   const pos = item.isPositive;
   const plStr =
     item.unrealizedPlPercent != null
       ? (pos ? '+' : '') + Number(item.unrealizedPlPercent).toFixed(2) + '%'
       : '—';
+
+  // Extended hours
+  const { extPct, extLabel } = getExtendedHoursInfo(marketStatus, item, { shortLabels: true });
 
   const handleContextMenu = (e) => {
     if (!item.user_portfolio_id) return;
@@ -148,14 +162,21 @@ function PortfolioItem({ item, index, onEdit, onDelete, valuesHidden }) {
             </div>
           </div>
 
-          <div
-            className="w-16 py-1 rounded-lg text-center text-xs font-bold"
-            style={{
-              backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
-              color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
-            }}
-          >
-            {plStr}
+          <div className="text-right">
+            <div
+              className="w-16 py-1 rounded-lg text-center text-xs font-bold"
+              style={{
+                backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+                color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
+              }}
+            >
+              {plStr}
+            </div>
+            {extLabel && extPct != null && (
+              <div className="text-[10px] mt-0.5 text-center" style={{ color: extLabel === 'PM' ? '#fbbf24' : '#3b82f6' }}>
+                {extLabel}: {extPct >= 0 ? '+' : ''}{extPct.toFixed(2)}%
+              </div>
+            )}
           </div>
         </div>
       </motion.div>
@@ -208,6 +229,7 @@ function PortfolioWatchlistCard({
   onPortfolioAdd,
   onPortfolioDelete,
   onPortfolioEdit,
+  marketStatus,
 }) {
   const [activeTab, setActiveTabRaw] = useState(() => localStorage.getItem('portfolio_active_tab') || 'watchlist');
   const [valuesHidden, setValuesHiddenRaw] = useState(() => localStorage.getItem('portfolio_values_hidden') === 'true');
@@ -297,6 +319,7 @@ function PortfolioWatchlistCard({
                       item={item}
                       index={i}
                       onDelete={onWatchlistDelete}
+                      marketStatus={marketStatus}
                     />
                   ))}
               <AddNewButton label="Add Symbol" onClick={onWatchlistAdd} />
@@ -376,6 +399,7 @@ function PortfolioWatchlistCard({
                       onEdit={onPortfolioEdit}
                       onDelete={onPortfolioDelete}
                       valuesHidden={valuesHidden}
+                      marketStatus={marketStatus}
                     />
                   ))}
               <AddNewButton label="Add Transaction" onClick={onPortfolioAdd} />

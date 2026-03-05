@@ -3,7 +3,7 @@ import { ArrowLeft, Search } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../../components/ui/dialog';
 import { Input } from '../../../components/ui/input';
 import { ScrollArea } from '../../../components/ui/scroll-area';
-import { searchStocks } from '../utils/api';
+import { searchStocks } from '@/lib/marketUtils';
 
 /**
  * Two-page dialog for adding portfolio holdings:

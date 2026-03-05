@@ -55,6 +55,8 @@ export function usePortfolioData() {
             marketValue,
             unrealizedPlPercent: plPct,
             isPositive: plPct == null ? true : plPct >= 0,
+            earlyTradingChangePercent: p.earlyTradingChangePercent ?? null,
+            lateTradingChangePercent: p.lateTradingChangePercent ?? null,
           };
         });
         setRows(combined);
@@ -78,6 +80,7 @@ export function usePortfolioData() {
   useEffect(() => {
     fetchPortfolio();
     const intervalId = setInterval(() => {
+      if (document.hidden) return;
       fetchPortfolio();
     }, 60000);
     return () => clearInterval(intervalId);
