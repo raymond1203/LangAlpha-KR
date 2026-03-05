@@ -3,7 +3,7 @@ import { X, User, LogOut, Eye, EyeOff, Trash2, HelpCircle, MessageSquareText, Su
 import { Input } from '../../../components/ui/input';
 import { Select } from '../../../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../../components/ui/dialog';
-import { updateCurrentUser, getCurrentUser, updatePreferences, getPreferences, clearPreferences, uploadAvatar, getAvailableModels, getUserApiKeys, updateUserApiKeys, deleteUserApiKey, initiateCodexDevice, pollCodexDevice, getCodexOAuthStatus, disconnectCodexOAuth } from '../utils/api';
+import { updateCurrentUser, getCurrentUser, updatePreferences, getPreferences, clearPreferences, uploadAvatar, getAvailableModels, getUserApiKeys, updateUserApiKeys, deleteUserApiKey, initiateCodexDevice, pollCodexDevice, getCodexOAuthStatus, disconnectCodexOAuth, initiateClaudeOAuth, submitClaudeCallback, getClaudeOAuthStatus, disconnectClaudeOAuth } from '../utils/api';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useTranslation } from 'react-i18next';
@@ -67,6 +67,16 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   const [codexDeviceError, setCodexDeviceError] = useState(null);
   const [isPollingCodex, setIsPollingCodex] = useState(false);
   const codexPollRef = useRef(null);
+
+  // Connected Accounts (Claude OAuth — PKCE Authorization Code Flow)
+  const [claudeOAuthStatus, setClaudeOAuthStatus] = useState({ connected: false });
+  const [showClaudeDisclaimer, setShowClaudeDisclaimer] = useState(false);
+  const [isConnectingClaude, setIsConnectingClaude] = useState(false);
+  const [isDisconnectingClaude, setIsDisconnectingClaude] = useState(false);
+  const [claudeAuthorizeUrl, setClaudeAuthorizeUrl] = useState(null);
+  const [claudeCallbackInput, setClaudeCallbackInput] = useState('');
+  const [claudeError, setClaudeError] = useState(null);
+  const [isSubmittingClaudeCallback, setIsSubmittingClaudeCallback] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -176,11 +186,12 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   const loadModelTabData = async () => {
     setModelTabError(null);
     try {
-      const [modelsRes, keysRes, prefsRes, codexStatus] = await Promise.all([
+      const [modelsRes, keysRes, prefsRes, codexStatus, claudeStatus] = await Promise.all([
         getAvailableModels(),
         getUserApiKeys(),
         getPreferences(),
         getCodexOAuthStatus(),
+        getClaudeOAuthStatus(),
       ]);
       setAvailableModels(modelsRes?.models || {});
       setByokEnabled(keysRes?.byok_enabled || false);
@@ -194,6 +205,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
       setPreferredFlashModel(prefsRes?.other_preference?.preferred_flash_model || '');
       setCustomModels(prefsRes?.other_preference?.custom_models || []);
       setCodexOAuthStatus(codexStatus || { connected: false });
+      setClaudeOAuthStatus(claudeStatus || { connected: false });
     } catch {
       setModelTabError(t('settings.failedToLoadModels'));
     }
@@ -461,6 +473,71 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
       setModelTabError('Failed to disconnect Codex');
     } finally {
       setIsDisconnectingCodex(false);
+    }
+  };
+
+  // --- Claude OAuth handlers ---
+
+  const handleClaudeConnectClick = () => {
+    setShowClaudeDisclaimer(true);
+  };
+
+  const handleClaudeConnect = async () => {
+    setShowClaudeDisclaimer(false);
+    setIsConnectingClaude(true);
+    setModelTabError(null);
+    setClaudeError(null);
+    try {
+      const result = await initiateClaudeOAuth();
+      setClaudeAuthorizeUrl(result.authorize_url);
+      // Open authorization page in new tab
+      window.open(result.authorize_url, '_blank', 'noopener');
+    } catch {
+      setModelTabError(t('settings.claudeConnectFailed', 'Failed to initiate Claude OAuth'));
+    } finally {
+      setIsConnectingClaude(false);
+    }
+  };
+
+  const handleClaudeCallbackSubmit = async () => {
+    if (!claudeCallbackInput.trim()) return;
+    setIsSubmittingClaudeCallback(true);
+    setClaudeError(null);
+    try {
+      const result = await submitClaudeCallback(claudeCallbackInput.trim());
+      if (result.success) {
+        setClaudeAuthorizeUrl(null);
+        setClaudeCallbackInput('');
+        setClaudeOAuthStatus({
+          connected: true,
+          account_id: result.account_id || '',
+          email: result.email || null,
+          plan_type: result.plan_type || null,
+        });
+      }
+    } catch (e) {
+      setClaudeError(e.response?.data?.detail || t('settings.claudePasteError', 'Failed to exchange code. Please try again.'));
+    } finally {
+      setIsSubmittingClaudeCallback(false);
+    }
+  };
+
+  const handleClaudeCancel = () => {
+    setClaudeAuthorizeUrl(null);
+    setClaudeCallbackInput('');
+    setClaudeError(null);
+  };
+
+  const handleClaudeDisconnect = async () => {
+    setIsDisconnectingClaude(true);
+    setModelTabError(null);
+    try {
+      await disconnectClaudeOAuth();
+      setClaudeOAuthStatus({ connected: false, account_id: null, email: null, plan_type: null });
+    } catch {
+      setModelTabError('Failed to disconnect Claude');
+    } finally {
+      setIsDisconnectingClaude(false);
     }
   };
 
@@ -1101,6 +1178,126 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
                         </div>
                       )}
                     </div>
+
+                    {/* Claude OAuth card */}
+                    <div
+                      className="rounded-lg px-4 py-3 mt-2"
+                      style={{
+                        backgroundColor: 'var(--color-bg-card)',
+                        border: `1px solid ${claudeOAuthStatus.connected ? 'var(--color-success-soft)' : 'var(--color-border-muted)'}`,
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="h-8 w-8 rounded-md flex items-center justify-center"
+                            style={{ backgroundColor: claudeOAuthStatus.connected ? 'var(--color-success-soft)' : 'var(--color-accent-soft)' }}
+                          >
+                            <Link2 className="h-4 w-4" style={{ color: claudeOAuthStatus.connected ? 'var(--color-success)' : 'var(--color-accent-primary)' }} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>Claude Code</span>
+                              {claudeOAuthStatus.connected && claudeOAuthStatus.plan_type && (
+                                <span
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium"
+                                  style={{ backgroundColor: 'var(--color-success-soft)', color: 'var(--color-success)' }}
+                                >
+                                  {claudeOAuthStatus.plan_type}
+                                </span>
+                              )}
+                            </div>
+                            {claudeOAuthStatus.connected ? (
+                              <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>{claudeOAuthStatus.email || claudeOAuthStatus.account_id || t('settings.connected', 'Connected')}</p>
+                            ) : (
+                              <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
+                                {t('settings.claudeDesc', 'Use Claude models with your Anthropic subscription')}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          {claudeOAuthStatus.connected ? (
+                            <button
+                              type="button"
+                              onClick={handleClaudeDisconnect}
+                              disabled={isDisconnectingClaude}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                              style={{ color: 'var(--color-loss)', backgroundColor: 'transparent', border: '1px solid var(--color-loss)' }}
+                            >
+                              <Unlink className="h-3 w-3" />
+                              {isDisconnectingClaude ? t('common.loading', 'Loading...') : t('settings.disconnect', 'Disconnect')}
+                            </button>
+                          ) : !claudeAuthorizeUrl ? (
+                            <button
+                              type="button"
+                              onClick={handleClaudeConnectClick}
+                              disabled={isConnectingClaude}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                              style={{
+                                backgroundColor: isConnectingClaude ? 'var(--color-accent-disabled)' : 'var(--color-accent-primary)',
+                                color: 'var(--color-text-on-accent)',
+                              }}
+                            >
+                              <Link2 className="h-3 w-3" />
+                              {isConnectingClaude ? t('common.loading', 'Loading...') : t('settings.connect', 'Connect')}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* Paste-back input — shown after user opens authorize URL */}
+                      {claudeAuthorizeUrl && !claudeOAuthStatus.connected && (
+                        <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--color-border-muted)' }}>
+                          <p className="text-xs mb-2" style={{ color: 'var(--color-text-secondary)' }}>
+                            {t('settings.claudePastePrompt', 'After authorizing on claude.ai, paste the code shown on the page below:')}
+                          </p>
+                          <div className="flex items-center gap-2 mb-2">
+                            <Input
+                              value={claudeCallbackInput}
+                              onChange={(e) => setClaudeCallbackInput(e.target.value)}
+                              placeholder="code#state"
+                              className="flex-1 text-xs font-mono"
+                              onKeyDown={(e) => e.key === 'Enter' && handleClaudeCallbackSubmit()}
+                            />
+                            <button
+                              type="button"
+                              onClick={handleClaudeCallbackSubmit}
+                              disabled={isSubmittingClaudeCallback || !claudeCallbackInput.trim()}
+                              className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                              style={{
+                                backgroundColor: isSubmittingClaudeCallback ? 'var(--color-accent-disabled)' : 'var(--color-accent-primary)',
+                                color: 'var(--color-text-on-accent)',
+                              }}
+                            >
+                              {isSubmittingClaudeCallback ? t('common.loading', 'Loading...') : t('common.submit', 'Submit')}
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <a
+                              href={claudeAuthorizeUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs underline"
+                              style={{ color: 'var(--color-accent-primary)' }}
+                            >
+                              {t('settings.claudeOpenAgain', 'Open authorize page again')}
+                            </a>
+                            <button
+                              type="button"
+                              onClick={handleClaudeCancel}
+                              className="px-3 py-1.5 rounded-md text-xs font-medium"
+                              style={{ color: 'var(--color-text-tertiary)', backgroundColor: 'transparent' }}
+                            >
+                              {t('common.cancel', 'Cancel')}
+                            </button>
+                          </div>
+                          {claudeError && (
+                            <p className="text-xs mt-1.5" style={{ color: 'var(--color-loss)' }}>{claudeError}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Section 3: BYOK */}
@@ -1712,6 +1909,90 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
             >
               <ExternalLink className="h-3.5 w-3.5" />
               {t('settings.codexProceed')}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Claude OAuth Disclaimer Dialog */}
+      <Dialog open={showClaudeDisclaimer} onOpenChange={setShowClaudeDisclaimer}>
+        <DialogContent
+          className="sm:max-w-md border"
+          style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}
+        >
+          <DialogHeader>
+            <DialogTitle className="title-font flex items-center gap-2" style={{ color: 'var(--color-text-primary)' }}>
+              <Link2 className="h-5 w-5" style={{ color: 'var(--color-accent-primary)' }} />
+              {t('settings.claudeConnectTitle', 'Connect Claude Account')}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Steps */}
+            <div className="space-y-3">
+              <p className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.claudeHowItWorks', 'How it works')}</p>
+
+              <div className="flex gap-3 items-start">
+                <div className="flex-shrink-0 h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold" style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}>1</div>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.claudeStep1Title', 'Authorize on claude.ai')}</p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.claudeStep1Desc', 'A new tab will open to claude.ai where you sign in and authorize access.')}</p>
+                </div>
+              </div>
+
+              <div className="flex gap-3 items-start">
+                <div className="flex-shrink-0 h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold" style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}>2</div>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.claudeStep2Title', 'Copy the authorization code')}</p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.claudeStep2Desc', 'After approval, you\'ll see a code on the page. Copy the entire value.')}</p>
+                </div>
+              </div>
+
+              <div className="flex gap-3 items-start">
+                <div className="flex-shrink-0 h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold" style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}>3</div>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.claudeStep3Title', 'Paste it back here')}</p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>{t('settings.claudeStep3Desc', 'Paste the code into the input field to complete the connection.')}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Disclaimer */}
+            <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--color-bg-sunken, var(--color-bg-card))', border: '1px solid var(--color-border-muted)' }}>
+              <div className="flex gap-2 items-start">
+                <Shield className="h-4 w-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--color-text-tertiary)' }} />
+                <div>
+                  <p className="text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>{t('settings.claudeSecurityTitle', 'Security & Privacy')}</p>
+                  <p className="text-[11px] leading-relaxed" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {t('settings.claudeSecurityDesc', 'Your tokens are encrypted at rest. We use them only to make API calls on your behalf.')}
+                  </p>
+                  <p className="text-[11px] leading-relaxed mt-1.5" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {t('settings.claudeDisclaimerDesc', 'Usage will count against your Anthropic subscription. You can disconnect at any time.')}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setShowClaudeDisclaimer(false)}
+              className="px-3 py-1.5 rounded text-sm border"
+              style={{ color: 'var(--color-text-primary)', borderColor: 'var(--color-border-default)' }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-border-muted)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+            >
+              {t('common.cancel', 'Cancel')}
+            </button>
+            <button
+              type="button"
+              onClick={handleClaudeConnect}
+              className="px-4 py-1.5 rounded text-sm font-medium hover:opacity-90 flex items-center gap-1.5"
+              style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t('settings.claudeProceed', 'Open claude.ai')}
             </button>
           </DialogFooter>
         </DialogContent>

@@ -413,6 +413,51 @@ export async function disconnectCodexOAuth() {
   return data;
 }
 
+// --- Claude OAuth (PKCE Authorization Code Flow) ---
+
+/**
+ * Initiate Claude OAuth — returns { authorize_url }.
+ * POST /api/v1/oauth/claude/initiate
+ */
+export async function initiateClaudeOAuth() {
+  const { data } = await api.post('/api/v1/oauth/claude/initiate');
+  return data;
+}
+
+/**
+ * Submit Claude OAuth callback — exchange code#state for tokens.
+ * POST /api/v1/oauth/claude/callback
+ * @param {string} callbackInput - Full URL, code#state, or code=X&state=Y
+ * @returns {Promise<Object>} { success: true }
+ */
+export async function submitClaudeCallback(callbackInput) {
+  const { data } = await api.post('/api/v1/oauth/claude/callback', { callback_input: callbackInput });
+  return data;
+}
+
+/**
+ * Check Claude OAuth connection status.
+ * GET /api/v1/oauth/claude/status
+ * Returns { connected, account_id, email, plan_type }
+ */
+export async function getClaudeOAuthStatus() {
+  try {
+    const { data } = await api.get('/api/v1/oauth/claude/status');
+    return data;
+  } catch {
+    return { connected: false, account_id: null, email: null, plan_type: null };
+  }
+}
+
+/**
+ * Disconnect Claude OAuth — delete stored tokens.
+ * DELETE /api/v1/oauth/claude
+ */
+export async function disconnectClaudeOAuth() {
+  const { data } = await api.delete('/api/v1/oauth/claude');
+  return data;
+}
+
 // --- News feed ---
 
 /**
