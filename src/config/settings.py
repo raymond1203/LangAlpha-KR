@@ -538,7 +538,10 @@ def get_summarization_config() -> Dict[str, Any]:
     """
     result: Dict[str, Any] = {
         "enabled": bool(_get_agent_nested_config("summarization.enabled", True)),
-        "llm": str(_get_agent_nested_config("summarization.llm", "gpt-5-nano")),
+        "llm": str(
+            _get_agent_nested_config("llm.summarization")
+            or _get_agent_nested_config("llm.name", "")
+        ),
         "token_threshold": int(
             _get_agent_nested_config("summarization.token_threshold", 120000)
         ),

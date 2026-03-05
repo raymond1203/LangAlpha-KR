@@ -257,8 +257,12 @@ def load_from_dict(
         flash_llm = None
         fallback_models = None
     elif isinstance(llm_data, dict):
-        llm_name = llm_data.get("name", "minimax-m2.1")
+        llm_name = llm_data.get("name", "")
+        if not llm_name:
+            raise ValueError("llm.name is required in agent_config.yaml")
         flash_llm = llm_data.get("flash")  # None means use main llm
+        summarization_llm = llm_data.get("summarization")  # None means use main llm
+        fetch_llm = llm_data.get("fetch")  # None means use flash/main llm
         fallback_models = llm_data.get("fallback")  # list[str] | None
     else:
         raise ValueError(
@@ -266,7 +270,13 @@ def load_from_dict(
         )
 
     # Create LLM config - model resolution happens in get_llm_client()
-    llm_config = LLMConfig(name=llm_name, flash=flash_llm, fallback=fallback_models)
+    llm_config = LLMConfig(
+        name=llm_name,
+        flash=flash_llm,
+        summarization=summarization_llm,
+        fetch=fetch_llm,
+        fallback=fallback_models,
+    )
 
     # Load configurations using shared factory functions
     daytona_config = create_daytona_config(config_data["daytona"])
@@ -365,9 +375,12 @@ cli:
 # -----------------
 # Model name from src/llms/manifest/models.json
 llm:
-  name: "minimax-m2.1"
-  # fallback:          # Fallback models when primary fails (after 3 retries)
-  #   - "gpt-4.1-mini"
+  name: "your-model-name"       # Required: primary model from models.json
+  # flash: "your-flash-model"   # Optional: model for flash agent
+  # summarization: "your-model" # Optional: model for conversation summarization
+  # fetch: "your-model"         # Optional: model for web content extraction
+  # fallback:                   # Optional: fallback models when primary fails
+  #   - "fallback-model"
 
 # Daytona Sandbox
 # ---------------

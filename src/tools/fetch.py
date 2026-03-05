@@ -37,9 +37,10 @@ EXTRACTION_TIMEOUT = 60.0  # seconds per model attempt
 
 
 def _get_extraction_model() -> str:
-    """Get the configured extraction model from agent_config.yaml (llm.flash)."""
+    """Get the configured extraction model from agent_config.yaml (llm.fetch > llm.flash > llm.name)."""
     config = load_agent_config()
-    return config.get("llm", {}).get("flash", "minimax-m2.1")
+    llm = config.get("llm", {})
+    return llm.get("fetch") or llm.get("flash") or llm.get("name", "")
 
 
 def _get_cache_key(url: str) -> str:

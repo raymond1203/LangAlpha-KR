@@ -1227,7 +1227,7 @@ class SummarizationMiddleware(AgentMiddleware):
             return None
 
         # Get summarization model from config
-        model_name = config.get("llm", "gpt-5-nano")
+        model_name = config.get("llm", "")
         summarization_model: BaseChatModel = get_llm_by_type(model_name)
 
         # Disable streaming to prevent normal message_chunk events

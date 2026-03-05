@@ -414,7 +414,7 @@ async def trigger_summarization(thread_id: str, keep_messages: int = 5) -> dict:
         original_count = len(messages)
 
         summarization_config = get_summarization_config()
-        model_name = summarization_config.get("llm", "gpt-5-nano")
+        model_name = summarization_config.get("llm", "")
 
         # Read previous event from state (for chained summarization)
         previous_event = state.values.get("_summarization_event")

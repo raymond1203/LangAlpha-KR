@@ -126,6 +126,8 @@ class LLMConfig(BaseModel):
 
     name: str  # Name/alias from src/llms/manifest/models.json
     flash: str | None = None  # LLM for flash agent, defaults to main llm if None
+    summarization: str | None = None  # LLM for conversation summarization
+    fetch: str | None = None  # LLM for web content extraction (fetch tool)
     fallback: list[str] | None = None  # Fallback model names for retry exhaustion
 
 

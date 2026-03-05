@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 async def summarize_messages(
     messages: list[AnyMessage],
     keep_messages: int = 5,
-    model_name: str = "gpt-5-nano",
+    model_name: str = "",
     backend: Any | None = None,
     previous_event: SummarizationEvent | None = None,
 ) -> dict[str, Any]:
