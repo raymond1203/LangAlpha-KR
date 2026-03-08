@@ -28,6 +28,7 @@ from ptc_agent.agent.middleware import (
     create_plan_mode_interrupt_config,
     # Tool middleware
     EmptyToolCallRetryMiddleware,
+    LeakDetectionMiddleware,
     ToolArgumentParsingMiddleware,
     ToolErrorHandlingMiddleware,
     ToolResultNormalizationMiddleware,
@@ -358,6 +359,7 @@ class PTCAgent:
             [
                 ToolArgumentParsingMiddleware(),
                 ToolErrorHandlingMiddleware(),
+                LeakDetectionMiddleware(mcp_servers=self.config.mcp.servers),
                 ToolResultNormalizationMiddleware(),
             ]
         )

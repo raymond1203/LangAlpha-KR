@@ -371,9 +371,9 @@ except ImportError:
             Python code for complete MCP client
         """
         # Build server configuration dict for code generation.
-        # IMPORTANT: do NOT resolve `${VAR}` placeholders here.
-        # This code runs on the host and generates a file uploaded into the sandbox.
-        # Resolving here would inline secrets into sandbox-readable files.
+        # Only env key NAMES are embedded — never values. The sandbox
+        # already has the resolved values in os.environ (injected by
+        # _build_sandbox_env_vars at creation time).
 
         servers_dict = "{\n"
         for server in server_configs:
@@ -395,10 +395,13 @@ except ImportError:
 """
             else:
                 # Stdio transport - use command
-                env_dict = "{}"
+                # Store only env key names, NOT values. The sandbox already
+                # has the resolved values in os.environ (injected by
+                # _build_sandbox_env_vars). The generated code reads them
+                # at runtime, so secrets never touch disk.
+                env_keys_repr = "[]"
                 if hasattr(server, "env") and server.env:
-                    safe_env = {k: str(v) for k, v in server.env.items()}
-                    env_dict = repr(safe_env)
+                    env_keys_repr = repr(list(server.env.keys()))
 
                 # Transform Python MCP servers for sandbox execution
                 # uv run python mcp_servers/xxx.py -> uv run python /home/daytona/mcp_servers/xxx.py
@@ -431,7 +434,7 @@ except ImportError:
         "transport": "stdio",
         "command": "{command}",
         "args": [{args_list}],
-        "env": {env_dict},
+        "env_keys": {env_keys_repr},
     }},
 """
         servers_dict += "}"
@@ -510,16 +513,11 @@ def _start_mcp_server(server_name: str) -> subprocess.Popen:
     extra_paths = ["/home/daytona", f"{{internal_root}}/src", internal_root]
     proc_env["PYTHONPATH"] = ":".join([p for p in [existing_pythonpath, *extra_paths] if p])
 
-    server_env = config.get("env", {{}})
-    if server_env:
-        # Resolve placeholders like "${{VAR_NAME}}" in environment variables
-        for key, value in server_env.items():
-            if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-                # Extract variable name and resolve from os.environ
-                var_name = value[2:-1]
-                proc_env[key] = proc_env.get(var_name, value)
-            else:
-                proc_env[key] = value
+    # Resolve env vars by key name from os.environ (values are injected
+    # at sandbox creation time, never hardcoded in this file).
+    for key in config.get("env_keys", []):
+        if key in os.environ:
+            proc_env[key] = os.environ[key]
 
     proc = subprocess.Popen(
         cmd,

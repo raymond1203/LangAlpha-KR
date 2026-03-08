@@ -26,9 +26,10 @@ from ptc_agent.agent.middleware.plan_mode import (
 # Ask user middleware
 from ptc_agent.agent.middleware.ask_user import AskUserMiddleware
 
-# Tool middleware (argument parsing, error handling, result normalization, empty call retry)
+# Tool middleware (argument parsing, error handling, result normalization, leak detection, empty call retry)
 from ptc_agent.agent.middleware.tool import (
     EmptyToolCallRetryMiddleware,
+    LeakDetectionMiddleware,
     ToolArgumentParsingMiddleware,
     ToolErrorHandlingMiddleware,
     ToolResultNormalizationMiddleware,
@@ -106,6 +107,7 @@ __all__ = [
     "MultimodalMiddleware",
     # Tool middleware
     "EmptyToolCallRetryMiddleware",
+    "LeakDetectionMiddleware",
     "ToolArgumentParsingMiddleware",
     "ToolErrorHandlingMiddleware",
     "ToolResultNormalizationMiddleware",

@@ -140,29 +140,46 @@ class MCPServerConnector:
 
         logger.info("Initialized MCPServerConnector", server=config.name)
 
+    # Env vars safe to forward to MCP server subprocesses.
+    # Prevents leaking host secrets (ANTHROPIC_API_KEY, DB_PASSWORD, etc.)
+    # to MCP discovery processes. Servers that need additional env vars
+    # must declare them explicitly in their config's `env:` block.
+    _SAFE_ENV_VARS = frozenset({
+        # OS basics
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG",
+        "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+        # Temp dirs
+        "TMPDIR", "TMP", "TEMP",
+        # Node.js (MCP servers are often npx packages)
+        "NODE_PATH", "NPM_CONFIG_PREFIX", "NODE_OPTIONS", "NODE_ENV",
+        # Python (for uv/pip-based MCP servers)
+        "PYTHONPATH", "VIRTUAL_ENV",
+        # XDG
+        "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    })
+
     def _prepare_env(self) -> dict[str, str]:
         """Prepare environment variables by expanding placeholders.
 
-        Expands environment variable placeholders like ${VAR} in the server
-        config's env dict before passing to the MCP server process.
+        Starts from a safe subset of os.environ (not the full environment)
+        to prevent leaking host secrets to MCP server subprocesses.
+        Servers that need specific env vars must declare them in their
+        config's `env:` block.
 
         Returns:
-            Dictionary with expanded environment variables
+            Dictionary with safe base vars + expanded declared env vars
         """
-        if not self.config.env:
-            return dict(os.environ)
+        base_env = {k: os.environ[k] for k in self._SAFE_ENV_VARS if k in os.environ}
 
-        # Start with current environment
-        expanded_env = dict(os.environ)
+        if not self.config.env:
+            return base_env
 
         # Expand each configured env var and merge
         for key, value in self.config.env.items():
             if isinstance(value, str):
-                # Expand environment variable placeholders like ${VAR}
                 expanded_value = os.path.expandvars(value)
-                expanded_env[key] = expanded_value
+                base_env[key] = expanded_value
 
-                # Log if we expanded a placeholder
                 if "${" in value and expanded_value != value:
                     logger.debug(
                         "Expanded environment variable",
@@ -171,10 +188,9 @@ class MCPServerConnector:
                         from_placeholder=value,
                     )
             else:
-                # Non-string values pass through as-is
-                expanded_env[key] = value
+                base_env[key] = value
 
-        return expanded_env
+        return base_env
 
     def _expand_url(self) -> str | None:
         """Expand environment variable placeholders in URL.
