@@ -27,7 +27,7 @@ redis_warm_on_startup: true
 langsmith_tracing: false
 
 # SSE Event Logging
-sse_event_log_enabled: true
+sse_event_log_enabled: false
 sse_event_log_level: info
 
 # General Application Logging
