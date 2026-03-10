@@ -1,0 +1,272 @@
+"""
+Tests for the Portfolio API router (src/server/app/portfolio.py).
+
+Covers listing, adding, getting, updating, and deleting portfolio holdings.
+"""
+
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
+from tests.conftest import create_test_app
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+NOW = datetime.now(timezone.utc)
+HOLDING_ID = str(uuid.uuid4())
+
+
+def _holding(
+    user_portfolio_id=None,
+    user_id="test-user-123",
+    symbol="AAPL",
+    instrument_type="stock",
+    quantity="10.0",
+    **overrides,
+):
+    data = {
+        "user_portfolio_id": user_portfolio_id or HOLDING_ID,
+        "user_id": user_id,
+        "symbol": symbol,
+        "instrument_type": instrument_type,
+        "quantity": Decimal(quantity),
+        "exchange": "NASDAQ",
+        "name": "Apple Inc.",
+        "average_cost": Decimal("150.00"),
+        "currency": "USD",
+        "account_name": None,
+        "notes": None,
+        "metadata": {},
+        "first_purchased_at": None,
+        "created_at": NOW,
+        "updated_at": NOW,
+    }
+    data.update(overrides)
+    return data
+
+
+@pytest_asyncio.fixture
+async def client():
+    from src.server.app.portfolio import router
+
+    app = create_test_app(router)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+
+DB = "src.server.app.portfolio"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/users/me/portfolio
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_portfolio(client):
+    h = _holding()
+    with patch(
+        f"{DB}.db_get_user_portfolio",
+        new_callable=AsyncMock,
+        return_value=[h],
+    ):
+        resp = await client.get("/api/v1/users/me/portfolio")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["holdings"][0]["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_list_portfolio_empty(client):
+    with patch(
+        f"{DB}.db_get_user_portfolio",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        resp = await client.get("/api/v1/users/me/portfolio")
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/users/me/portfolio
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_portfolio_holding(client):
+    h = _holding()
+    with (
+        patch(
+            f"{DB}.db_create_portfolio_holding",
+            new_callable=AsyncMock,
+            return_value=h,
+        ),
+        patch(
+            f"{DB}.maybe_complete_onboarding",
+            new_callable=AsyncMock,
+        ),
+    ):
+        resp = await client.post(
+            "/api/v1/users/me/portfolio",
+            json={
+                "symbol": "AAPL",
+                "instrument_type": "stock",
+                "quantity": 10,
+            },
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_add_portfolio_holding_duplicate_409(client):
+    with (
+        patch(
+            f"{DB}.db_create_portfolio_holding",
+            new_callable=AsyncMock,
+            side_effect=ValueError("duplicate"),
+        ),
+        patch(
+            f"{DB}.maybe_complete_onboarding",
+            new_callable=AsyncMock,
+        ),
+    ):
+        resp = await client.post(
+            "/api/v1/users/me/portfolio",
+            json={
+                "symbol": "AAPL",
+                "instrument_type": "stock",
+                "quantity": 10,
+            },
+        )
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_add_portfolio_holding_validation(client):
+    """Missing required fields should return 422."""
+    resp = await client.post(
+        "/api/v1/users/me/portfolio",
+        json={"symbol": "AAPL"},
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/users/me/portfolio/{holding_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_portfolio_holding(client):
+    h = _holding()
+    with patch(
+        f"{DB}.db_get_portfolio_holding",
+        new_callable=AsyncMock,
+        return_value=h,
+    ):
+        resp = await client.get(
+            f"/api/v1/users/me/portfolio/{HOLDING_ID}"
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["symbol"] == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_get_portfolio_holding_not_found(client):
+    fake_id = str(uuid.uuid4())
+    with patch(
+        f"{DB}.db_get_portfolio_holding",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        resp = await client.get(f"/api/v1/users/me/portfolio/{fake_id}")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/v1/users/me/portfolio/{holding_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_portfolio_holding(client):
+    h = _holding()
+    updated = {**h, "notes": "Long hold"}
+    with patch(
+        f"{DB}.db_update_portfolio_holding",
+        new_callable=AsyncMock,
+        return_value=updated,
+    ):
+        resp = await client.put(
+            f"/api/v1/users/me/portfolio/{HOLDING_ID}",
+            json={"notes": "Long hold"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["notes"] == "Long hold"
+
+
+@pytest.mark.asyncio
+async def test_update_portfolio_holding_not_found(client):
+    fake_id = str(uuid.uuid4())
+    with patch(
+        f"{DB}.db_update_portfolio_holding",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        resp = await client.put(
+            f"/api/v1/users/me/portfolio/{fake_id}",
+            json={"notes": "X"},
+        )
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/users/me/portfolio/{holding_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_portfolio_holding(client):
+    with patch(
+        f"{DB}.db_delete_portfolio_holding",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        resp = await client.delete(
+            f"/api/v1/users/me/portfolio/{HOLDING_ID}"
+        )
+
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_delete_portfolio_holding_not_found(client):
+    fake_id = str(uuid.uuid4())
+    with patch(
+        f"{DB}.db_delete_portfolio_holding",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        resp = await client.delete(f"/api/v1/users/me/portfolio/{fake_id}")
+
+    assert resp.status_code == 404

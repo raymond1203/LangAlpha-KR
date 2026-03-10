@@ -38,7 +38,10 @@ class TestGetStockDataLive:
     async def test_intraday_5min(self):
         from mcp_servers.price_data_mcp_server import get_stock_data
 
-        result = await get_stock_data("AAPL", interval="5min")
+        result = await get_stock_data(
+            "AAPL", interval="5min",
+            start_date="2025-03-03", end_date="2025-03-07",
+        )
         assert "error" not in result, result.get("error")
         assert result["count"] > 0
 
@@ -81,22 +84,39 @@ class TestGetAssetDataLive:
 # get_short_data
 # ---------------------------------------------------------------------------
 
-def _init_ginlix():
-    """Ensure the ginlix-data httpx client is initialized on the module.
+async def _init_ginlix():
+    """Ensure the ginlix-data MCP client is initialized for the current event loop.
 
-    Sends X-Service-Token and X-User-Id (required by ginlix-data auth).
+    The module-level ``_ginlix`` is a :class:`GinlixMCPClient` whose HTTP
+    client is lazily created via ``ensure()``.  In strict asyncio mode each
+    test gets its own event loop, so we must recreate the httpx client every
+    time to avoid "Event loop is closed" errors.
     """
     import httpx
     import mcp_servers.price_data_mcp_server as mod
 
-    if mod._ginlix_http is None:
+    client = mod._ginlix
+
+    # Always recreate the httpx client to bind to the current event loop
+    if client._http is not None:
+        try:
+            await client._http.aclose()
+        except Exception:
+            pass
+        client._http = None
+
+    # Try the normal ensure() path first (reads token file)
+    if not await client.ensure():
+        # Fall back to env-var-based initialization
         url = os.getenv("GINLIX_DATA_URL", "")
         token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
+        if not url:
+            pytest.skip("GINLIX_DATA_URL not set")
         headers: dict[str, str] = {}
         if token:
             headers["X-Service-Token"] = token
             headers["X-User-Id"] = "integration-test"
-        mod._ginlix_http = httpx.AsyncClient(
+        client._http = httpx.AsyncClient(
             base_url=url.rstrip("/"), headers=headers, timeout=30.0,
         )
     return mod
@@ -105,7 +125,7 @@ def _init_ginlix():
 @pytest.mark.skipif(not _has_ginlix, reason="GINLIX_DATA_URL not set")
 class TestGetShortDataLive:
     async def test_both(self):
-        mod = _init_ginlix()
+        mod = await _init_ginlix()
         result = await mod.get_short_data("AAPL")
         assert "error" not in result, result.get("error")
         assert result["source"] == "ginlix-data"
@@ -134,7 +154,7 @@ class TestGetShortDataLive:
         assert "total_volume" in sv_row
 
     async def test_short_interest_only_with_date_filter(self):
-        mod = _init_ginlix()
+        mod = await _init_ginlix()
         result = await mod.get_short_data(
             "AAPL", data_type="short_interest",
             from_date="2025-01-01", to_date="2025-12-31", limit=5,
@@ -146,7 +166,7 @@ class TestGetShortDataLive:
             assert row["settlement_date"] >= "2025-01-01"
 
     async def test_short_volume_only(self):
-        mod = _init_ginlix()
+        mod = await _init_ginlix()
         result = await mod.get_short_data("TSLA", data_type="short_volume", limit=3)
         assert "short_volume" in result
         assert "short_interest" not in result

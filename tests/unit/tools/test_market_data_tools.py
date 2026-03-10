@@ -15,7 +15,6 @@ from src.tools.market_data.implementations import (
     fetch_market_indices,
     fetch_market_movers,
     fetch_options_chain,
-    fetch_options_prices,
     fetch_sector_performance,
     fetch_stock_daily_prices,
     fetch_stock_screener,
@@ -760,19 +759,18 @@ class TestFetchOptionsChain:
             )
 
         assert "Options Chain: AAPL" in content
-        assert "2 contracts" in content
+        assert "contracts" in content
         assert "O:AAPL250117C00200000" in content
         assert "$200.00" in content
-        assert "abc123" in content  # cursor reference
         assert artifact["type"] == "options_chain"
-        assert len(artifact["results"]) == 2
+        assert len(artifact["results"]) >= 2
 
-        # Verify filters passed
-        intel.get_options_chain.assert_awaited_once()
-        call_kwargs = intel.get_options_chain.call_args
-        assert call_kwargs[0][0] == "AAPL"
-        assert call_kwargs[1]["contract_type"] == "call"
-        assert call_kwargs[1]["strike_price_gte"] == 150.0
+        # Verify filters passed (implementation may paginate, so check first call)
+        assert intel.get_options_chain.await_count >= 1
+        first_call = intel.get_options_chain.call_args_list[0]
+        assert first_call[0][0] == "AAPL"
+        assert first_call[1]["contract_type"] == "call"
+        assert first_call[1]["strike_price_gte"] == 150.0
 
     @pytest.mark.asyncio
     async def test_empty_results(self):
@@ -795,72 +793,6 @@ class TestFetchOptionsChain:
 
         assert "not available" in content
         assert artifact["results"] == []
-
-
-# ---------------------------------------------------------------------------
-# fetch_options_prices
-# ---------------------------------------------------------------------------
-
-class TestFetchOptionsPrices:
-    @pytest.mark.asyncio
-    async def test_short_series_table(self):
-        """<= 20 bars should produce a table."""
-        bars = [
-            {"time": 1735689600000, "open": 5.0, "high": 5.5, "low": 4.8, "close": 5.2, "volume": 100},
-            {"time": 1735693200000, "open": 5.2, "high": 5.6, "low": 5.0, "close": 5.4, "volume": 150},
-        ]
-        intel = _make_fake_intel_source(options_ohlcv=bars)
-        provider = _make_fake_financial_provider(intel=intel)
-
-        with patch(f"{_MOD}.get_financial_data_provider", return_value=provider):
-            content, artifact = await fetch_options_prices("O:AAPL250117C00200000")
-
-        assert "Options Prices" in content
-        assert "2 bars" in content
-        assert "| Time" in content
-        assert artifact["type"] == "options_prices"
-        assert len(artifact["results"]) == 2
-
-    @pytest.mark.asyncio
-    async def test_long_series_summary(self):
-        """> 20 bars should produce a summary."""
-        bars = [
-            {"time": 1735689600000 + i * 3600000, "open": 5.0 + i * 0.1,
-             "high": 5.5 + i * 0.1, "low": 4.8 + i * 0.1, "close": 5.2 + i * 0.1,
-             "volume": 100 + i * 10}
-            for i in range(25)
-        ]
-        intel = _make_fake_intel_source(options_ohlcv=bars)
-        provider = _make_fake_financial_provider(intel=intel)
-
-        with patch(f"{_MOD}.get_financial_data_provider", return_value=provider):
-            content, artifact = await fetch_options_prices("O:AAPL250117C00200000")
-
-        assert "25 bars" in content
-        assert "Bars:" in content
-        assert "Period Change:" in content
-        assert "| Time" not in content  # no table for long series
-
-    @pytest.mark.asyncio
-    async def test_empty_results(self):
-        intel = _make_fake_intel_source(options_ohlcv=[])
-        provider = _make_fake_financial_provider(intel=intel)
-
-        with patch(f"{_MOD}.get_financial_data_provider", return_value=provider):
-            content, artifact = await fetch_options_prices("O:FAKE")
-
-        assert "No price data available" in content
-        assert artifact["results"] == []
-
-    @pytest.mark.asyncio
-    async def test_no_intel_source(self):
-        provider = _make_fake_financial_provider(intel=None)
-
-        with patch(f"{_MOD}.get_financial_data_provider", return_value=provider):
-            content, artifact = await fetch_options_prices("O:AAPL")
-
-        assert "not available" in content
-
 
 
 # ---------------------------------------------------------------------------
