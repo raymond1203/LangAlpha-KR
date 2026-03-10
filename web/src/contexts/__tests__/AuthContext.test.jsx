@@ -3,6 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+// Enable Supabase auth code path (AuthProvider checks VITE_SUPABASE_URL)
+// Must be set before the dynamic import below.
+vi.stubEnv('VITE_SUPABASE_URL', 'https://test.supabase.co');
+
 // Mock supabase with a functional mock auth object
 const mockGetSession = vi.fn().mockResolvedValue({ data: { session: null } });
 const mockOnAuthStateChange = vi.fn().mockReturnValue({
@@ -26,7 +30,7 @@ vi.mock('../../api/client', () => ({
   setTokenGetter: vi.fn(),
 }));
 
-// Dynamic import so mocks are applied first
+// Dynamic import so mocks and env stubs are applied first
 const { AuthProvider, useAuth } = await import('../AuthContext');
 
 function TestConsumer() {
