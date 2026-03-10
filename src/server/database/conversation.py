@@ -8,7 +8,6 @@ threads, queries, and responses in PostgreSQL.
 import logging
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timezone
-from uuid import UUID
 from contextlib import asynccontextmanager
 import psycopg
 from psycopg import AsyncConnection
@@ -66,7 +65,9 @@ async def _configure_postgres_connection(conn):
     """
     conn.prepare_threshold = 0  # Disable prepared statements
     await conn.set_autocommit(True)  # Set autocommit at creation
-    logger.debug("Configured conversation DB connection with prepare_threshold=0, autocommit=True")
+    logger.debug(
+        "Configured conversation DB connection with prepare_threshold=0, autocommit=True"
+    )
 
 
 def get_or_create_pool() -> AsyncConnectionPool:
@@ -152,17 +153,20 @@ async def get_db_connection():
                     if status == psycopg.pq.TransactionStatus.ACTIVE:
                         # Query in progress - cancel it to prevent pool warnings
                         # ACTIVE means a query is executing but hasn't completed
-                        logger.debug("Connection in ACTIVE state, cancelling pending query")
+                        logger.debug(
+                            "Connection in ACTIVE state, cancelling pending query"
+                        )
                         # Cancel the query on the server side
                         await conn.cancel()
                         # Give the cancellation a moment to process
                         import asyncio
+
                         await asyncio.sleep(0.01)
                         # Now rollback to clean state
                         await conn.rollback()
                     elif status in (
                         psycopg.pq.TransactionStatus.INTRANS,
-                        psycopg.pq.TransactionStatus.INERROR
+                        psycopg.pq.TransactionStatus.INERROR,
                     ):
                         # Transaction in progress or error - rollback
                         logger.debug(f"Connection in {status.name} state, rolling back")
@@ -179,7 +183,7 @@ async def get_db_connection():
                 except Exception as cleanup_error:
                     logger.error(
                         f"Error during connection state cleanup: {cleanup_error}",
-                        exc_info=True
+                        exc_info=True,
                     )
 
 
@@ -189,6 +193,7 @@ async def get_db_connection():
 
 
 # ==================== Thread Operations ====================
+
 
 async def calculate_next_thread_index(workspace_id: str, conn=None) -> int:
     """
@@ -204,23 +209,29 @@ async def calculate_next_thread_index(workspace_id: str, conn=None) -> int:
     try:
         if conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COALESCE(MAX(thread_index), -1) + 1 as next_index
                     FROM conversation_threads
                     WHERE workspace_id = %s
-                """, (workspace_id,))
+                """,
+                    (workspace_id,),
+                )
                 result = await cur.fetchone()
-                return result['next_index']
+                return result["next_index"]
         else:
             async with get_db_connection() as conn:
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT COALESCE(MAX(thread_index), -1) + 1 as next_index
                         FROM conversation_threads
                         WHERE workspace_id = %s
-                    """, (workspace_id,))
+                    """,
+                        (workspace_id,),
+                    )
                     result = await cur.fetchone()
-                    return result['next_index']
+                    return result["next_index"]
 
     except Exception as e:
         logger.error(f"Error calculating thread index: {e}")
@@ -236,7 +247,7 @@ async def create_thread(
     title: Optional[str] = None,
     external_id: Optional[str] = None,
     platform: Optional[str] = None,
-    conn=None
+    conn=None,
 ) -> Dict[str, Any]:
     """
     Create a thread entry (thread_index auto-calculated if not provided).
@@ -254,8 +265,12 @@ async def create_thread(
     """
     # Build SQL dynamically — only include external_id/platform for platform callers
     columns = [
-        "conversation_thread_id", "workspace_id", "current_status",
-        "msg_type", "thread_index", "title",
+        "conversation_thread_id",
+        "workspace_id",
+        "current_status",
+        "msg_type",
+        "thread_index",
+        "title",
     ]
     base_params = [conversation_thread_id, workspace_id, current_status, msg_type]
     # thread_index is appended per-attempt (may be recalculated on retry)
@@ -289,7 +304,9 @@ async def create_thread(
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute(sql, params)
                     result = await cur.fetchone()
-                    logger.info(f"[conversation_db] create_thread thread_id={conversation_thread_id} thread_index={thread_index} workspace_id={workspace_id}")
+                    logger.info(
+                        f"[conversation_db] create_thread thread_id={conversation_thread_id} thread_index={thread_index} workspace_id={workspace_id}"
+                    )
                     return dict(result)
             else:
                 async with get_db_connection() as conn_new:
@@ -300,9 +317,13 @@ async def create_thread(
 
         except psycopg.errors.UniqueViolation:
             if attempt == max_retries - 1:
-                logger.error(f"thread_index conflict after {max_retries} attempts for workspace {workspace_id}")
+                logger.error(
+                    f"thread_index conflict after {max_retries} attempts for workspace {workspace_id}"
+                )
                 raise
-            logger.warning(f"thread_index conflict (attempt {attempt + 1}/{max_retries}), retrying for workspace {workspace_id}")
+            logger.warning(
+                f"thread_index conflict (attempt {attempt + 1}/{max_retries}), retrying for workspace {workspace_id}"
+            )
             continue
 
         except Exception as e:
@@ -320,7 +341,8 @@ async def lookup_thread_by_external_id(
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT ct.conversation_thread_id
                     FROM conversation_threads ct
                     JOIN workspaces w ON ct.workspace_id = w.workspace_id
@@ -329,7 +351,9 @@ async def lookup_thread_by_external_id(
                       AND w.user_id = %s
                     ORDER BY ct.updated_at DESC
                     LIMIT 1
-                """, (platform, external_id, user_id))
+                """,
+                    (platform, external_id, user_id),
+                )
                 result = await cur.fetchone()
                 if result:
                     thread_id = str(result["conversation_thread_id"])
@@ -379,13 +403,17 @@ async def update_thread_status(
         if conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(sql, params)
-                logger.info(f"[conversation_db] update_thread_status thread_id={conversation_thread_id} status={status}")
+                logger.info(
+                    f"[conversation_db] update_thread_status thread_id={conversation_thread_id} status={status}"
+                )
                 return True
         else:
             async with get_db_connection() as conn:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute(sql, params)
-                    logger.info(f"[conversation_db] update_thread_status thread_id={conversation_thread_id} status={status}")
+                    logger.info(
+                        f"[conversation_db] update_thread_status thread_id={conversation_thread_id} status={status}"
+                    )
                     return True
 
     except Exception as e:
@@ -464,19 +492,27 @@ async def ensure_thread_exists(
     async with get_db_connection() as conn:
         # Step 1: Verify workspace exists
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT workspace_id FROM workspaces WHERE workspace_id = %s
-            """, (workspace_id,))
+            """,
+                (workspace_id,),
+            )
             workspace = await cur.fetchone()
 
         if not workspace:
-            raise ValueError(f"Workspace {workspace_id} does not exist. Create it first via POST /workspaces")
+            raise ValueError(
+                f"Workspace {workspace_id} does not exist. Create it first via POST /workspaces"
+            )
 
         # Step 2: Check if thread already exists (for resume scenarios)
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT conversation_thread_id FROM conversation_threads WHERE conversation_thread_id = %s
-            """, (conversation_thread_id,))
+            """,
+                (conversation_thread_id,),
+            )
             thread_exists = await cur.fetchone()
 
         # Step 3: Create thread if it doesn't exist
@@ -492,12 +528,16 @@ async def ensure_thread_exists(
                 title=title,
                 external_id=external_id,
                 platform=platform,
-                conn=conn
+                conn=conn,
             )
         else:
             # Thread exists (resume scenario), update status
-            await update_thread_status(conversation_thread_id, initial_status, conn=conn)
-            logger.info(f"Resumed thread {conversation_thread_id}, updated status to {initial_status}")
+            await update_thread_status(
+                conversation_thread_id, initial_status, conn=conn
+            )
+            logger.info(
+                f"Resumed thread {conversation_thread_id}, updated status to {initial_status}"
+            )
 
 
 async def get_workspace_threads(
@@ -505,7 +545,7 @@ async def get_workspace_threads(
     limit: int = 20,
     offset: int = 0,
     sort_by: str = "updated_at",
-    sort_order: str = "desc"
+    sort_order: str = "desc",
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Get threads for a workspace with pagination."""
     # Validate sort parameters
@@ -520,14 +560,17 @@ async def get_workspace_threads(
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get total count
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COUNT(*) as total
                     FROM conversation_threads
                     WHERE workspace_id = %s
-                """, (workspace_id,))
+                """,
+                    (workspace_id,),
+                )
 
                 total_result = await cur.fetchone()
-                total_count = total_result['total']
+                total_count = total_result["total"]
 
                 # Get threads
                 query = f"""
@@ -614,6 +657,7 @@ async def get_threads_for_user(
 
 # ==================== Query Operations ====================
 
+
 async def get_next_turn_index(conversation_thread_id: str, conn=None) -> int:
     """
     Calculate the next turn_index for a thread (0-based).
@@ -626,24 +670,30 @@ async def get_next_turn_index(conversation_thread_id: str, conn=None) -> int:
         if conn:
             # Reuse provided connection
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COUNT(*) as count
                     FROM conversation_queries
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
                 result = await cur.fetchone()
-                return result['count']
+                return result["count"]
         else:
             # Acquire new connection (backward compatibility)
             async with get_db_connection() as conn:
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT COUNT(*) as count
                         FROM conversation_queries
                         WHERE conversation_thread_id = %s
-                    """, (conversation_thread_id,))
+                    """,
+                        (conversation_thread_id,),
+                    )
                     result = await cur.fetchone()
-                    return result['count']
+                    return result["count"]
 
     except Exception as e:
         logger.error(f"Error calculating turn index: {e}")
@@ -660,7 +710,7 @@ async def create_query(
     metadata: Optional[Dict[str, Any]] = None,
     created_at: Optional[datetime] = None,
     conn=None,
-    idempotent: bool = True
+    idempotent: bool = True,
 ) -> Dict[str, Any]:
     """
     Create a query entry.
@@ -686,7 +736,8 @@ async def create_query(
             async with conn.cursor(row_factory=dict_row) as cur:
                 if idempotent:
                     # Idempotent: ON CONFLICT DO UPDATE for safe retries
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         INSERT INTO conversation_queries (
                             conversation_query_id, conversation_thread_id, turn_index, content, type,
                             feedback_action, metadata, created_at
@@ -700,11 +751,22 @@ async def create_query(
                             created_at = EXCLUDED.created_at
                         RETURNING conversation_query_id, conversation_thread_id, turn_index, content, type,
                                   feedback_action, metadata, created_at
-                    """, (conversation_query_id, conversation_thread_id, turn_index, content, query_type,
-                          feedback_action, Json(metadata or {}), created_at))
+                    """,
+                        (
+                            conversation_query_id,
+                            conversation_thread_id,
+                            turn_index,
+                            content,
+                            query_type,
+                            feedback_action,
+                            Json(metadata or {}),
+                            created_at,
+                        ),
+                    )
                 else:
                     # Non-idempotent: fail on conflict
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         INSERT INTO conversation_queries (
                             conversation_query_id, conversation_thread_id, turn_index, content, type,
                             feedback_action, metadata, created_at
@@ -712,10 +774,22 @@ async def create_query(
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING conversation_query_id, conversation_thread_id, turn_index, content, type,
                                   feedback_action, metadata, created_at
-                    """, (conversation_query_id, conversation_thread_id, turn_index, content, query_type,
-                          feedback_action, Json(metadata or {}), created_at))
+                    """,
+                        (
+                            conversation_query_id,
+                            conversation_thread_id,
+                            turn_index,
+                            content,
+                            query_type,
+                            feedback_action,
+                            Json(metadata or {}),
+                            created_at,
+                        ),
+                    )
                 result = await cur.fetchone()
-                logger.info(f"[conversation_db] create_query query_id={conversation_query_id} thread_id={conversation_thread_id} turn_index={turn_index} type={query_type}")
+                logger.info(
+                    f"[conversation_db] create_query query_id={conversation_query_id} thread_id={conversation_thread_id} turn_index={turn_index} type={query_type}"
+                )
                 return dict(result)
         else:
             # Acquire new connection (backward compatibility)
@@ -723,7 +797,8 @@ async def create_query(
                 async with conn.cursor(row_factory=dict_row) as cur:
                     if idempotent:
                         # Idempotent: ON CONFLICT DO UPDATE for safe retries
-                        await cur.execute("""
+                        await cur.execute(
+                            """
                             INSERT INTO conversation_queries (
                                 conversation_query_id, conversation_thread_id, turn_index, content, type,
                                 feedback_action, metadata, created_at
@@ -737,11 +812,22 @@ async def create_query(
                                 created_at = EXCLUDED.created_at
                             RETURNING conversation_query_id, conversation_thread_id, turn_index, content, type,
                                       feedback_action, metadata, created_at
-                        """, (conversation_query_id, conversation_thread_id, turn_index, content, query_type,
-                              feedback_action, Json(metadata or {}), created_at))
+                        """,
+                            (
+                                conversation_query_id,
+                                conversation_thread_id,
+                                turn_index,
+                                content,
+                                query_type,
+                                feedback_action,
+                                Json(metadata or {}),
+                                created_at,
+                            ),
+                        )
                     else:
                         # Non-idempotent: fail on conflict
-                        await cur.execute("""
+                        await cur.execute(
+                            """
                             INSERT INTO conversation_queries (
                                 conversation_query_id, conversation_thread_id, turn_index, content, type,
                                 feedback_action, metadata, created_at
@@ -749,10 +835,22 @@ async def create_query(
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                             RETURNING conversation_query_id, conversation_thread_id, turn_index, content, type,
                                       feedback_action, metadata, created_at
-                        """, (conversation_query_id, conversation_thread_id, turn_index, content, query_type,
-                              feedback_action, Json(metadata or {}), created_at))
+                        """,
+                            (
+                                conversation_query_id,
+                                conversation_thread_id,
+                                turn_index,
+                                content,
+                                query_type,
+                                feedback_action,
+                                Json(metadata or {}),
+                                created_at,
+                            ),
+                        )
                     result = await cur.fetchone()
-                    logger.info(f"[conversation_db] create_query query_id={conversation_query_id} thread_id={conversation_thread_id} turn_index={turn_index} type={query_type}")
+                    logger.info(
+                        f"[conversation_db] create_query query_id={conversation_query_id} thread_id={conversation_thread_id} turn_index={turn_index} type={query_type}"
+                    )
                     return dict(result)
 
     except Exception as e:
@@ -761,27 +859,29 @@ async def create_query(
 
 
 async def get_queries_for_thread(
-    conversation_thread_id: str,
-    limit: Optional[int] = None,
-    offset: int = 0
+    conversation_thread_id: str, limit: Optional[int] = None, offset: int = 0
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Get queries for a thread."""
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get total count
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COUNT(*) as total
                     FROM conversation_queries
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 total_result = await cur.fetchone()
-                total_count = total_result['total']
+                total_count = total_result["total"]
 
                 # Get queries
                 if limit:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT
                             conversation_query_id, conversation_thread_id, turn_index, content, type,
                             feedback_action, metadata, created_at
@@ -789,16 +889,21 @@ async def get_queries_for_thread(
                         WHERE conversation_thread_id = %s
                         ORDER BY turn_index ASC
                         LIMIT %s OFFSET %s
-                    """, (conversation_thread_id, limit, offset))
+                    """,
+                        (conversation_thread_id, limit, offset),
+                    )
                 else:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT
                             conversation_query_id, conversation_thread_id, turn_index, content, type,
                             feedback_action, metadata, created_at
                         FROM conversation_queries
                         WHERE conversation_thread_id = %s
                         ORDER BY turn_index ASC
-                    """, (conversation_thread_id,))
+                    """,
+                        (conversation_thread_id,),
+                    )
 
                 queries = await cur.fetchall()
                 return [dict(row) for row in queries], total_count
@@ -809,6 +914,7 @@ async def get_queries_for_thread(
 
 
 # ==================== Response Operations ====================
+
 
 async def create_response(
     conversation_response_id: str,
@@ -823,7 +929,7 @@ async def create_response(
     created_at: Optional[datetime] = None,
     sse_events: Optional[Any] = None,
     conn=None,
-    idempotent: bool = True
+    idempotent: bool = True,
 ) -> Dict[str, Any]:
     """
     Create a response entry.
@@ -852,7 +958,8 @@ async def create_response(
             async with conn.cursor(row_factory=dict_row) as cur:
                 if idempotent:
                     # Idempotent: ON CONFLICT DO UPDATE for safe retries
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         INSERT INTO conversation_responses (
                             conversation_response_id, conversation_thread_id, turn_index, status,
                             interrupt_reason, metadata,
@@ -873,19 +980,25 @@ async def create_response(
                                   interrupt_reason, metadata,
                                   warnings, errors, execution_time, created_at,
                                   sse_events
-                    """, (
-                        conversation_response_id, conversation_thread_id, turn_index,
-                        status, interrupt_reason,
-                        Json(metadata or {}),
-                        warnings or [],
-                        errors or [],
-                        execution_time,
-                        created_at,
-                        Json(sse_events) if sse_events else None
-                    ))
+                    """,
+                        (
+                            conversation_response_id,
+                            conversation_thread_id,
+                            turn_index,
+                            status,
+                            interrupt_reason,
+                            Json(metadata or {}),
+                            warnings or [],
+                            errors or [],
+                            execution_time,
+                            created_at,
+                            Json(sse_events) if sse_events else None,
+                        ),
+                    )
                 else:
                     # Non-idempotent: fail on conflict
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         INSERT INTO conversation_responses (
                             conversation_response_id, conversation_thread_id, turn_index, status,
                             interrupt_reason, metadata,
@@ -897,18 +1010,25 @@ async def create_response(
                                   interrupt_reason, metadata,
                                   warnings, errors, execution_time, created_at,
                                   sse_events
-                    """, (
-                        conversation_response_id, conversation_thread_id, turn_index,
-                        status, interrupt_reason,
-                        Json(metadata or {}),
-                        warnings or [],
-                        errors or [],
-                        execution_time,
-                        created_at,
-                        Json(sse_events) if sse_events else None
-                    ))
+                    """,
+                        (
+                            conversation_response_id,
+                            conversation_thread_id,
+                            turn_index,
+                            status,
+                            interrupt_reason,
+                            Json(metadata or {}),
+                            warnings or [],
+                            errors or [],
+                            execution_time,
+                            created_at,
+                            Json(sse_events) if sse_events else None,
+                        ),
+                    )
                 result = await cur.fetchone()
-                logger.info(f"[conversation_db] create_response response_id={conversation_response_id} thread_id={conversation_thread_id} turn_index={turn_index} status={status}")
+                logger.info(
+                    f"[conversation_db] create_response response_id={conversation_response_id} thread_id={conversation_thread_id} turn_index={turn_index} status={status}"
+                )
                 return dict(result)
         else:
             # Acquire new connection (backward compatibility)
@@ -916,7 +1036,8 @@ async def create_response(
                 async with conn.cursor(row_factory=dict_row) as cur:
                     if idempotent:
                         # Idempotent: ON CONFLICT DO UPDATE for safe retries
-                        await cur.execute("""
+                        await cur.execute(
+                            """
                             INSERT INTO conversation_responses (
                                 conversation_response_id, conversation_thread_id, turn_index, status,
                                 interrupt_reason, metadata,
@@ -937,19 +1058,25 @@ async def create_response(
                                       interrupt_reason, metadata,
                                       warnings, errors, execution_time, created_at,
                                       sse_events
-                        """, (
-                            conversation_response_id, conversation_thread_id, turn_index,
-                            status, interrupt_reason,
-                            Json(metadata or {}),
-                            warnings or [],
-                            errors or [],
-                            execution_time,
-                            created_at,
-                            Json(sse_events) if sse_events else None
-                        ))
+                        """,
+                            (
+                                conversation_response_id,
+                                conversation_thread_id,
+                                turn_index,
+                                status,
+                                interrupt_reason,
+                                Json(metadata or {}),
+                                warnings or [],
+                                errors or [],
+                                execution_time,
+                                created_at,
+                                Json(sse_events) if sse_events else None,
+                            ),
+                        )
                     else:
                         # Non-idempotent: fail on conflict
-                        await cur.execute("""
+                        await cur.execute(
+                            """
                             INSERT INTO conversation_responses (
                                 conversation_response_id, conversation_thread_id, turn_index, status,
                                 interrupt_reason, metadata,
@@ -961,18 +1088,25 @@ async def create_response(
                                       interrupt_reason, metadata,
                                       warnings, errors, execution_time, created_at,
                                       sse_events
-                        """, (
-                            conversation_response_id, conversation_thread_id, turn_index,
-                            status, interrupt_reason,
-                            Json(metadata or {}),
-                            warnings or [],
-                            errors or [],
-                            execution_time,
-                            created_at,
-                            Json(sse_events) if sse_events else None
-                        ))
+                        """,
+                            (
+                                conversation_response_id,
+                                conversation_thread_id,
+                                turn_index,
+                                status,
+                                interrupt_reason,
+                                Json(metadata or {}),
+                                warnings or [],
+                                errors or [],
+                                execution_time,
+                                created_at,
+                                Json(sse_events) if sse_events else None,
+                            ),
+                        )
                     result = await cur.fetchone()
-                    logger.info(f"[conversation_db] create_response response_id={conversation_response_id} thread_id={conversation_thread_id} turn_index={turn_index} status={status}")
+                    logger.info(
+                        f"[conversation_db] create_response response_id={conversation_response_id} thread_id={conversation_thread_id} turn_index={turn_index} status={status}"
+                    )
                     return dict(result)
 
     except Exception as e:
@@ -1041,27 +1175,29 @@ async def update_sse_events(
 
 
 async def get_responses_for_thread(
-    conversation_thread_id: str,
-    limit: Optional[int] = None,
-    offset: int = 0
+    conversation_thread_id: str, limit: Optional[int] = None, offset: int = 0
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Get responses for a thread."""
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get total count
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COUNT(*) as total
                     FROM conversation_responses
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 total_result = await cur.fetchone()
-                total_count = total_result['total']
+                total_count = total_result["total"]
 
                 # Get responses
                 if limit:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT
                             conversation_response_id, conversation_thread_id, turn_index, status,
                             interrupt_reason, metadata,
@@ -1071,9 +1207,12 @@ async def get_responses_for_thread(
                         WHERE conversation_thread_id = %s
                         ORDER BY turn_index ASC
                         LIMIT %s OFFSET %s
-                    """, (conversation_thread_id, limit, offset))
+                    """,
+                        (conversation_thread_id, limit, offset),
+                    )
                 else:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT
                             conversation_response_id, conversation_thread_id, turn_index, status,
                             interrupt_reason, metadata,
@@ -1082,7 +1221,9 @@ async def get_responses_for_thread(
                         FROM conversation_responses
                         WHERE conversation_thread_id = %s
                         ORDER BY turn_index ASC
-                    """, (conversation_thread_id,))
+                    """,
+                        (conversation_thread_id,),
+                    )
 
                 responses = await cur.fetchall()
                 return [dict(row) for row in responses], total_count
@@ -1094,28 +1235,31 @@ async def get_responses_for_thread(
 
 # ==================== Query-Response Pair Operations ====================
 
+
 async def get_query_response_pairs(
-    conversation_thread_id: str,
-    limit: Optional[int] = None,
-    offset: int = 0
+    conversation_thread_id: str, limit: Optional[int] = None, offset: int = 0
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Get query-response pairs for a thread (joined data)."""
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get total count
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COUNT(*) as total
                     FROM conversation_queries
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 total_result = await cur.fetchone()
-                total_count = total_result['total']
+                total_count = total_result["total"]
 
                 # Get joined query-response pairs
                 if limit:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT
                             q.conversation_query_id, q.conversation_thread_id, q.turn_index, q.content as query_content,
                             q.type as query_type, q.feedback_action, q.metadata as query_metadata,
@@ -1130,9 +1274,12 @@ async def get_query_response_pairs(
                         WHERE q.conversation_thread_id = %s
                         ORDER BY q.turn_index ASC
                         LIMIT %s OFFSET %s
-                    """, (conversation_thread_id, limit, offset))
+                    """,
+                        (conversation_thread_id, limit, offset),
+                    )
                 else:
-                    await cur.execute("""
+                    await cur.execute(
+                        """
                         SELECT
                             q.conversation_query_id, q.conversation_thread_id, q.turn_index, q.content as query_content,
                             q.type as query_type, q.feedback_action, q.metadata as query_metadata,
@@ -1146,7 +1293,9 @@ async def get_query_response_pairs(
                         LEFT JOIN conversation_responses r ON q.conversation_thread_id = r.conversation_thread_id AND q.turn_index = r.turn_index
                         WHERE q.conversation_thread_id = %s
                         ORDER BY q.turn_index ASC
-                    """, (conversation_thread_id,))
+                    """,
+                        (conversation_thread_id,),
+                    )
 
                 pairs = await cur.fetchall()
                 return [dict(row) for row in pairs], total_count
@@ -1158,17 +1307,23 @@ async def get_query_response_pairs(
 
 # ==================== Extended Operations for API v2 ====================
 
-async def get_thread_with_summary(conversation_thread_id: str) -> Optional[Dict[str, Any]]:
+
+async def get_thread_with_summary(
+    conversation_thread_id: str,
+) -> Optional[Dict[str, Any]]:
     """Get thread with enriched summary data (pair count, costs, etc.)."""
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get thread basic info
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT conversation_thread_id, workspace_id, current_status, thread_index, created_at, updated_at
                     FROM conversation_threads
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 thread = await cur.fetchone()
                 if not thread:
@@ -1177,7 +1332,8 @@ async def get_thread_with_summary(conversation_thread_id: str) -> Optional[Dict[
                 thread = dict(thread)
 
                 # Get aggregated pair data
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         COUNT(q.turn_index) as pair_count,
                         COALESCE(SUM((u.token_usage->>'total_cost')::float), 0) as total_cost,
@@ -1188,7 +1344,9 @@ async def get_thread_with_summary(conversation_thread_id: str) -> Optional[Dict[
                     LEFT JOIN conversation_responses r ON q.conversation_thread_id = r.conversation_thread_id AND q.turn_index = r.turn_index
                     LEFT JOIN conversation_usages u ON r.conversation_response_id = u.conversation_response_id
                     WHERE q.conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 stats = await cur.fetchone()
                 if stats:
@@ -1221,24 +1379,31 @@ async def truncate_thread_from_turn(
     Returns:
         Total number of deleted rows (queries + responses).
     """
+
     async def _execute(conn):
         # Explicit transaction required (autocommit is ON by default)
         async with conn.transaction():
             async with conn.cursor() as cur:
                 # Always delete all responses at fork turn and beyond
-                await cur.execute("""
+                await cur.execute(
+                    """
                     DELETE FROM conversation_responses
                     WHERE conversation_thread_id = %s AND turn_index >= %s
-                """, (conversation_thread_id, from_turn_index))
+                """,
+                    (conversation_thread_id, from_turn_index),
+                )
                 deleted_responses = cur.rowcount
 
                 # For regenerate: keep query at fork turn, delete only later turns
                 # For edit: delete query at fork turn and beyond
                 query_op = ">" if preserve_query_at_fork else ">="
-                await cur.execute(f"""
+                await cur.execute(
+                    f"""
                     DELETE FROM conversation_queries
                     WHERE conversation_thread_id = %s AND turn_index {query_op} %s
-                """, (conversation_thread_id, from_turn_index))
+                """,
+                    (conversation_thread_id, from_turn_index),
+                )
                 deleted_queries = cur.rowcount
 
                 return deleted_queries + deleted_responses
@@ -1261,10 +1426,13 @@ async def delete_thread(conversation_thread_id: str) -> bool:
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     DELETE FROM conversation_threads
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 logger.info(f"Deleted thread: {conversation_thread_id}")
                 return True
@@ -1274,7 +1442,9 @@ async def delete_thread(conversation_thread_id: str) -> bool:
         raise
 
 
-async def update_thread_title(conversation_thread_id: str, title: Optional[str]) -> Optional[Dict[str, Any]]:
+async def update_thread_title(
+    conversation_thread_id: str, title: Optional[str]
+) -> Optional[Dict[str, Any]]:
     """
     Update thread title.
 
@@ -1288,16 +1458,21 @@ async def update_thread_title(conversation_thread_id: str, title: Optional[str])
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     UPDATE conversation_threads
                     SET title = %s, updated_at = NOW()
                     WHERE conversation_thread_id = %s
                     RETURNING conversation_thread_id, workspace_id, current_status, msg_type, thread_index, title, created_at, updated_at
-                """, (title, conversation_thread_id))
+                """,
+                    (title, conversation_thread_id),
+                )
 
                 result = await cur.fetchone()
                 if result:
-                    logger.info(f"[conversation_db] update_thread_title thread_id={conversation_thread_id} title={title}")
+                    logger.info(
+                        f"[conversation_db] update_thread_title thread_id={conversation_thread_id} title={title}"
+                    )
                     return dict(result)
                 return None
 
@@ -1319,20 +1494,44 @@ async def get_thread_by_id(conversation_thread_id: str) -> Optional[Dict[str, An
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT conversation_thread_id, workspace_id, current_status,
                            msg_type, thread_index, title,
                            share_token, is_shared, share_permissions, shared_at,
                            created_at, updated_at
                     FROM conversation_threads
                     WHERE conversation_thread_id = %s
-                """, (conversation_thread_id,))
+                """,
+                    (conversation_thread_id,),
+                )
 
                 result = await cur.fetchone()
                 return dict(result) if result else None
 
     except Exception as e:
         logger.error(f"Error getting thread by id: {e}")
+        raise
+
+
+async def get_thread_owner_id(thread_id: str) -> Optional[str]:
+    """Return the user_id that owns the thread's workspace, or None if not found."""
+    try:
+        async with get_db_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT w.user_id
+                    FROM conversation_threads t
+                    JOIN workspaces w ON w.workspace_id = t.workspace_id
+                    WHERE t.conversation_thread_id = %s
+                    """,
+                    (thread_id,),
+                )
+                result = await cur.fetchone()
+                return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Error getting thread owner: {e}")
         raise
 
 
@@ -1345,7 +1544,8 @@ async def get_thread_by_share_token(share_token: str) -> Optional[Dict[str, Any]
     try:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         t.conversation_thread_id,
                         t.workspace_id,
@@ -1362,7 +1562,9 @@ async def get_thread_by_share_token(share_token: str) -> Optional[Dict[str, Any]
                     FROM conversation_threads t
                     JOIN workspaces w ON w.workspace_id = t.workspace_id
                     WHERE t.share_token = %s AND t.is_shared = TRUE
-                """, (share_token,))
+                """,
+                    (share_token,),
+                )
 
                 result = await cur.fetchone()
                 return dict(result) if result else None
@@ -1412,7 +1614,7 @@ async def update_thread_sharing(
                 await cur.execute(
                     f"""
                     UPDATE conversation_threads
-                    SET {', '.join(sets)}
+                    SET {", ".join(sets)}
                     WHERE conversation_thread_id = %s
                     RETURNING conversation_thread_id, workspace_id, share_token,
                               is_shared, share_permissions, shared_at,
@@ -1435,15 +1637,19 @@ async def get_user_stats(user_id: str) -> Dict[str, Any]:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get workspace count
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT COUNT(*) as total_workspaces
                     FROM workspaces
                     WHERE user_id = %s
-                """, (user_id,))
-                ws_count = (await cur.fetchone())['total_workspaces']
+                """,
+                    (user_id,),
+                )
+                ws_count = (await cur.fetchone())["total_workspaces"]
 
                 # Get thread statistics via workspaces
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         COUNT(DISTINCT t.conversation_thread_id) as total_threads,
                         COUNT(DISTINCT q.conversation_query_id) as total_queries,
@@ -1458,11 +1664,14 @@ async def get_user_stats(user_id: str) -> Dict[str, Any]:
                     LEFT JOIN conversation_responses r ON t.conversation_thread_id = r.conversation_thread_id
                     LEFT JOIN conversation_usages u ON r.conversation_response_id = u.conversation_response_id
                     WHERE w.user_id = %s
-                """, (user_id,))
+                """,
+                    (user_id,),
+                )
                 stats = await cur.fetchone()
 
                 # Get status breakdown
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         t.current_status,
                         COUNT(*) as count
@@ -1470,23 +1679,25 @@ async def get_user_stats(user_id: str) -> Dict[str, Any]:
                     JOIN conversation_threads t ON w.workspace_id = t.workspace_id
                     WHERE w.user_id = %s
                     GROUP BY t.current_status
-                """, (user_id,))
+                """,
+                    (user_id,),
+                )
                 status_rows = await cur.fetchall()
-                by_status = {row['current_status']: row['count'] for row in status_rows}
+                by_status = {row["current_status"]: row["count"] for row in status_rows}
 
                 return {
-                    'user_id': user_id,
-                    'total_workspaces': ws_count,
-                    'total_threads': stats['total_threads'] or 0,
-                    'total_queries': stats['total_queries'] or 0,
-                    'total_responses': stats['total_responses'] or 0,
-                    'total_cost': float(stats['total_cost'] or 0),
-                    'total_execution_time': float(stats['total_execution_time'] or 0),
-                    'date_range': {
-                        'first_activity': stats['first_activity'],
-                        'last_activity': stats['last_activity']
+                    "user_id": user_id,
+                    "total_workspaces": ws_count,
+                    "total_threads": stats["total_threads"] or 0,
+                    "total_queries": stats["total_queries"] or 0,
+                    "total_responses": stats["total_responses"] or 0,
+                    "total_cost": float(stats["total_cost"] or 0),
+                    "total_execution_time": float(stats["total_execution_time"] or 0),
+                    "date_range": {
+                        "first_activity": stats["first_activity"],
+                        "last_activity": stats["last_activity"],
                     },
-                    'by_status': by_status
+                    "by_status": by_status,
                 }
 
     except Exception as e:
@@ -1500,7 +1711,8 @@ async def get_workspace_stats(workspace_id: str) -> Dict[str, Any]:
         async with get_db_connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 # Get thread and pair statistics
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         COUNT(DISTINCT t.conversation_thread_id) as total_threads,
                         COUNT(DISTINCT q.conversation_query_id) as total_pairs,
@@ -1511,59 +1723,71 @@ async def get_workspace_stats(workspace_id: str) -> Dict[str, Any]:
                     LEFT JOIN conversation_responses r ON t.conversation_thread_id = r.conversation_thread_id
                     LEFT JOIN conversation_usages u ON r.conversation_response_id = u.conversation_response_id
                     WHERE t.workspace_id = %s
-                """, (workspace_id,))
+                """,
+                    (workspace_id,),
+                )
                 stats = await cur.fetchone()
 
                 # Get status breakdown
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         current_status,
                         COUNT(*) as count
                     FROM conversation_threads
                     WHERE workspace_id = %s
                     GROUP BY current_status
-                """, (workspace_id,))
+                """,
+                    (workspace_id,),
+                )
                 status_rows = await cur.fetchall()
-                by_status = {row['current_status']: row['count'] for row in status_rows}
+                by_status = {row["current_status"]: row["count"] for row in status_rows}
 
                 # Get cost breakdown by model
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT
                         u.token_usage
                     FROM conversation_threads t
                     JOIN conversation_responses r ON t.conversation_thread_id = r.conversation_thread_id
                     JOIN conversation_usages u ON r.conversation_response_id = u.conversation_response_id
                     WHERE t.workspace_id = %s AND u.token_usage IS NOT NULL
-                """, (workspace_id,))
+                """,
+                    (workspace_id,),
+                )
 
                 responses = await cur.fetchall()
                 cost_by_model = {}
                 for row in responses:
-                    token_usage = row['token_usage']
-                    if token_usage and 'by_model' in token_usage:
-                        for model, usage in token_usage['by_model'].items():
+                    token_usage = row["token_usage"]
+                    if token_usage and "by_model" in token_usage:
+                        for model, usage in token_usage["by_model"].items():
                             if model not in cost_by_model:
                                 cost_by_model[model] = {
-                                    'input_tokens': 0,
-                                    'output_tokens': 0,
-                                    'total_tokens': 0,
-                                    'cost': 0.0
+                                    "input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "total_tokens": 0,
+                                    "cost": 0.0,
                                 }
-                            cost_by_model[model]['input_tokens'] += usage.get('input_tokens', 0)
-                            cost_by_model[model]['output_tokens'] += usage.get('output_tokens', 0)
-                            cost_by_model[model]['total_tokens'] += usage.get('total_tokens', 0)
-                            cost_by_model[model]['cost'] += usage.get('cost', 0.0)
+                            cost_by_model[model]["input_tokens"] += usage.get(
+                                "input_tokens", 0
+                            )
+                            cost_by_model[model]["output_tokens"] += usage.get(
+                                "output_tokens", 0
+                            )
+                            cost_by_model[model]["total_tokens"] += usage.get(
+                                "total_tokens", 0
+                            )
+                            cost_by_model[model]["cost"] += usage.get("cost", 0.0)
 
                 return {
-                    'workspace_id': workspace_id,
-                    'total_threads': stats['total_threads'] or 0,
-                    'total_pairs': stats['total_pairs'] or 0,
-                    'total_cost': float(stats['total_cost'] or 0),
-                    'total_execution_time': float(stats['total_execution_time'] or 0),
-                    'by_status': by_status,
-                    'cost_breakdown': {
-                        'by_model': cost_by_model
-                    }
+                    "workspace_id": workspace_id,
+                    "total_threads": stats["total_threads"] or 0,
+                    "total_pairs": stats["total_pairs"] or 0,
+                    "total_cost": float(stats["total_cost"] or 0),
+                    "total_execution_time": float(stats["total_execution_time"] or 0),
+                    "by_status": by_status,
+                    "cost_breakdown": {"by_model": cost_by_model},
                 }
 
     except Exception as e:
@@ -1571,13 +1795,11 @@ async def get_workspace_stats(workspace_id: str) -> Dict[str, Any]:
         raise
 
 
-
-
 # ========== Usage Tracking Functions ==========
 
+
 async def create_usage_record(
-    usage_data: Dict[str, Any],
-    conn: Optional[AsyncConnection] = None
+    usage_data: Dict[str, Any], conn: Optional[AsyncConnection] = None
 ) -> bool:
     """
     Create a usage record in conversation_usages table.
@@ -1607,8 +1829,10 @@ async def create_usage_record(
     Raises:
         psycopg.Error: On database errors
     """
+
     async def _create(cur):
-        await cur.execute("""
+        await cur.execute(
+            """
             INSERT INTO conversation_usages (
                 conversation_usage_id,
                 conversation_response_id,
@@ -1640,22 +1864,24 @@ async def create_usage_record(
                 %(is_byok)s,
                 %(created_at)s
             )
-        """, {
-            "conversation_usage_id": usage_data["conversation_usage_id"],
-            "conversation_response_id": usage_data["conversation_response_id"],
-            "user_id": usage_data["user_id"],
-            "conversation_thread_id": usage_data["conversation_thread_id"],
-            "workspace_id": usage_data["workspace_id"],
-            "msg_type": usage_data.get("msg_type", "ptc"),
-            "status": usage_data.get("status", "completed"),
-            "token_usage": Json(usage_data.get("token_usage")),
-            "infrastructure_usage": Json(usage_data.get("infrastructure_usage")),
-            "token_credits": usage_data["token_credits"],
-            "infrastructure_credits": usage_data["infrastructure_credits"],
-            "total_credits": usage_data["total_credits"],
-            "is_byok": usage_data.get("is_byok", False),
-            "created_at": usage_data["created_at"]
-        })
+        """,
+            {
+                "conversation_usage_id": usage_data["conversation_usage_id"],
+                "conversation_response_id": usage_data["conversation_response_id"],
+                "user_id": usage_data["user_id"],
+                "conversation_thread_id": usage_data["conversation_thread_id"],
+                "workspace_id": usage_data["workspace_id"],
+                "msg_type": usage_data.get("msg_type", "ptc"),
+                "status": usage_data.get("status", "completed"),
+                "token_usage": Json(usage_data.get("token_usage")),
+                "infrastructure_usage": Json(usage_data.get("infrastructure_usage")),
+                "token_credits": usage_data["token_credits"],
+                "infrastructure_credits": usage_data["infrastructure_credits"],
+                "total_credits": usage_data["total_credits"],
+                "is_byok": usage_data.get("is_byok", False),
+                "created_at": usage_data["created_at"],
+            },
+        )
 
     if conn:
         async with conn.cursor() as cur:
@@ -1687,6 +1913,7 @@ async def update_usage_record(
     Returns:
         True if a row was updated, False if not found
     """
+
     async def _update(cur):
         await cur.execute(
             """
@@ -1724,9 +1951,7 @@ async def update_usage_record(
 
 
 async def get_user_total_credits(
-    user_id: str,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
+    user_id: str, start_date: Optional[str] = None, end_date: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Get total credits spent by a user (fast, no JOINs needed).
@@ -1761,7 +1986,8 @@ async def get_user_total_credits(
 
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(f"""
+            await cur.execute(
+                f"""
                 SELECT
                     %(user_id)s as user_id,
                     COALESCE(SUM(total_credits), 0) as total_credits,
@@ -1771,25 +1997,31 @@ async def get_user_total_credits(
                 FROM conversation_usages
                 WHERE user_id = %(user_id)s
                 {date_filter}
-            """, params)
+            """,
+                params,
+            )
 
             row = await cur.fetchone()
 
             return {
                 "user_id": user_id,
-                "total_credits": float(row["total_credits"]) if row["total_credits"] else 0.0,
-                "token_credits": float(row["token_credits"]) if row["token_credits"] else 0.0,
-                "infrastructure_credits": float(row["infrastructure_credits"]) if row["infrastructure_credits"] else 0.0,
+                "total_credits": float(row["total_credits"])
+                if row["total_credits"]
+                else 0.0,
+                "token_credits": float(row["token_credits"])
+                if row["token_credits"]
+                else 0.0,
+                "infrastructure_credits": float(row["infrastructure_credits"])
+                if row["infrastructure_credits"]
+                else 0.0,
                 "workflow_count": row["workflow_count"],
                 "start_date": start_date,
-                "end_date": end_date
+                "end_date": end_date,
             }
 
 
 async def get_user_credit_history(
-    user_id: str,
-    days: int = 30,
-    limit: int = 100
+    user_id: str, days: int = 30, limit: int = 100
 ) -> List[Dict[str, Any]]:
     """
     Get time-series credit history for a user.
@@ -1804,7 +2036,8 @@ async def get_user_credit_history(
     """
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT
                     conversation_usage_id,
                     conversation_response_id,
@@ -1821,7 +2054,9 @@ async def get_user_credit_history(
                   AND created_at >= NOW() - INTERVAL '%s days'
                 ORDER BY created_at DESC
                 LIMIT %s
-            """, (user_id, days, limit))
+            """,
+                (user_id, days, limit),
+            )
 
             rows = await cur.fetchall()
             return [dict(row) for row in rows]
@@ -1839,7 +2074,8 @@ async def get_response_usage(conversation_response_id: str) -> Optional[Dict[str
     """
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT
                     conversation_usage_id,
                     conversation_response_id,
@@ -1856,7 +2092,9 @@ async def get_response_usage(conversation_response_id: str) -> Optional[Dict[str
                     created_at
                 FROM conversation_usages
                 WHERE conversation_response_id = %s
-            """, (conversation_response_id,))
+            """,
+                (conversation_response_id,),
+            )
 
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -1881,7 +2119,8 @@ async def get_thread_credits(conversation_thread_id: str) -> Dict[str, Any]:
     """
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT
                     %(conversation_thread_id)s as conversation_thread_id,
                     COALESCE(SUM(total_credits), 0) as total_credits,
@@ -1890,16 +2129,24 @@ async def get_thread_credits(conversation_thread_id: str) -> Dict[str, Any]:
                     COUNT(*) as pair_count
                 FROM conversation_usages
                 WHERE conversation_thread_id = %(conversation_thread_id)s
-            """, {"conversation_thread_id": conversation_thread_id})
+            """,
+                {"conversation_thread_id": conversation_thread_id},
+            )
 
             row = await cur.fetchone()
 
             return {
                 "conversation_thread_id": conversation_thread_id,
-                "total_credits": float(row["total_credits"]) if row["total_credits"] else 0.0,
-                "token_credits": float(row["token_credits"]) if row["token_credits"] else 0.0,
-                "infrastructure_credits": float(row["infrastructure_credits"]) if row["infrastructure_credits"] else 0.0,
-                "pair_count": row["pair_count"]
+                "total_credits": float(row["total_credits"])
+                if row["total_credits"]
+                else 0.0,
+                "token_credits": float(row["token_credits"])
+                if row["token_credits"]
+                else 0.0,
+                "infrastructure_credits": float(row["infrastructure_credits"])
+                if row["infrastructure_credits"]
+                else 0.0,
+                "pair_count": row["pair_count"],
             }
 
 
@@ -1923,7 +2170,8 @@ async def get_workspace_credits(workspace_id: str) -> Dict[str, Any]:
     """
     async with get_db_connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT
                     %(workspace_id)s as workspace_id,
                     COALESCE(SUM(total_credits), 0) as total_credits,
@@ -1933,23 +2181,32 @@ async def get_workspace_credits(workspace_id: str) -> Dict[str, Any]:
                     COUNT(*) as pair_count
                 FROM conversation_usages
                 WHERE workspace_id = %(workspace_id)s
-            """, {"workspace_id": workspace_id})
+            """,
+                {"workspace_id": workspace_id},
+            )
 
             row = await cur.fetchone()
 
             return {
                 "workspace_id": workspace_id,
-                "total_credits": float(row["total_credits"]) if row["total_credits"] else 0.0,
-                "token_credits": float(row["token_credits"]) if row["token_credits"] else 0.0,
-                "infrastructure_credits": float(row["infrastructure_credits"]) if row["infrastructure_credits"] else 0.0,
+                "total_credits": float(row["total_credits"])
+                if row["total_credits"]
+                else 0.0,
+                "token_credits": float(row["token_credits"])
+                if row["token_credits"]
+                else 0.0,
+                "infrastructure_credits": float(row["infrastructure_credits"])
+                if row["infrastructure_credits"]
+                else 0.0,
                 "thread_count": row["thread_count"],
-                "pair_count": row["pair_count"]
+                "pair_count": row["pair_count"],
             }
 
 
 # ============================================================
 # Feedback
 # ============================================================
+
 
 async def upsert_feedback(
     conversation_thread_id: str,
@@ -1966,22 +2223,29 @@ async def upsert_feedback(
     Resolves conversation_response_id from (thread_id, turn_index).
     Uses ON CONFLICT to update if feedback already exists for this response+user.
     """
+
     async def _execute(conn):
         async with conn.cursor(row_factory=dict_row) as cur:
             # Resolve response_id
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT conversation_response_id
                 FROM conversation_responses
                 WHERE conversation_thread_id = %s AND turn_index = %s
-            """, (conversation_thread_id, turn_index))
+            """,
+                (conversation_thread_id, turn_index),
+            )
             row = await cur.fetchone()
             if not row:
                 return None
 
             response_id = str(row["conversation_response_id"])
-            review_status = "pending" if consent_human_review and rating == "thumbs_down" else None
+            review_status = (
+                "pending" if consent_human_review and rating == "thumbs_down" else None
+            )
 
-            await cur.execute("""
+            await cur.execute(
+                """
                 INSERT INTO conversation_feedback (
                     conversation_response_id, user_id, rating,
                     issue_categories, comment,
@@ -1994,11 +2258,17 @@ async def upsert_feedback(
                     consent_human_review = EXCLUDED.consent_human_review,
                     review_status = EXCLUDED.review_status
                 RETURNING *
-            """, (
-                response_id, user_id, rating,
-                issue_categories, comment,
-                consent_human_review, review_status,
-            ))
+            """,
+                (
+                    response_id,
+                    user_id,
+                    rating,
+                    issue_categories,
+                    comment,
+                    consent_human_review,
+                    review_status,
+                ),
+            )
             result = await cur.fetchone()
             return {
                 **result,
@@ -2025,16 +2295,20 @@ async def get_feedback_for_thread(
 
     JOINs to conversation_responses to derive turn_index.
     """
+
     async def _execute(conn):
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT f.*, r.turn_index
                 FROM conversation_feedback f
                 JOIN conversation_responses r
                     ON f.conversation_response_id = r.conversation_response_id
                 WHERE r.conversation_thread_id = %s AND f.user_id = %s
                 ORDER BY r.turn_index
-            """, (conversation_thread_id, user_id))
+            """,
+                (conversation_thread_id, user_id),
+            )
             return await cur.fetchall()
 
     try:
@@ -2058,16 +2332,20 @@ async def delete_feedback(
 
     Resolves conversation_response_id from (thread_id, turn_index).
     """
+
     async def _execute(conn):
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("""
+            await cur.execute(
+                """
                 DELETE FROM conversation_feedback f
                 USING conversation_responses r
                 WHERE f.conversation_response_id = r.conversation_response_id
                     AND r.conversation_thread_id = %s
                     AND r.turn_index = %s
                     AND f.user_id = %s
-            """, (conversation_thread_id, turn_index, user_id))
+            """,
+                (conversation_thread_id, turn_index, user_id),
+            )
             return cur.rowcount > 0
 
     try:

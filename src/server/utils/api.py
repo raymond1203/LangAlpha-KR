@@ -85,6 +85,7 @@ def handle_api_exceptions(
         async def create_user(...):
             ...
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> T:
@@ -102,10 +103,31 @@ def handle_api_exceptions(
                     status_code=500,
                     detail=f"Failed to {action}",
                 )
+
         # Preserve function signature for FastAPI dependency injection
         wrapper.__signature__ = inspect.signature(func)
         return wrapper
+
     return decorator
+
+
+async def require_thread_owner(thread_id: str, user_id: str) -> None:
+    """Verify the user owns the thread (via workspace). Raises 404 or 403."""
+    from src.server.database.conversation import get_thread_owner_id
+
+    owner_id = await get_thread_owner_id(thread_id)
+    if owner_id is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if owner_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_workspace_owner(workspace: dict | None, *, user_id: str) -> None:
+    """Verify workspace exists and belongs to user. Raises 404 or 403."""
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if workspace.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def raise_not_found(resource: str, resource_id: Optional[str] = None) -> None:

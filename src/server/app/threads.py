@@ -19,7 +19,11 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from src.server.utils.api import CurrentUserId
+from src.server.utils.api import (
+    CurrentUserId,
+    require_thread_owner,
+    require_workspace_owner,
+)
 from src.server.models.chat import ChatRequest, SubagentMessageRequest
 from src.server.models.conversation import (
     WorkspaceThreadListItem,
@@ -77,7 +81,9 @@ async def list_threads(
     workspace_id: Optional[str] = Query(None, description="Filter by workspace ID"),
     limit: int = Query(20, ge=1, le=100, description="Max threads per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    sort_by: str = Query("updated_at", description="Sort field (created_at, updated_at)"),
+    sort_by: str = Query(
+        "updated_at", description="Sort field (created_at, updated_at)"
+    ),
     sort_order: str = Query("desc", description="Sort order (asc or desc)"),
 ):
     """
@@ -88,6 +94,10 @@ async def list_threads(
     """
     try:
         if workspace_id:
+            from src.server.database.workspace import get_workspace as db_get_workspace
+
+            workspace = await db_get_workspace(workspace_id)
+            require_workspace_owner(workspace, user_id=x_user_id)
             threads, total = await get_workspace_threads(
                 workspace_id=workspace_id,
                 limit=limit,
@@ -127,6 +137,8 @@ async def list_threads(
             offset=offset,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Error listing threads: {e}")
         raise HTTPException(
@@ -135,18 +147,34 @@ async def list_threads(
         )
 
 
+@router.get("/{thread_id}")
+async def get_thread(thread_id: str, x_user_id: CurrentUserId):
+    """Get thread metadata. Used by frontend to resolve workspaceId from threadId."""
+    await require_thread_owner(thread_id, x_user_id)
+    thread = await get_thread_by_id(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return WorkspaceThreadListItem(
+        thread_id=str(thread["conversation_thread_id"]),
+        workspace_id=str(thread["workspace_id"]),
+        thread_index=thread["thread_index"],
+        current_status=thread["current_status"],
+        msg_type=thread.get("msg_type"),
+        title=thread.get("title"),
+        created_at=thread["created_at"],
+        updated_at=thread["updated_at"],
+    )
+
+
 @router.delete("/{thread_id}", response_model=ThreadDeleteResponse)
-async def delete_thread_endpoint(thread_id: str):
+async def delete_thread_endpoint(thread_id: str, x_user_id: CurrentUserId):
     """
     Delete a thread and all its queries/responses.
 
     Permanently deletes the thread and all associated data due to CASCADE constraints.
     """
     try:
-        thread = await get_thread_by_id(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail=f"Thread not found: {thread_id}")
-
+        await require_thread_owner(thread_id, x_user_id)
         await delete_thread(thread_id)
 
         logger.info(f"Successfully deleted thread thread_id={thread_id}")
@@ -160,17 +188,24 @@ async def delete_thread_endpoint(thread_id: str):
         raise
     except Exception as e:
         logger.exception(f"Error deleting thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete thread: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete thread: {str(e)}"
+        )
 
 
 @router.patch("/{thread_id}", response_model=WorkspaceThreadListItem)
-async def update_thread_endpoint(thread_id: str, request: ThreadUpdateRequest):
+async def update_thread_endpoint(
+    thread_id: str, request: ThreadUpdateRequest, x_user_id: CurrentUserId
+):
     """Update thread properties (currently only title)."""
     try:
+        await require_thread_owner(thread_id, x_user_id)
         updated_thread = await update_thread_title(thread_id, request.title)
 
         if not updated_thread:
-            raise HTTPException(status_code=404, detail=f"Thread not found: {thread_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Thread not found: {thread_id}"
+            )
 
         return WorkspaceThreadListItem(
             thread_id=str(updated_thread["conversation_thread_id"]),
@@ -187,7 +222,9 @@ async def update_thread_endpoint(thread_id: str, request: ThreadUpdateRequest):
         raise
     except Exception as e:
         logger.exception(f"Error updating thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update thread: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update thread: {str(e)}"
+        )
 
 
 # =============================================================================
@@ -219,14 +256,18 @@ async def send_new_thread_message(request: ChatRequest, auth: ChatRateLimited):
 
 
 @router.post("/{thread_id}/messages")
-async def send_thread_message(thread_id: str, request: ChatRequest, auth: ChatRateLimited):
+async def send_thread_message(
+    thread_id: str, request: ChatRequest, auth: ChatRateLimited
+):
     """
     Send a message to an existing thread. Returns an SSE stream.
     """
     return await _handle_send_message(request, auth, thread_id)
 
 
-async def _handle_send_message(request: ChatRequest, auth: ChatRateLimited, thread_id: str):
+async def _handle_send_message(
+    request: ChatRequest, auth: ChatRateLimited, thread_id: str
+):
     """Shared logic for both POST /threads/messages and POST /threads/{id}/messages."""
     from src.server.handlers.chat_handler import (
         astream_flash_workflow,
@@ -292,10 +333,17 @@ async def _handle_send_message(request: ChatRequest, auth: ChatRateLimited, thre
 
     # Resolve LLM config eagerly — credit check must happen before SSE stream starts
     from src.server.handlers.chat_handler import resolve_llm_config
-    from src.server.dependencies.usage_limits import enforce_credit_limit, release_burst_slot
+    from src.server.dependencies.usage_limits import (
+        enforce_credit_limit,
+        release_burst_slot,
+    )
 
     config = await resolve_llm_config(
-        setup.agent_config, user_id, request.llm_model, is_byok, mode=agent_mode,
+        setup.agent_config,
+        user_id,
+        request.llm_model,
+        is_byok,
+        mode=agent_mode,
         reasoning_effort=getattr(request, "reasoning_effort", None),
         fast_mode=getattr(request, "fast_mode", None),
     )
@@ -345,6 +393,7 @@ async def _handle_send_message(request: ChatRequest, auth: ChatRateLimited, thre
 @router.get("/{thread_id}/messages/stream")
 async def reconnect_to_stream(
     thread_id: str,
+    x_user_id: CurrentUserId,
     last_event_id: Optional[int] = Query(None, description="Last received event ID"),
 ):
     """
@@ -352,6 +401,7 @@ async def reconnect_to_stream(
 
     Replays buffered events, then attaches to live stream if still running.
     """
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.chat_handler import reconnect_to_workflow_stream
 
     async def stream_reconnection():
@@ -372,7 +422,7 @@ async def reconnect_to_stream(
 
 
 @router.get("/{thread_id}/messages/replay")
-async def replay_thread_messages(thread_id: str):
+async def replay_thread_messages(thread_id: str, x_user_id: CurrentUserId):
     """Replay a thread as SSE using persisted sse_events.
 
     Stream includes:
@@ -381,13 +431,18 @@ async def replay_thread_messages(thread_id: str):
     - replay_done: terminal sentinel
     """
     try:
+        await require_thread_owner(thread_id, x_user_id)
         thread = await get_thread_with_summary(thread_id)
         if not thread:
-            raise HTTPException(status_code=404, detail=f"Thread not found: {thread_id}")
+            raise HTTPException(
+                status_code=404, detail=f"Thread not found: {thread_id}"
+            )
 
         queries, _ = await get_queries_for_thread(thread_id)
         responses, _ = await get_responses_for_thread(thread_id)
-        responses_by_turn = {r.get("turn_index"): r for r in responses if isinstance(r, dict)}
+        responses_by_turn = {
+            r.get("turn_index"): r for r in responses if isinstance(r, dict)
+        }
 
         async def event_generator():
             seq = 0
@@ -431,7 +486,9 @@ async def replay_thread_messages(thread_id: str):
                     replay_data = dict(data)
                     replay_data.setdefault("thread_id", thread_id)
                     replay_data["turn_index"] = turn_index
-                    replay_data["response_id"] = str(response.get("conversation_response_id"))
+                    replay_data["response_id"] = str(
+                        response.get("conversation_response_id")
+                    )
 
                     yield (
                         f"id: {seq}\n"
@@ -452,7 +509,9 @@ async def replay_thread_messages(thread_id: str):
         raise
     except Exception as e:
         logger.exception(f"Error replaying thread {thread_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to replay thread: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to replay thread: {str(e)}"
+        )
 
 
 # =============================================================================
@@ -461,46 +520,58 @@ async def replay_thread_messages(thread_id: str):
 
 
 @router.get("/{thread_id}/status")
-async def get_thread_status(thread_id: str):
+async def get_thread_status(thread_id: str, x_user_id: CurrentUserId):
     """Get current workflow execution status for a thread."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.workflow_handler import get_workflow_status
+
     return await get_workflow_status(thread_id)
 
 
 @router.post("/{thread_id}/cancel", status_code=200)
-async def cancel_thread(thread_id: str):
+async def cancel_thread(thread_id: str, x_user_id: CurrentUserId):
     """Cancel a running workflow for this thread."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.workflow_handler import cancel_workflow
+
     return await cancel_workflow(thread_id)
 
 
 @router.post("/{thread_id}/interrupt", status_code=200)
-async def interrupt_thread(thread_id: str):
+async def interrupt_thread(thread_id: str, x_user_id: CurrentUserId):
     """Soft interrupt — pause main agent, keep subagents running."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.workflow_handler import soft_interrupt_workflow
-    return await soft_interrupt_workflow(thread_id)
 
+    return await soft_interrupt_workflow(thread_id)
 
 
 @router.post("/{thread_id}/summarize", status_code=200)
 async def summarize_thread(
     thread_id: str,
-    keep_messages: int = Query(default=5, ge=1, le=20, description="Number of recent messages to preserve"),
+    x_user_id: CurrentUserId,
+    keep_messages: int = Query(
+        default=5, ge=1, le=20, description="Number of recent messages to preserve"
+    ),
 ):
     """Manually trigger conversation summarization for a thread."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.workflow_handler import trigger_summarization
+
     return await trigger_summarization(thread_id, keep_messages)
 
 
 @router.post("/{thread_id}/offload", status_code=200)
-async def offload_thread(thread_id: str):
+async def offload_thread(thread_id: str, x_user_id: CurrentUserId):
     """Truncate large tool arguments and offload originals to sandbox (Tier 1 only)."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.workflow_handler import trigger_offload
+
     return await trigger_offload(thread_id)
 
 
 @router.get("/{thread_id}/turns")
-async def get_thread_turns(thread_id: str):
+async def get_thread_turns(thread_id: str, x_user_id: CurrentUserId):
     """
     Get turn-boundary checkpoint IDs for edit/regenerate/retry operations.
 
@@ -509,8 +580,12 @@ async def get_thread_turns(thread_id: str):
     - regenerate_checkpoint_id: fork AFTER user message, BEFORE AI response (for regenerating)
     - retry_checkpoint_id: most recent checkpoint (for retrying after failure)
     """
-    from src.server.handlers.checkpoint_handler import get_thread_turns as _get_thread_turns
+    await require_thread_owner(thread_id, x_user_id)
+    from src.server.handlers.checkpoint_handler import (
+        get_thread_turns as _get_thread_turns,
+    )
     from src.server.database.conversation import get_thread_checkpoint_id
+
     branch_tip = await get_thread_checkpoint_id(thread_id)
     return await _get_thread_turns(thread_id, branch_tip_checkpoint_id=branch_tip)
 
@@ -528,6 +603,7 @@ async def retry_thread(
     If not provided, auto-detects the latest checkpoint.
     Returns an SSE stream.
     """
+    await require_thread_owner(thread_id, auth.user_id)
     from src.server.handlers.checkpoint_handler import get_retry_checkpoint
 
     explicit_checkpoint_id = body.checkpoint_id if body else None
@@ -560,9 +636,13 @@ async def retry_thread(
 async def stream_subagent_task(
     thread_id: str,
     task_id: str,
-    last_event_id: Optional[int] = Query(None, description="Last received event ID for reconnect"),
+    x_user_id: CurrentUserId,
+    last_event_id: Optional[int] = Query(
+        None, description="Last received event ID for reconnect"
+    ),
 ):
     """Stream a single subagent's content events (message_chunk, tool_calls, etc.)."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.chat_handler import stream_subagent_task_events
 
     return StreamingResponse(
@@ -580,6 +660,7 @@ async def send_subagent_message(
     x_user_id: CurrentUserId,
 ):
     """Send a message/instruction to a running background subagent."""
+    await require_thread_owner(thread_id, x_user_id)
     from src.server.handlers.chat_handler import queue_message_for_subagent
 
     return await queue_message_for_subagent(
@@ -602,16 +683,11 @@ async def update_thread_share(
     x_user_id: CurrentUserId,
 ):
     """Toggle public sharing for a thread and update permissions."""
-    from src.server.database.workspace import get_workspace
+    await require_thread_owner(thread_id, x_user_id)
 
     thread = await get_thread_by_id(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
-
-    # Verify ownership via workspace
-    workspace = await get_workspace(str(thread["workspace_id"]))
-    if not workspace or workspace.get("user_id") != x_user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     # Build update kwargs
     kwargs: dict = {"is_shared": request.is_shared}
@@ -655,15 +731,11 @@ async def update_thread_share(
 @router.get("/{thread_id}/share", response_model=ThreadShareResponse)
 async def get_thread_share(thread_id: str, x_user_id: CurrentUserId):
     """Get current share status and permissions for a thread."""
-    from src.server.database.workspace import get_workspace
+    await require_thread_owner(thread_id, x_user_id)
 
     thread = await get_thread_by_id(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
-
-    workspace = await get_workspace(str(thread["workspace_id"]))
-    if not workspace or workspace.get("user_id") != x_user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     share_token = thread.get("share_token")
     is_shared = thread.get("is_shared", False)
@@ -690,6 +762,7 @@ async def submit_feedback(
 ):
     """Submit or update feedback (thumbs up/down) for a response."""
     try:
+        await require_thread_owner(thread_id, x_user_id)
         result = await upsert_feedback(
             conversation_thread_id=thread_id,
             turn_index=request.turn_index,
@@ -725,6 +798,7 @@ async def submit_feedback(
 async def get_feedback(thread_id: str, x_user_id: CurrentUserId):
     """Get all feedback for a thread by the current user."""
     try:
+        await require_thread_owner(thread_id, x_user_id)
         rows = await get_feedback_for_thread(thread_id, x_user_id)
         return [
             FeedbackResponse(
@@ -739,6 +813,8 @@ async def get_feedback(thread_id: str, x_user_id: CurrentUserId):
             )
             for row in rows
         ]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Error getting feedback for thread {thread_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to get feedback")
@@ -752,6 +828,7 @@ async def remove_feedback(
 ):
     """Remove feedback for a specific response. Query param: ?turn_index=N"""
     try:
+        await require_thread_owner(thread_id, x_user_id)
         deleted = await delete_feedback(thread_id, turn_index, x_user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Feedback not found")

@@ -31,7 +31,7 @@ from typing import Any
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from src.server.utils.api import CurrentUserId
+from src.server.utils.api import CurrentUserId, require_workspace_owner
 from fastapi.responses import Response
 
 from ptc_agent.core.paths import (
@@ -50,9 +50,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspace Files"])
 
 # Image MIME types that benefit from HTTP caching
-_CACHEABLE_IMAGE_TYPES = frozenset({
-    "image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp",
-})
+_CACHEABLE_IMAGE_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/svg+xml",
+        "image/webp",
+    }
+)
 
 # Derived from shared constants (source of truth: ptc_agent.core.paths)
 _SYSTEM_DIR_PREFIXES = tuple(f"{d}/" for d in sorted(AGENT_SYSTEM_DIRS))
@@ -63,11 +69,18 @@ _ALWAYS_HIDDEN_SUFFIXES = ALWAYS_HIDDEN_SUFFIXES
 
 _ALWAYS_HIDDEN_DIR_PREFIXES = (
     # Package managers / dependencies
-    "node_modules/", ".venv/", "venv/", "vendor/",
+    "node_modules/",
+    ".venv/",
+    "venv/",
+    "vendor/",
     # Build artifacts
-    ".next/", ".nuxt/",
+    ".next/",
+    ".nuxt/",
     # Caches
-    ".cache/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
+    ".cache/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
     # VCS
     ".git/",
 )
@@ -122,19 +135,6 @@ def _is_binary(path: str) -> bool:
     """Check if file extension suggests binary content."""
     suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
     return f".{suffix}" in _BINARY_EXTENSIONS
-
-
-def _require_workspace_owner(
-    workspace: dict[str, Any] | None, *, user_id: str, workspace_id: str
-) -> None:
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    if workspace.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    if workspace.get("status") == "deleted":
-        raise HTTPException(status_code=404, detail="Workspace not found")
 
 
 def _is_flash_workspace(workspace: dict[str, Any]) -> bool:
@@ -263,7 +263,7 @@ async def list_workspace_files(
     """List files in a workspace's sandbox, or from DB if stopped."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         return {"files": [], "sandbox_ready": False, "flash_workspace": True}
@@ -377,7 +377,7 @@ async def read_workspace_file(
     """Read a file from the workspace's sandbox, or from DB if stopped."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         raise HTTPException(
@@ -492,7 +492,7 @@ async def write_workspace_file(
     """Write text content to a file in the workspace's sandbox."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         raise HTTPException(
@@ -577,7 +577,7 @@ async def download_workspace_file(
     """Download raw bytes from the workspace's sandbox, or from DB if stopped."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         raise HTTPException(
@@ -648,7 +648,7 @@ async def upload_workspace_file(
     """Upload a file to the workspace's live sandbox."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         raise HTTPException(
@@ -699,7 +699,7 @@ async def backup_workspace_files(
     """Backup workspace files from sandbox to DB for offline access."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         raise HTTPException(
@@ -740,7 +740,7 @@ async def get_backup_status(
     backed up, modified, or untracked."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     empty = {
         "workspace_id": workspace_id,
@@ -842,7 +842,7 @@ async def delete_workspace_files(
     """Delete one or more files from the workspace's live sandbox."""
 
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if _is_flash_workspace(workspace):
         raise HTTPException(

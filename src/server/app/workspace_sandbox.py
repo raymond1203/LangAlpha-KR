@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.server.utils.api import CurrentUserId
+from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 from src.ptc_agent.core.sandbox import PTCSandbox
@@ -38,21 +38,10 @@ _PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+([<>=!~]+.*)?$")
 # ---------------------------------------------------------------------------
 
 
-def _require_workspace_owner(
-    workspace: dict[str, Any] | None, *, user_id: str, workspace_id: str
-) -> None:
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    if workspace.get("status") == "deleted":
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-
 async def _get_sandbox(workspace_id: str, user_id: str) -> Any:
     """Validate workspace ownership, reject flash workspaces, and return the sandbox."""
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=user_id)
 
     if workspace.get("status") == "flash":
         raise HTTPException(
@@ -229,7 +218,7 @@ async def get_sandbox_stats(
     from Daytona API without starting the sandbox.
     """
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     if workspace.get("status") == "flash":
         raise HTTPException(
@@ -266,7 +255,11 @@ async def _get_offline_sandbox_stats(
     try:
         async with AsyncDaytona(daytona_config) as daytona:
             sandbox = await daytona.get(sandbox_id)
-            state = sandbox.state.value if hasattr(sandbox.state, "value") else str(sandbox.state)
+            state = (
+                sandbox.state.value
+                if hasattr(sandbox.state, "value")
+                else str(sandbox.state)
+            )
             return SandboxStatsResponse(
                 workspace_id=workspace_id,
                 sandbox_id=sandbox_id,

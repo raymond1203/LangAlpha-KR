@@ -15,11 +15,11 @@ Endpoints:
 """
 
 import logging
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from src.server.utils.api import CurrentUserId
+from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.dependencies.usage_limits import WorkspaceLimitCheck
 from src.server.database.workspace import (
     get_workspace as db_get_workspace,
@@ -42,13 +42,6 @@ from src.server.services.workspace_manager import WorkspaceManager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspaces"])
-
-
-def _require_workspace_owner(workspace: dict | None, *, user_id: str, workspace_id: str) -> None:
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    if workspace.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _workspace_to_response(workspace: dict) -> WorkspaceResponse:
@@ -97,7 +90,9 @@ async def create_workspace(
             config=request.config,
         )
 
-        logger.info(f"Created workspace {workspace['workspace_id']} for user {x_user_id}")
+        logger.info(
+            f"Created workspace {workspace['workspace_id']} for user {x_user_id}"
+        )
         return _workspace_to_response(workspace)
 
     except ValueError as e:
@@ -190,20 +185,20 @@ async def list_workspaces(
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceResponse)
-async def get_workspace(workspace_id: str):
+async def get_workspace(workspace_id: str, x_user_id: CurrentUserId):
     """
     Get workspace details.
 
     Args:
         workspace_id: Workspace UUID
+        x_user_id: Authenticated user ID
 
     Returns:
         Workspace details
     """
     try:
         workspace = await db_get_workspace(workspace_id)
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        require_workspace_owner(workspace, user_id=x_user_id)
 
         return _workspace_to_response(workspace)
 
@@ -218,6 +213,7 @@ async def get_workspace(workspace_id: str):
 async def update_workspace(
     workspace_id: str,
     request: WorkspaceUpdate,
+    x_user_id: CurrentUserId,
 ):
     """
     Update workspace metadata.
@@ -225,15 +221,15 @@ async def update_workspace(
     Args:
         workspace_id: Workspace UUID
         request: Update request with new values
+        x_user_id: Authenticated user ID
 
     Returns:
         Updated workspace details
     """
     try:
-        # Check workspace exists
+        # Check workspace exists and ownership
         workspace = await db_get_workspace(workspace_id)
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        require_workspace_owner(workspace, user_id=x_user_id)
 
         # Update workspace
         updated = await db_update_workspace(
@@ -281,7 +277,7 @@ async def start_workspace(
         if not workspace:
             raise HTTPException(status_code=404, detail="Workspace not found")
 
-        _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+        require_workspace_owner(workspace, user_id=x_user_id)
 
         if workspace["status"] == "running":
             return WorkspaceActionResponse(
@@ -318,7 +314,7 @@ async def start_workspace(
 
 
 @router.post("/{workspace_id}/stop", response_model=WorkspaceActionResponse)
-async def stop_workspace(workspace_id: str):
+async def stop_workspace(workspace_id: str, x_user_id: CurrentUserId):
     """
     Stop a running workspace.
 
@@ -327,11 +323,15 @@ async def stop_workspace(workspace_id: str):
 
     Args:
         workspace_id: Workspace UUID
+        x_user_id: Authenticated user ID
 
     Returns:
         Action result
     """
     try:
+        workspace = await db_get_workspace(workspace_id)
+        require_workspace_owner(workspace, user_id=x_user_id)
+
         manager = WorkspaceManager.get_instance()
         workspace = await manager.stop_workspace(workspace_id)
 
@@ -342,6 +342,8 @@ async def stop_workspace(workspace_id: str):
             message="Workspace stopped successfully",
         )
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
@@ -370,7 +372,7 @@ async def archive_workspace(
     """
     try:
         workspace = await db_get_workspace(workspace_id)
-        _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+        require_workspace_owner(workspace, user_id=x_user_id)
 
         manager = WorkspaceManager.get_instance()
         await manager.archive_workspace(workspace_id)
@@ -404,10 +406,12 @@ async def refresh_workspace(
 
     manager = WorkspaceManager.get_instance()
     workspace = await db_get_workspace(workspace_id)
-    _require_workspace_owner(workspace, user_id=x_user_id, workspace_id=workspace_id)
+    require_workspace_owner(workspace, user_id=x_user_id)
 
     try:
-        session = await manager.get_session_for_workspace(workspace_id, user_id=x_user_id)
+        session = await manager.get_session_for_workspace(
+            workspace_id, user_id=x_user_id
+        )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Sandbox not available: {e}")
 
@@ -457,7 +461,7 @@ async def refresh_workspace(
 
 
 @router.delete("/{workspace_id}", status_code=204)
-async def delete_workspace(workspace_id: str):
+async def delete_workspace(workspace_id: str, x_user_id: CurrentUserId):
     """
     Delete a workspace and its sandbox.
 
@@ -466,6 +470,7 @@ async def delete_workspace(workspace_id: str):
 
     Args:
         workspace_id: Workspace UUID
+        x_user_id: Authenticated user ID
     """
     try:
         # Guard: prevent deletion of flash workspaces
@@ -475,6 +480,7 @@ async def delete_workspace(workspace_id: str):
                 status_code=400,
                 detail="Cannot delete flash workspace",
             )
+        require_workspace_owner(workspace, user_id=x_user_id)
 
         manager = WorkspaceManager.get_instance()
         await manager.delete_workspace(workspace_id)
@@ -482,6 +488,8 @@ async def delete_workspace(workspace_id: str):
         logger.info(f"Deleted workspace {workspace_id}")
         # Return 204 No Content
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
