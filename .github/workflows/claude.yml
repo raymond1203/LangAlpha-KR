@@ -10,41 +10,71 @@ on:
   pull_request_review:
     types: [submitted]
 
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   claude:
+    # Allow pull_request_review to pass through for inline comment checking
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'pull_request_review') ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
       issues: write
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      - name: Check review comments for @claude
+        id: check_review
+        if: github.event_name == 'pull_request_review'
+        run: |
+          # Fetch all inline comments from this review
+          echo "Fetching review comments..."
+          REVIEW_COMMENTS=$(gh api \
+            repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments \
+            --jq '.[].body' 2>/dev/null || echo "")
+
+          # Also check the review body itself
+          REVIEW_BODY="${{ github.event.review.body }}"
+
+          # Combine both and check for @claude
+          ALL_TEXT="$REVIEW_COMMENTS $REVIEW_BODY"
+
+          if echo "$ALL_TEXT" | grep -q "@claude"; then
+            echo "has_claude=true" >> $GITHUB_OUTPUT
+            echo "Found @claude in review"
+          else
+            echo "has_claude=false" >> $GITHUB_OUTPUT
+            echo "No @claude found in review"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run Claude Code
         id: claude
+        if: |
+          (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+          (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+          (github.event_name == 'pull_request_review' && steps.check_review.outputs.has_claude == 'true') ||
+          (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-          # This is an optional setting that allows Claude to read CI results on PRs
+          allowed_bots: 'claude[bot]'
           additional_permissions: |
             actions: read
-
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           claude_args: |
-            --allowedTools "Bash(git mv:*)" "Bash(git rm:*)" "Bash(git checkout:*)" "Bash(git stash:*)" "Bash(git cherry-pick:*)" "Bash(cp:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(rm:*)" "Bash(rsync:*)" "Bash(npm:*)" "Bash(npx:*)" "Bash(pip:*)" "Bash(poetry:*)" "Bash(uv:*)" "Bash(pytest:*)" "Bash(make:*)"
-
+            --allowedTools "Bash(git mv:*)" "Bash(git rm:*)" "Bash(git checkout:*)" "Bash(git stash:*)" "Bash(git cherry-pick:*)" "Bash(cp:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(rm:*)" "Bash(rsync:*)" "Bash(npm:*)" "Bash(npx:*)" "Bash(pip:*)" "Bash(uv:*)" "Bash(pytest:*)" "Bash(make:*)" "Bash(gh:*)" "Bash(ruff:*)" "Bash(python:*)" "Bash(python3:*)" "Bash(node:*)" "Bash(cat:*)" "Bash(ls:*)" "Bash(find:*)" "Bash(grep:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(diff:*)" "Bash(sort:*)"
+            --append-system-prompt "QUALITY GATES — before committing changes, run the relevant checks: Python changes: run 'ruff check . && ruff format --check .' and fix any issues. Frontend (web/) changes: run 'cd web && npx eslint .' and fix any issues. Backend changes: run 'uv run pytest tests/unit/ -x -q' to verify tests pass. NEVER commit .env files or credentials."

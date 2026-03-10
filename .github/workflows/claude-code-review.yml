@@ -3,33 +3,20 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
-    # Allow bot-triggered runs (including claude[bot] and other bots)
-    # By default, pull_request events run for all PRs including bot-created ones
-    # If you need to explicitly allow only bots, uncomment the condition below:
-    # if: |
-    #   github.event.pull_request.user.type == 'Bot' ||
-    #   endsWith(github.event.pull_request.user.login, '[bot]')
-    
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -43,10 +30,81 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          allowed_bots: '*'  # Allow all bots to trigger this workflow
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
+          allowed_bots: 'claude[bot]'
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
+            PR DESCRIPTION CHECK (Do this FIRST):
+            1. Use `gh pr view ${{ github.event.pull_request.number }}` to check the current PR description
+            2. If description is empty or very short (less than 50 characters):
+               - Analyze the code changes using `gh pr diff ${{ github.event.pull_request.number }}`
+               - Generate a meaningful description including:
+                 * Summary: What changed and why (2-3 sentences)
+                 * Key changes: Bullet list of main modifications
+               - Update the PR description using: `gh pr edit ${{ github.event.pull_request.number }} --body "your generated description"`
+            3. If description is already meaningful (>50 chars), skip this step
+
+            After handling PR description, proceed with code review:
+
+            Review this PR. ONLY report issues that matter. Read the CLAUDE.md files for project context.
+
+            REVIEW PRIORITIES (in order of importance):
+
+            1. DRY Violations
+               - Duplicated logic or copy-pasted code
+               - Utility functions that already exist but weren't reused
+               - Same pattern implemented in multiple places
+               - Flag WHICH existing function should be used instead
+
+            2. Performance
+               - Blocking calls in async code (this is an async-first codebase)
+               - Missing timeouts on external API/DB calls
+               - Unnecessary React re-renders (missing memo, unstable references in deps arrays)
+               - N+1 query patterns in database access
+               - Large objects allocated in hot paths
+
+            3. SSE Streaming Bugs
+               - Incorrect or inconsistent SSE event types
+               - Missing error events on failure paths
+               - Events sent after stream close
+               - Race conditions in event buffering
+               - Reconnection edge cases
+               - Orphaned streams or missing cleanup on disconnect
+
+            4. Cache & Invalidation
+               - Stale cache reads after mutations
+               - Missing React Query cache invalidation after related mutations
+               - Inconsistent cache keys (check web/src/lib/queryKeys.js patterns)
+               - Redis TTL mismatches
+               - Over-caching mutable data
+
+            5. Naming
+               - Function/variable/file names that don't match their actual behavior
+               - Inconsistent naming conventions across similar files
+               - Overly generic names (e.g. `handle`, `process`, `data`, `utils`)
+
+            6. Pattern Violations
+               - Breaks established patterns in the codebase:
+                 * Backend: async-first handlers, raw psycopg3 (no ORM), middleware-driven agent architecture
+                 * Frontend: React Query for server state, Ant Design components, page-level api.js for API calls
+               - Inconsistent with architecture in similar existing files
+               - Deviates from conventions without justification
+
+            7. Security (only flag clear vulnerabilities)
+               - Credential exposure
+               - Injection risks
+               - Missing auth checks on protected endpoints
+
+            REVIEW FORMAT:
+            - Keep review BRIEF — only issues that matter
+            - Skip minor style/formatting
+            - Group related issues together
+            - Provide specific file:line references
+            - Suggest concrete fixes
+
+            If no critical issues found: Simply comment "LGTM — no critical issues found."
+
+            Use `gh pr comment ${{ github.event.pull_request.number }}` to post your review.
+
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr edit:*),Bash(gh pr review:*),Bash(gh api:*)"'
