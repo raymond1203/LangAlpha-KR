@@ -56,7 +56,7 @@ function StartQuestionCard({ proposalData, onApprove, onReject }: StartQuestionC
           )}
           <span
             className="text-sm"
-            style={{ color: isApproved ? 'var(--color-text-tertiary)' : 'var(--color-text-tertiary)' }}
+            style={{ color: 'var(--color-text-tertiary)' }}
           >
             {isApproved ? t('chat.questionStarted') : t('chat.questionDeclined')}
           </span>
@@ -138,14 +138,6 @@ function StartQuestionCard({ proposalData, onApprove, onReject }: StartQuestionC
           style={{
             backgroundColor: 'var(--color-border-muted)',
             color: 'var(--color-text-tertiary)',
-          }}
-          onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
-            e.currentTarget.style.backgroundColor = 'var(--color-border-muted)';
-            e.currentTarget.style.color = 'var(--color-text-tertiary)';
-          }}
-          onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
-            e.currentTarget.style.backgroundColor = 'var(--color-border-muted)';
-            e.currentTarget.style.color = 'var(--color-text-tertiary)';
           }}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
