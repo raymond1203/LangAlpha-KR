@@ -1,7 +1,28 @@
 import React from 'react';
 import './CrosshairTooltip.css';
 
-function CrosshairTooltip({ visible, x, y, data, enabledMaPeriods, containerWidth, containerHeight }) {
+interface TooltipData {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+  maValues?: Record<number, number>;
+  rsiValue?: number | null;
+}
+
+interface CrosshairTooltipProps {
+  visible: boolean;
+  x: number;
+  y: number;
+  data: TooltipData | null;
+  enabledMaPeriods: number[];
+  containerWidth?: number;
+  containerHeight?: number;
+}
+
+function CrosshairTooltip({ visible, x, y, data, enabledMaPeriods, containerWidth, containerHeight }: CrosshairTooltipProps) {
   if (!visible || !data) return null;
 
   const isUp = data.close >= data.open;
@@ -13,15 +34,15 @@ function CrosshairTooltip({ visible, x, y, data, enabledMaPeriods, containerWidt
   const clampedX = Math.min(Math.max(x + 16, 0), (containerWidth || 800) - tooltipWidth - 8);
   const clampedY = Math.min(Math.max(y - 10, 0), (containerHeight || 500) - tooltipHeight - 8);
 
-  const formatPrice = (v) => v != null ? v.toFixed(2) : '\u2014';
-  const formatVol = (v) => {
+  const formatPrice = (v: number | null | undefined): string => v != null ? v.toFixed(2) : '\u2014';
+  const formatVol = (v: number | null | undefined): string => {
     if (v == null) return '\u2014';
     if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
     if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
     return String(v);
   };
 
-  const formatDate = (ts) => {
+  const formatDate = (ts: number | null | undefined): string => {
     if (!ts) return '';
     const d = new Date(ts * 1000);
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -49,7 +70,7 @@ function CrosshairTooltip({ visible, x, y, data, enabledMaPeriods, containerWidt
       </div>
       {data.maValues && Object.keys(data.maValues).length > 0 && (
         <div className="crosshair-tooltip-ma-section">
-          {Object.entries(data.maValues).map(([period, val]) => (
+          {Object.entries(data.maValues).map(([period, val]: [string, number]) => (
             <div className="crosshair-tooltip-row" key={period}>
               <span className="crosshair-tooltip-label">MA{period}</span>
               <span>{val != null ? val.toFixed(2) : '\u2014'}</span>

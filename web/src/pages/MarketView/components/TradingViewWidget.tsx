@@ -2,7 +2,7 @@ import React, { useEffect, useRef, memo } from 'react';
 import { useTheme } from '@/contexts/ThemeContext';
 
 // Map our interval keys to TradingView widget interval values
-const TV_INTERVALS = {
+const TV_INTERVALS: Record<string, string> = {
   '1min': '1',
   '5min': '5',
   '15min': '15',
@@ -12,14 +12,19 @@ const TV_INTERVALS = {
   '1day': 'D',
 };
 
+interface TradingViewWidgetProps {
+  symbol: string;
+  interval?: string;
+}
+
 /**
  * TradingView Advanced Chart widget embed.
  * Provides full drawing tools, indicators, and TradingView's own real-time data.
  */
-function TradingViewWidget({ symbol, interval = '1day' }) {
+function TradingViewWidget({ symbol, interval = '1day' }: TradingViewWidgetProps) {
   const { theme } = useTheme();
-  const containerRef = useRef(null);
-  const scriptRef = useRef(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scriptRef = useRef<HTMLScriptElement | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;

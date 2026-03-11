@@ -11,7 +11,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { getMarketDataWSUrl, getWSAuthToken } from '../utils/api';
 import { utcMsToChartSec, utcMsToETDate } from '@/lib/utils';
-
 // Reconnect parameters
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
@@ -19,45 +18,75 @@ const BACKOFF_MULTIPLIER = 2;
 const STALE_TIMEOUT_MS = 45000; // close if no message in 45s
 const HIDDEN_CLOSE_DELAY_MS = 60000; // close 60s after page hidden
 
-/**
- * @typedef {Object} PriceUpdate
- * @property {string} symbol
- * @property {number} price
- * @property {number} open
- * @property {number} high
- * @property {number} low
- * @property {number} close
- * @property {number} volume
- * @property {number} change
- * @property {number} changePercent
- * @property {number} timestamp
- * @property {{time:number, open:number, high:number, low:number, close:number, volume:number}|null} barData
- */
+export interface BarData {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
 
-export default function useMarketDataWS() {
-  const [prices, setPrices] = useState(() => new Map());
-  const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [dataLevel, setDataLevel] = useState(null); // 'second' | 'minute' | null
+export interface PriceUpdate {
+  symbol: string;
+  price: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  change: number;
+  changePercent: number;
+  timestamp: number;
+  barData: BarData;
+}
+
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'disabled';
+export type DataLevel = 'second' | 'minute' | null;
+
+export interface UseMarketDataWSReturn {
+  prices: Map<string, PriceUpdate>;
+  connectionStatus: ConnectionStatus;
+  dataLevel: DataLevel;
+  ginlixDataEnabled: boolean;
+  subscribe: (symbols: string[]) => void;
+  unsubscribe: (symbols: string[]) => void;
+  setPreviousClose: (symbol: string, price: number) => void;
+  setDayOpen: (symbol: string, price: number) => void;
+}
+
+interface SessionData {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  volume: number;
+}
+
+export default function useMarketDataWS(): UseMarketDataWSReturn {
+  const [prices, setPrices] = useState<Map<string, PriceUpdate>>(() => new Map());
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [dataLevel, setDataLevel] = useState<DataLevel>(null);
   const [ginlixDataEnabled, setGinlixDataEnabled] = useState(true); // assume enabled until preflight says otherwise
 
-  const wsRef = useRef(null);
-  const subscribedRef = useRef(new Map()); // symbol → refCount
+  const wsRef = useRef<WebSocket | null>(null);
+  const subscribedRef = useRef<Map<string, number>>(new Map()); // symbol → refCount
   const backoffRef = useRef(INITIAL_BACKOFF_MS);
-  const reconnectTimerRef = useRef(null);
-  const staleTimerRef = useRef(null);
-  const hiddenTimerRef = useRef(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const staleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hiddenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalCloseRef = useRef(false);
   const disabledRef = useRef(false);
   const mountedRef = useRef(true);
 
   // Session OHLCV tracking per symbol (reset on new trading day)
-  const sessionDataRef = useRef(new Map()); // symbol → { date, open, high, low, volume }
+  const sessionDataRef = useRef<Map<string, SessionData>>(new Map());
 
   // Snapshot-seeded reference data for accurate change% calculation
-  const previousCloseRef = useRef(new Map()); // symbol → previousClose price
-  const dayOpenRef = useRef(new Map()); // symbol → actual market open price
+  const previousCloseRef = useRef<Map<string, number>>(new Map()); // symbol → previousClose price
+  const dayOpenRef = useRef<Map<string, number>>(new Map()); // symbol → actual market open price
 
-  const resetStaleTimer = useCallback(() => {
+  const resetStaleTimer = useCallback((): void => {
     if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
     staleTimerRef.current = setTimeout(() => {
       // No message received in STALE_TIMEOUT_MS — connection likely dead
@@ -68,7 +97,7 @@ export default function useMarketDataWS() {
     }, STALE_TIMEOUT_MS);
   }, []);
 
-  const processMessage = useCallback((event) => {
+  const processMessage = useCallback((event: MessageEvent) => {
     resetStaleTimer();
 
     let msg;
@@ -81,7 +110,7 @@ export default function useMarketDataWS() {
     // ginlix-data sends aggregate bars with shape:
     // { ev: "AM", sym: "AAPL", o, h, l, c, v, s, e, ... }
     // or wrapped: { type: "aggregate", symbol, data: { ... } }
-    let symbol, open, high, low, close, volume, timestamp;
+    let symbol: string | undefined, open: number, high: number, low: number, close: number, volume: number, timestamp: number;
 
     if (msg.ev === 'AM' || msg.ev === 'A') {
       // Raw aggregate
@@ -137,8 +166,8 @@ export default function useMarketDataWS() {
     // Use snapshot dayOpen if available (actual market open, not first WS tick)
     const effectiveOpen = dayOpenRef.current.get(symbol) ?? session.open;
 
-    const priceUpdate = {
-      symbol,
+    const priceUpdate: PriceUpdate = {
+      symbol: symbol!,
       price: Math.round(close * 100) / 100,
       open: effectiveOpen,
       high: session.high,
@@ -164,7 +193,7 @@ export default function useMarketDataWS() {
    * browser console error from a failed WebSocket handshake when the
    * backend has the feature disabled.
    */
-  const checkEndpointAvailable = useCallback(async () => {
+  const checkEndpointAvailable = useCallback(async (): Promise<boolean> => {
     try {
       const wsUrl = getMarketDataWSUrl('stock');
       // /ws/v1/market-data/aggregates/stock → /ws/v1/market-data/status
@@ -177,7 +206,7 @@ export default function useMarketDataWS() {
     }
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (): Promise<void> => {
     if (disabledRef.current || !mountedRef.current) return;
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
 
@@ -272,7 +301,7 @@ export default function useMarketDataWS() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [processMessage, resetStaleTimer, checkEndpointAvailable]);
 
-  const scheduleReconnect = useCallback(() => {
+  const scheduleReconnect = useCallback((): void => {
     if (disabledRef.current || !mountedRef.current) return;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     const jitter = Math.random() * 500;
@@ -284,7 +313,7 @@ export default function useMarketDataWS() {
     }, delay);
   }, [connect]);
 
-  const disconnect = useCallback(() => {
+  const disconnect = useCallback((): void => {
     intentionalCloseRef.current = true;
     setDataLevel(null);
     if (reconnectTimerRef.current) {
@@ -301,10 +330,10 @@ export default function useMarketDataWS() {
     }
   }, []);
 
-  const subscribe = useCallback((symbols) => {
+  const subscribe = useCallback((symbols: string[]): void => {
     if (!Array.isArray(symbols) || symbols.length === 0) return;
     const upper = symbols.map((s) => s.toUpperCase());
-    const newSymbols = [];
+    const newSymbols: string[] = [];
     upper.forEach((s) => {
       const prev = subscribedRef.current.get(s) || 0;
       subscribedRef.current.set(s, prev + 1);
@@ -320,10 +349,10 @@ export default function useMarketDataWS() {
     }
   }, []);
 
-  const unsubscribe = useCallback((symbols) => {
+  const unsubscribe = useCallback((symbols: string[]): void => {
     if (!Array.isArray(symbols) || symbols.length === 0) return;
     const upper = symbols.map((s) => s.toUpperCase());
-    const removedSymbols = [];
+    const removedSymbols: string[] = [];
     upper.forEach((s) => {
       const count = subscribedRef.current.get(s) || 0;
       if (count <= 1) {
@@ -352,7 +381,7 @@ export default function useMarketDataWS() {
 
   // Page visibility: close after 60s hidden, reconnect on visible
   useEffect(() => {
-    const handleVisibility = () => {
+    const handleVisibility = (): void => {
       if (document.hidden) {
         hiddenTimerRef.current = setTimeout(() => {
           disconnect();
@@ -377,11 +406,11 @@ export default function useMarketDataWS() {
     };
   }, [connect, disconnect]);
 
-  const setPreviousClose = useCallback((symbol, price) => {
+  const setPreviousClose = useCallback((symbol: string, price: number): void => {
     if (symbol && price != null) previousCloseRef.current.set(symbol.toUpperCase(), price);
   }, []);
 
-  const setDayOpen = useCallback((symbol, price) => {
+  const setDayOpen = useCallback((symbol: string, price: number): void => {
     if (symbol && price != null) dayOpenRef.current.set(symbol.toUpperCase(), price);
   }, []);
 

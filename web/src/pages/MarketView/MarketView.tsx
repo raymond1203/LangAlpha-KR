@@ -5,6 +5,7 @@ import './MarketView.css';
 import DashboardHeader from '../Dashboard/components/DashboardHeader';
 import StockHeader from './components/StockHeader';
 import MarketChart from './components/MarketChart';
+import type { MarketChartHandle } from './components/MarketChart';
 import ChatInput from '../../components/ui/chat-input';
 import MarketPanel from './components/MarketPanel';
 import MarketSidebarPanel from './components/MarketSidebarPanel';
@@ -20,6 +21,66 @@ import { MarketDataWSProvider, useMarketDataWSContext } from './contexts/MarketD
 import { loadPref, savePref } from './utils/prefs';
 
 import { useStockData } from './hooks/useStockData';
+
+interface SearchResult {
+  name?: string;
+  symbol?: string;
+  exchangeShortName?: string;
+  stockExchange?: string;
+  [key: string]: unknown;
+}
+
+interface DisplayOverride {
+  name: string;
+  exchange: string;
+}
+
+interface AttachmentItem {
+  dataUrl: string;
+  file: { name: string; size: number };
+  type: string;
+  preview?: string | null;
+}
+
+interface Workspace {
+  workspace_id: string;
+  name?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+// TODO: type properly once overview API response shape is formalized
+interface OverviewData {
+  symbol?: string;
+  name?: string;
+  quote?: {
+    previousClose?: number;
+    open?: number;
+    yearHigh?: number;
+    yearLow?: number;
+    avgVolume?: number;
+    [key: string]: unknown;
+  };
+  earningsSurprises?: unknown;
+  [key: string]: unknown;
+}
+
+interface ChartMetadata {
+  chartMode?: string;
+  dateRange: { from: string; to: string };
+  dataPoints: number;
+  maDescription?: string;
+  rsiPeriod: number;
+  rsiValue?: string | null;
+  lastCandle: {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume?: number;
+  };
+  [key: string]: unknown;
+}
 
 const QUICK_QUERIES = [
   'Analyze the technical setup of {symbol}',
@@ -37,8 +98,8 @@ function MarketViewInner() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const { prices: wsPrices, connectionStatus: wsStatus, dataLevel: wsDataLevel, ginlixDataEnabled, subscribe: wsSubscribe, unsubscribe: wsUnsubscribe, setPreviousClose, setDayOpen } = useMarketDataWSContext();
-  const [selectedStock, setSelectedStock] = useState(() => loadPref('symbol', 'GOOGL'));
-  const [selectedStockDisplay, setSelectedStockDisplay] = useState(null);
+  const [selectedStock, setSelectedStock] = useState<string>(() => loadPref('symbol', 'GOOGL'));
+  const [selectedStockDisplay, setSelectedStockDisplay] = useState<DisplayOverride | null>(null);
 
   const {
     stockInfo,
@@ -59,24 +120,24 @@ function MarketViewInner() {
     setDayOpen
   });
 
-  const [chartMeta, setChartMeta] = useState(null);
-  const [selectedInterval, setSelectedInterval] = useState(() => loadPref('interval', '1day'));
-  const chartRef = useRef();
-  const [chartImage, setChartImage] = useState(null);       // base64 data URL
-  const [chartImageDesc, setChartImageDesc] = useState(null); // text description for LLM
-  const [showOverview, setShowOverview] = useState(false);
+  const [chartMeta, setChartMeta] = useState<Record<string, unknown> | null>(null);
+  const [selectedInterval, setSelectedInterval] = useState<string>(() => loadPref('interval', '1day'));
+  const chartRef = useRef<MarketChartHandle>(null);
+  const [chartImage, setChartImage] = useState<string | null>(null);       // base64 data URL
+  const [chartImageDesc, setChartImageDesc] = useState<string | null>(null); // text description for LLM
+  const [showOverview, setShowOverview] = useState<boolean>(false);
 
-  const [prefillMessage, setPrefillMessage] = useState('');
-  const [mode, setMode] = useState('fast');
-  const [workspaces, setWorkspaces] = useState([]);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(null);
+  const [prefillMessage, setPrefillMessage] = useState<string>('');
+  const [mode, setMode] = useState<'fast' | 'deep'>('fast');
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
 
-  const pickRandomQueries = useCallback((symbol) => {
+  const pickRandomQueries = useCallback((symbol: string): string[] => {
     const shuffled = [...QUICK_QUERIES].sort(() => Math.random() - 0.5);
     return shuffled.slice(0, 2).map(q => q.replace('{symbol}', symbol));
   }, []);
 
-  const [quickQueries, setQuickQueries] = useState(() => pickRandomQueries(selectedStock));
+  const [quickQueries, setQuickQueries] = useState<string[]>(() => pickRandomQueries(selectedStock));
 
   // Persist user preferences to localStorage (dedicated effects — no other side effects)
   useEffect(() => { savePref('symbol', selectedStock); }, [selectedStock]);
@@ -98,17 +159,17 @@ function MarketViewInner() {
   }, [selectedStock, pickRandomQueries]);
 
   // Resizable chat panel
-  const [chatPanelWidth, setChatPanelWidth] = useState(() =>
-    parseInt(localStorage.getItem('market-chat-width')) || 400
+  const [chatPanelWidth, setChatPanelWidth] = useState<number>(() =>
+    parseInt(localStorage.getItem('market-chat-width') || '400') || 400
   );
-  const isDragging = useRef(false);
-  const dragStartX = useRef(0);
-  const dragStartWidth = useRef(0);
+  const isDragging = useRef<boolean>(false);
+  const dragStartX = useRef<number>(0);
+  const dragStartWidth = useRef<number>(0);
 
   const { messages, isLoading, error, handleSendMessage: handleFastModeSend } = useMarketChat();
 
   // Chat return path — captured from URL when navigating from chat DetailPanel
-  const [chatReturnPath, setChatReturnPath] = useState(null);
+  const [chatReturnPath, setChatReturnPath] = useState<string | null>(null);
 
   // Handle URL parameters (symbol + returnTo from chat context)
   useEffect(() => {
@@ -131,12 +192,12 @@ function MarketViewInner() {
     }
   }, [searchParams, selectedStock, setSearchParams]);
 
-  const handleStockSearch = useCallback((symbol, searchResult) => {
+  const handleStockSearch = useCallback((symbol: string, searchResult?: SearchResult | null) => {
     setSelectedStock(symbol);
     setSelectedStockDisplay(
       searchResult
         ? {
-          name: searchResult.name || searchResult.symbol,
+          name: searchResult.name || searchResult.symbol || symbol,
           exchange: searchResult.exchangeShortName || searchResult.stockExchange || '',
         }
         : null
@@ -161,9 +222,9 @@ function MarketViewInner() {
   useEffect(() => {
     let cancelled = false;
     getWorkspaces(50, 0)
-      .then((data) => {
+      .then((data: Record<string, unknown>) => {
         if (cancelled) return;
-        const list = (data.workspaces || []).filter((ws) => ws.status !== 'flash');
+        const list = ((data.workspaces || []) as Workspace[]).filter((ws) => ws.status !== 'flash');
         setWorkspaces(list);
         if (list.length > 0 && !selectedWorkspaceId) {
           setSelectedWorkspaceId(list[0].workspace_id);
@@ -200,7 +261,7 @@ function MarketViewInner() {
     setChartImage(dataUrl);
 
     // Build rich description from available metadata
-    const meta = chartRef.current.getChartMetadata?.();
+    const meta = chartRef.current.getChartMetadata?.() as ChartMetadata | null;
     const intervalLabel = selectedInterval === '1day' ? 'Daily' : selectedInterval;
     const companyName = stockInfo?.Name || selectedStockDisplay?.name || selectedStock;
     const exchange = stockInfo?.Exchange || selectedStockDisplay?.exchange || '';
@@ -221,9 +282,10 @@ function MarketViewInner() {
       parts.push(`Latest candle — O: ${c.open} H: ${c.high} L: ${c.low} C: ${c.close} Vol: ${c.volume?.toLocaleString()}`);
     }
 
-    if (overviewData?.quote) {
-      if (overviewData.quote.yearHigh != null) parts.push(`52-week high: ${overviewData.quote.yearHigh}`);
-      if (overviewData.quote.yearLow != null) parts.push(`52-week low: ${overviewData.quote.yearLow}`);
+    const overview = overviewData as OverviewData | null;
+    if (overview?.quote) {
+      if (overview.quote.yearHigh != null) parts.push(`52-week high: ${overview.quote.yearHigh}`);
+      if (overview.quote.yearLow != null) parts.push(`52-week low: ${overview.quote.yearLow}`);
     }
 
     if (displayPrice) {
@@ -233,7 +295,7 @@ function MarketViewInner() {
     setChartImageDesc(parts.join('\n'));
   }, [selectedStock, selectedInterval, stockInfo, selectedStockDisplay, overviewData, displayPrice]);
 
-  const handleSendMessage = useCallback(async (message, planMode, attachments = [], slashCommands = [], { model, reasoningEffort } = {}) => {
+  const handleSendMessage = useCallback(async (message: string, planMode: boolean, attachments: AttachmentItem[] = [], slashCommands: string[] = [], { model, reasoningEffort }: { model?: string; reasoningEffort?: string } = {}) => {
     // Build additional_context from chart image + file attachments
     const contexts = [];
     if (chartImage) {
@@ -309,27 +371,27 @@ function MarketViewInner() {
     setChartImageDesc(null);
   }, [handleFastModeSend, navigate, toast, chartImage, chartImageDesc, mode, selectedWorkspaceId]);
 
-  const handleSidebarSymbolClick = useCallback((symbol) => {
+  const handleSidebarSymbolClick = useCallback((symbol: string) => {
     setSelectedStock(symbol);
     setSelectedStockDisplay(null);
     setChartMeta(null);
     setShowOverview(false);
   }, []);
 
-  const handleQuickQuery = useCallback(async (queryText) => {
+  const handleQuickQuery = useCallback(async (queryText: string) => {
     await handleCaptureChartForContext();
     setPrefillMessage(queryText);
   }, [handleCaptureChartForContext]);
 
-  const handleIntervalChange = useCallback((interval) => {
+  const handleIntervalChange = useCallback((interval: string) => {
     setSelectedInterval(interval);
   }, []);
 
-  const handleStockMeta = useCallback((meta) => {
+  const handleStockMeta = useCallback((meta: Record<string, unknown> | null) => {
     setChartMeta(meta);
   }, []);
 
-  const handleDragStart = useCallback((e) => {
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     isDragging.current = true;
     dragStartX.current = e.clientX;
@@ -338,7 +400,7 @@ function MarketViewInner() {
   }, [chatPanelWidth]);
 
   useEffect(() => {
-    const handleMouseMove = (e) => {
+    const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = dragStartX.current - e.clientX;
       const newWidth = Math.min(700, Math.max(300, dragStartWidth.current + delta));
@@ -362,7 +424,7 @@ function MarketViewInner() {
 
   return (
     <div className="market-center-container">
-      <DashboardHeader title="LangAlpha" onStockSearch={handleStockSearch} />
+      <DashboardHeader onStockSearch={handleStockSearch as any} />
       <div className="market-content-wrapper">
         <div className="market-left-panel">
           <StockHeader
@@ -376,7 +438,7 @@ function MarketViewInner() {
             wsHasData={!!wsPrices.get(selectedStock)}
             wsDataLevel={wsDataLevel}
             ginlixDataEnabled={ginlixDataEnabled}
-            quoteData={overviewData?.quote || null}
+            quoteData={(overviewData as OverviewData | null)?.quote || null}
             marketStatus={marketStatus}
             snapshot={snapshotData}
           />
@@ -386,7 +448,7 @@ function MarketViewInner() {
                 symbol={selectedStock}
                 visible={showOverview}
                 onClose={() => setShowOverview(false)}
-                data={overviewData}
+                data={overviewData as OverviewData | null}
                 loading={overviewLoading}
               />
             )}
@@ -396,11 +458,11 @@ function MarketViewInner() {
               interval={selectedInterval}
               onIntervalChange={handleIntervalChange}
               onCapture={handleCaptureChart}
-              onStockMeta={handleStockMeta}
+              onStockMeta={handleStockMeta as any}
               onLatestBar={handleLatestBar}
-              quoteData={overviewData?.quote || null}
-              earningsData={overviewData?.earningsSurprises || null}
-              overlayData={overlayData}
+              quoteData={(overviewData as OverviewData | null)?.quote || null}
+              earningsData={(overviewData as OverviewData | null)?.earningsSurprises || null}
+              overlayData={overlayData as Record<string, unknown> | null}
               stockMeta={chartMeta}
               snapshot={snapshotData}
               liveTick={wsPrices.get(selectedStock)?.barData || null}
@@ -418,7 +480,7 @@ function MarketViewInner() {
         <div className="market-right-panel" style={{ width: chatPanelWidth }}>
           <div className="market-right-panel-inner">
             <MarketPanel
-              messages={messages}
+              messages={messages as any}
               isLoading={isLoading}
               error={error}
             />
@@ -435,11 +497,11 @@ function MarketViewInner() {
               </div>
             )}
             <ChatInput
-              onSend={handleSendMessage}
+              onSend={handleSendMessage as any}
               isLoading={isLoading}
               mode={mode}
-              onModeChange={setMode}
-              workspaces={workspaces}
+              onModeChange={setMode as any}
+              workspaces={workspaces as any}
               selectedWorkspaceId={selectedWorkspaceId}
               onWorkspaceChange={setSelectedWorkspaceId}
               onCaptureChart={handleCaptureChartForContext}
@@ -476,11 +538,11 @@ function MarketViewInner() {
             transition: 'background 0.15s, border-color 0.15s',
             zIndex: 50,
           }}
-          onMouseEnter={(e) => {
+          onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.currentTarget.style.background = 'var(--color-accent-overlay)';
             e.currentTarget.style.borderColor = 'var(--color-accent-primary)';
           }}
-          onMouseLeave={(e) => {
+          onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.currentTarget.style.background = 'var(--color-accent-soft)';
             e.currentTarget.style.borderColor = 'var(--color-accent-overlay)';
           }}

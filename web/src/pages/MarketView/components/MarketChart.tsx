@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState, useImperativeHandle, forwardRef, useCallback } from 'react';
 import { createChart, ColorType, CrosshairMode, PriceScaleMode, LineType, LineStyle } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, SeriesType, LogicalRange, MouseEventParams } from 'lightweight-charts';
 import html2canvas from 'html2canvas';
 import './MarketChart.css';
 import { fetchStockData } from '../utils/api';
 import { calculateMA, calculateRSI, updateRSIIncremental } from '../utils/chartHelpers';
+import type { RSIState, OHLCDataPoint } from '../utils/chartHelpers';
 import {
   getChartTheme,
   INTERVALS, PRIMARY_INTERVAL_KEYS, INITIAL_LOAD_DAYS, SCROLL_CHUNK_DAYS,
@@ -15,6 +17,7 @@ import {
   EXT_COLOR_PRE, EXT_COLOR_POST,
   isUSEquity, supports1sInterval,
 } from '../utils/chartConstants';
+import type { ChartThemeColors, ChartDataPoint as ChartConstDataPoint } from '../utils/chartConstants';
 import { ExtendedHoursBgPrimitive } from '../utils/extendedHoursBg';
 import { useTheme } from '@/contexts/ThemeContext';
 import CrosshairTooltip from './CrosshairTooltip';
@@ -24,19 +27,76 @@ import { useChartOverlays } from '../hooks/useChartOverlays';
 import { SlidersHorizontal, Settings2, Maximize2, Minimize2, ChevronDown, Plus, Minus, RotateCcw, Menu } from 'lucide-react';
 
 import { loadPref, savePref } from '../utils/prefs';
+import type { SnapshotData } from '@/types/market';
+import type { BarData } from '../hooks/useMarketDataWS';
 
-function useClickOutside(ref, onClose) {
+interface ChartDataBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface TooltipState {
+  visible: boolean;
+  x: number;
+  y: number;
+  data: {
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume?: number;
+    maValues: Record<number, number>;
+    rsiValue: number | null;
+  } | null;
+}
+
+interface OverlayVisibility {
+  earnings: boolean;
+  grades: boolean;
+  priceTargets: boolean;
+  [key: string]: boolean;
+}
+
+interface MarketChartProps {
+  symbol: string;
+  interval?: string;
+  onIntervalChange?: (interval: string) => void;
+  onCapture?: () => void;
+  onStockMeta?: (meta: unknown) => void;
+  onLatestBar?: (bar: ChartDataBar) => void;
+  quoteData: Record<string, unknown> | null;
+  earningsData: unknown;
+  overlayData: Record<string, unknown> | null;
+  stockMeta: Record<string, unknown> | null;
+  liveTick: BarData | null;
+  wsStatus: string;
+  ginlixDataEnabled?: boolean;
+  snapshot: SnapshotData | null;
+}
+
+export interface MarketChartHandle {
+  captureChart: () => Promise<Blob | null>;
+  captureChartAsDataUrl: () => Promise<string | null>;
+  getChartMetadata: () => Record<string, unknown> | null;
+}
+
+function useClickOutside(ref: React.RefObject<HTMLElement | null>, onClose: (() => void) | null) {
   useEffect(() => {
     if (!onClose) return;
-    const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) onClose();
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [ref, onClose]);
 }
 
-const MarketChart = React.memo(forwardRef(({
+const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>(({
   symbol,
   interval = '1day',
   onIntervalChange,
@@ -53,49 +113,50 @@ const MarketChart = React.memo(forwardRef(({
   snapshot,
 }, ref) => {
   const { theme } = useTheme();
-  const ct = getChartTheme(theme);
-  const rootRef = useRef();
-  const chartContainerRef = useRef();
-  const rsiChartContainerRef = useRef();
-  const lightWrapperRef = useRef();
-  const chartRef = useRef();
-  const rsiChartRef = useRef();
-  const candlestickSeriesRef = useRef();
-  const rsiSeriesRef = useRef();
-  const volumeSeriesRef = useRef(null);
-  const maSeriesRefs = useRef({});
-  const baselineSeriesRef = useRef(null);
-  const extHoursBgRef = useRef(null);
-  const extCloseLineRef = useRef(null);
-  const currentExtTypeRef = useRef(null);
+  const ct = getChartTheme(theme as 'dark' | 'light');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const rsiChartContainerRef = useRef<HTMLDivElement>(null);
+  const lightWrapperRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const rsiChartRef = useRef<IChartApi | null>(null);
+  // TODO: type properly — lightweight-charts series types are complex generics
+  const candlestickSeriesRef = useRef<any>(null);
+  const rsiSeriesRef = useRef<any>(null);
+  const volumeSeriesRef = useRef<any>(null);
+  const maSeriesRefs = useRef<Record<number, any>>({});
+  const baselineSeriesRef = useRef<any>(null);
+  const extHoursBgRef = useRef<ExtendedHoursBgPrimitive | null>(null);
+  const extCloseLineRef = useRef<any>(null);
+  const currentExtTypeRef = useRef<string | null>(null);
   const quoteDataRef = useRef(quoteData);
   const snapshotRef = useRef(snapshot);
 
-  const [loading, setLoading] = useState(true);
-  const [scrollLoading, setScrollLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [lastUpdateTime, setLastUpdateTime] = useState(null);
-  const [rsiValue, setRsiValue] = useState(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [scrollLoading, setScrollLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
+  const [rsiValue, setRsiValue] = useState<string | null>(null);
 
   // MA / RSI config state (persisted)
-  const [enabledMaPeriods, setEnabledMaPeriods] = useState(() => loadPref('maPeriods', DEFAULT_ENABLED_MA));
-  const [rsiPeriod, setRsiPeriod] = useState(() => loadPref('rsiPeriod', 14));
-  const [maValues, setMaValues] = useState({});
+  const [enabledMaPeriods, setEnabledMaPeriods] = useState<number[]>(() => loadPref('maPeriods', DEFAULT_ENABLED_MA));
+  const [rsiPeriod, setRsiPeriod] = useState<number>(() => loadPref('rsiPeriod', 14));
+  const [maValues, setMaValues] = useState<Record<number, string>>({});
 
   // Chart mode: 'custom' (our lightweight-charts) or 'tradingview' (full TV widget) (persisted)
-  const [chartMode, setChartMode] = useState(() => loadPref('chartMode', 'custom'));
+  const [chartMode, setChartMode] = useState<string>(() => loadPref('chartMode', 'custom'));
 
   // Chart feature toggles (persisted)
-  const [priceScaleMode, setPriceScaleMode] = useState(() => loadPref('priceScaleMode', PriceScaleMode.Normal));
-  const [magnetMode, setMagnetMode] = useState(() => loadPref('magnetMode', false));
-  const [showBaseline, setShowBaseline] = useState(false);
-  const [annotationsVisible, setAnnotationsVisible] = useState(() => loadPref('annotationsVisible', false));
-  const [overlayVisibility, setOverlayVisibility] = useState(
+  const [priceScaleMode, setPriceScaleMode] = useState<number>(() => loadPref('priceScaleMode', PriceScaleMode.Normal));
+  const [magnetMode, setMagnetMode] = useState<boolean>(() => loadPref('magnetMode', false));
+  const [showBaseline, setShowBaseline] = useState<boolean>(false);
+  const [annotationsVisible, setAnnotationsVisible] = useState<boolean>(() => loadPref('annotationsVisible', false));
+  const [overlayVisibility, setOverlayVisibility] = useState<OverlayVisibility>(
     () => loadPref('overlayVisibility', { earnings: false, grades: false, priceTargets: false }),
   );
 
   // Responsive compact mode — based on actual chart container width, not viewport
-  const [isCompact, setIsCompact] = useState(false);
+  const [isCompact, setIsCompact] = useState<boolean>(false);
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
@@ -107,23 +168,23 @@ const MarketChart = React.memo(forwardRef(({
   }, []);
 
   // Toolbar dropdown state
-  const [indicatorsOpen, setIndicatorsOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [intervalsOpen, setIntervalsOpen] = useState(false);
-  const [viewOpen, setViewOpen] = useState(false);
-  const [disabledTooltip, setDisabledTooltip] = useState(null);
-  const disabledTooltipTimer = useRef(null);
-  const indicatorsDropdownRef = useRef(null);
-  const toolsDropdownRef = useRef(null);
-  const intervalsDropdownRef = useRef(null);
-  const viewDropdownRef = useRef(null);
+  const [indicatorsOpen, setIndicatorsOpen] = useState<boolean>(false);
+  const [toolsOpen, setToolsOpen] = useState<boolean>(false);
+  const [intervalsOpen, setIntervalsOpen] = useState<boolean>(false);
+  const [viewOpen, setViewOpen] = useState<boolean>(false);
+  const [disabledTooltip, setDisabledTooltip] = useState<string | null>(null);
+  const disabledTooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const indicatorsDropdownRef = useRef<HTMLDivElement>(null);
+  const toolsDropdownRef = useRef<HTMLDivElement>(null);
+  const intervalsDropdownRef = useRef<HTMLDivElement>(null);
+  const viewDropdownRef = useRef<HTMLDivElement>(null);
   useClickOutside(indicatorsDropdownRef, indicatorsOpen ? () => setIndicatorsOpen(false) : null);
   useClickOutside(toolsDropdownRef, toolsOpen ? () => setToolsOpen(false) : null);
   useClickOutside(intervalsDropdownRef, intervalsOpen ? () => setIntervalsOpen(false) : null);
   useClickOutside(viewDropdownRef, viewOpen ? () => setViewOpen(false) : null);
 
   // Crosshair tooltip state
-  const [tooltipState, setTooltipState] = useState({ visible: false, x: 0, y: 0, data: null });
+  const [tooltipState, setTooltipState] = useState<TooltipState>({ visible: false, x: 0, y: 0, data: null });
 
   // Refs for stable callbacks (avoid stale closures)
   const enabledMaPeriodsRef = useRef(DEFAULT_ENABLED_MA);
@@ -155,42 +216,42 @@ const MarketChart = React.memo(forwardRef(({
   useEffect(() => { ctRef.current = ct; }, [ct]);
 
   // RSI incremental-update refs
-  const rsiSmoothingRef = useRef(null);          // Wilder state { avgGain, avgLoss, lastClose, period }
-  const prevBarSmoothingRef = useRef(null);       // State *before* current bar (for same-bar re-updates)
-  const pendingRsiDataRef = useRef(null);         // Buffered { rsiData, smoothingState } when series isn't ready
-  const rsiDataMapRef = useRef(new Map());        // time→rsiValue for O(1) crosshair lookup
-  const isSyncingTimeScaleRef = useRef(false);    // Guard for bidirectional time-scale sync
+  const rsiSmoothingRef = useRef<RSIState | null>(null);          // Wilder state { avgGain, avgLoss, lastClose, period }
+  const prevBarSmoothingRef = useRef<RSIState | null>(null);       // State *before* current bar (for same-bar re-updates)
+  const pendingRsiDataRef = useRef<Array<{ time: number; value: number }> | null>(null);         // Buffered rsiData when series isn't ready
+  const rsiDataMapRef = useRef<Map<number, number>>(new Map());        // time->rsiValue for O(1) crosshair lookup
+  const isSyncingTimeScaleRef = useRef<boolean>(false);    // Guard for bidirectional time-scale sync
 
   // Track when the last WS live tick was applied (for REST polling fallback)
-  const lastLiveTickTimeRef = useRef(0);
-  const gapFillDoneRef = useRef(false);  // gap fill between REST data and first WS tick
-  const gapFillRetryRef = useRef(0);    // retry count for gap fill attempts
-  const gapFillInProgressRef = useRef(false);  // prevent concurrent gap fill fetches
+  const lastLiveTickTimeRef = useRef<number>(0);
+  const gapFillDoneRef = useRef<boolean>(false);  // gap fill between REST data and first WS tick
+  const gapFillRetryRef = useRef<number>(0);    // retry count for gap fill attempts
+  const gapFillInProgressRef = useRef<boolean>(false);  // prevent concurrent gap fill fetches
   // Aggregation buffer for building 1m candles from 1s WS ticks
-  const minuteAggRef = useRef({ time: 0, open: 0, high: 0, low: 0, close: 0, volume: 0 });
+  const minuteAggRef = useRef<ChartDataBar>({ time: 0, open: 0, high: 0, low: 0, close: 0, volume: 0 });
 
   // Refs for scroll-based loading
-  const allDataRef = useRef([]);
-  const oldestDateRef = useRef(null);
-  const fetchingRef = useRef(false);
-  const rangeChangeTimerRef = useRef(null);
-  const rangeUnsubRef = useRef(null);
+  const allDataRef = useRef<ChartDataBar[]>([]);
+  const oldestDateRef = useRef<number | null>(null);
+  const fetchingRef = useRef<boolean>(false);
+  const rangeChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rangeUnsubRef = useRef<(() => void) | null>(null);
 
   // Refs for staged loading and background prefetch
-  const stage2AbortRef = useRef(null);
-  const prefetchAbortRef = useRef(null);
-  const prefetchedDataRef = useRef(null);
-  const prefetchingRef = useRef(false);
+  const stage2AbortRef = useRef<AbortController | null>(null);
+  const prefetchAbortRef = useRef<AbortController | null>(null);
+  const prefetchedDataRef = useRef<{ data: ChartDataBar[]; anchorOldest: number } | null>(null);
+  const prefetchingRef = useRef<boolean>(false);
 
   // Chart data state for hooks
-  const [chartDataForHooks, setChartDataForHooks] = useState([]);
+  const [chartDataForHooks, setChartDataForHooks] = useState<ChartDataBar[]>([]);
 
   // --- Price lines via hook ---
-  const priceTargetsForAnnotations = overlayVisibility.priceTargets ? overlayData?.priceTargets : null;
+  const priceTargetsForAnnotations = overlayVisibility.priceTargets ? (overlayData?.priceTargets as any) : null;
   useChartAnnotations(candlestickSeriesRef, stockMeta, quoteData, priceTargetsForAnnotations, annotationsVisible, symbol);
 
   // --- Series markers via hook ---
-  useChartOverlays(candlestickSeriesRef, chartDataForHooks, earningsData, overlayData, overlayVisibility, symbol);
+  useChartOverlays(candlestickSeriesRef, chartDataForHooks as any, earningsData as any, overlayData as any, overlayVisibility as any, symbol);
 
   // --- Live tick updates from WS (1s and 1min intervals, custom/Light mode only) ---
   useEffect(() => {
@@ -325,7 +386,7 @@ const MarketChart = React.memo(forwardRef(({
 
     // Keep extended-hours background in sync with live bars
     if (ext && extHoursBgRef.current) {
-      extHoursBgRef.current.setRegions(computeExtendedHoursRegions(data));
+      extHoursBgRef.current.setRegions(computeExtendedHoursRegions(data as unknown as ChartConstDataPoint[]));
     }
 
     // Keep extended-hours price lines in sync with live bars
@@ -356,7 +417,7 @@ const MarketChart = React.memo(forwardRef(({
 
   // Temporarily reveal the hidden Light chart for capture, then restore.
   // Since it's behind the TV widget (z-index: -1), no visual flash occurs.
-  const revealForCapture = useCallback(async (fn) => {
+  const revealForCapture = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
     const wrapper = lightWrapperRef.current;
     const needsReveal = wrapper && wrapper.classList.contains('light-chart-hidden');
     if (needsReveal) wrapper.style.visibility = 'visible';
@@ -386,7 +447,7 @@ const MarketChart = React.memo(forwardRef(({
       if (!chartContainerRef.current) return null;
       return revealForCapture(async () => {
         try {
-          const canvas = await html2canvas(chartContainerRef.current, {
+          const canvas = await html2canvas(chartContainerRef.current!, {
             backgroundColor: ct.bg,
             scale: 2,
             logging: false,
@@ -416,7 +477,7 @@ const MarketChart = React.memo(forwardRef(({
         const offscreen = document.createElement('canvas');
         offscreen.width = Math.max(mainW, rsiW);
         offscreen.height = totalH;
-        const ctx = offscreen.getContext('2d');
+        const ctx = offscreen.getContext('2d')!;
         ctx.fillStyle = ct.bg;
         ctx.fillRect(0, 0, offscreen.width, offscreen.height);
         ctx.drawImage(mainCanvas, 0, 0);
@@ -435,7 +496,7 @@ const MarketChart = React.memo(forwardRef(({
       const firstTime = data[0].time;
       const lastTime = data[data.length - 1].time;
       // Chart timestamps are already ET-shifted, so UTC interpretation gives the ET date
-      const formatDate = (ts) => new Date(ts * 1000).toISOString().split('T')[0];
+      const formatDate = (ts: number) => new Date(ts * 1000).toISOString().split('T')[0];
 
       const enabledMAs = enabledMaPeriodsRef.current;
       const maInfo = enabledMAs
@@ -470,7 +531,7 @@ const MarketChart = React.memo(forwardRef(({
   }));
 
   // --- Extended-hours price lines (close line + colored current-price line) ---
-  const syncExtendedHoursLines = useCallback((lastBarTime) => {
+  const syncExtendedHoursLines = useCallback((lastBarTime: number) => {
     const series = candlestickSeriesRef.current;
     if (!series) return;
 
@@ -497,9 +558,9 @@ const MarketChart = React.memo(forwardRef(({
         const snap = snapshotRef.current;
         // Derive today's 4 PM close: previous_close (yesterday) + regular_trading_change
         const prevClose = snap?.previous_close;
-        const regChange = snap?.regular_trading_change;
+        const regChange = snap?.regular_trading_change as number | undefined;
         const closePrice = (prevClose != null && regChange != null)
-          ? prevClose + regChange
+          ? (prevClose as number) + regChange
           : null;
         if (closePrice != null) {
           extCloseLineRef.current = series.createPriceLine({
@@ -533,7 +594,7 @@ const MarketChart = React.memo(forwardRef(({
   }, [snapshot?.previous_close, snapshot?.regular_trading_change, syncExtendedHoursLines]);
 
   // --- Update series data helper (used by both initial load and scroll load) ---
-  const updateSeriesData = useCallback((data) => {
+  const updateSeriesData = useCallback((data: ChartDataBar[]) => {
     const ct = ctRef.current;
     const applyExt = isUSEquity(symbolRef.current) && EXTENDED_HOURS_INTERVALS.has(intervalRef.current);
 
@@ -560,7 +621,7 @@ const MarketChart = React.memo(forwardRef(({
     // Extended-hours background shading
     if (extHoursBgRef.current) {
       if (applyExt) {
-        extHoursBgRef.current.setRegions(computeExtendedHoursRegions(data));
+        extHoursBgRef.current.setRegions(computeExtendedHoursRegions(data as unknown as ChartConstDataPoint[]));
         extHoursBgRef.current.setColors({ pre: ct.extBgPre, post: ct.extBgPost });
       } else {
         extHoursBgRef.current.setRegions([]);
@@ -574,12 +635,12 @@ const MarketChart = React.memo(forwardRef(({
 
     // All MAs — compute all enabled, clear disabled
     const enabled = enabledMaPeriodsRef.current;
-    const newMaValues = {};
+    const newMaValues: Record<number, string> = {};
     MA_CONFIGS.forEach(({ period }) => {
       const series = maSeriesRefs.current[period];
       if (!series) return;
       if (enabled.includes(period)) {
-        const maData = calculateMA(data, period);
+        const maData = calculateMA(data as unknown as OHLCDataPoint[], period);
         series.setData(maData);
         const last = maData[maData.length - 1]?.value;
         if (last != null) newMaValues[period] = last.toFixed(2);
@@ -591,7 +652,7 @@ const MarketChart = React.memo(forwardRef(({
 
     // RSI — compute and store smoothing state for incremental updates
     const currentRsiPeriod = rsiPeriodRef.current;
-    const { data: rsiData, state: rsiState } = calculateRSI(data, currentRsiPeriod);
+    const { data: rsiData, state: rsiState } = calculateRSI(data as unknown as OHLCDataPoint[], currentRsiPeriod);
 
     // Always update smoothing state and lookup map regardless of series readiness
     rsiSmoothingRef.current = rsiState;
@@ -619,7 +680,7 @@ const MarketChart = React.memo(forwardRef(({
   }, []);
 
   // --- Merge prepended data helper (shared by scroll-load & MA backfill) ---
-  const mergePrependedData = (newData) => {
+  const mergePrependedData = (newData: ChartDataBar[] | null | undefined) => {
     if (!newData?.length) return;
     const prevLen = allDataRef.current.length;
     const existingMap = new Map(allDataRef.current.map(d => [d.time, d]));
@@ -637,7 +698,7 @@ const MarketChart = React.memo(forwardRef(({
   };
 
   // --- Fetch older bars before current oldest and merge into series ---
-  const fetchAndPrepend = async (days) => {
+  const fetchAndPrepend = async (days: number) => {
     if (!oldestDateRef.current) return;
     const sym = symbol;
     const oldest = new Date(oldestDateRef.current * 1000);
@@ -724,7 +785,7 @@ const MarketChart = React.memo(forwardRef(({
   }, [symbol, interval, updateSeriesData]);
 
   // --- Backfill older data when a newly-enabled MA needs more bars ---
-  const backfillForMaPeriod = useCallback(async (period) => {
+  const backfillForMaPeriod = useCallback(async (period: number) => {
     const currentLen = allDataRef.current.length;
     if (currentLen >= period || fetchingRef.current || !oldestDateRef.current) return;
     fetchingRef.current = true;
@@ -740,7 +801,7 @@ const MarketChart = React.memo(forwardRef(({
   }, [symbol, interval, updateSeriesData]);
 
   // --- Toggle handlers ---
-  const handleToggleMa = useCallback((period) => {
+  const handleToggleMa = useCallback((period: number) => {
     const isCurrentlyEnabled = enabledMaPeriodsRef.current.includes(period);
     if (!isCurrentlyEnabled && allDataRef.current.length < period) {
       backfillForMaPeriod(period);
@@ -750,7 +811,7 @@ const MarketChart = React.memo(forwardRef(({
     );
   }, [backfillForMaPeriod]);
 
-  const handleChangeRsiPeriod = useCallback((period) => {
+  const handleChangeRsiPeriod = useCallback((period: number) => {
     setRsiPeriod(period);
   }, []);
 
@@ -786,14 +847,14 @@ const MarketChart = React.memo(forwardRef(({
         borderColor: t0.grid,
         timeVisible: true,
         secondsVisible: false,
-        handleScroll: {
-          mouseWheel: true,
-          pressedMouseMove: true,
-          horzTouchDrag: true,
-          vertTouchDrag: false,
-        },
       },
-    });
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+    } as any);
     chartRef.current = chart;
 
     candlestickSeriesRef.current = chart.addCandlestickSeries({
@@ -821,7 +882,7 @@ const MarketChart = React.memo(forwardRef(({
     MA_CONFIGS.forEach(({ period, color }) => {
       maSeriesRefs.current[period] = chart.addLineSeries({
         color,
-        lineWidth: 1.5,
+        lineWidth: 1.5 as any,
         lineType: LineType.Curved,
         title: '',
         lastValueVisible: false,
@@ -830,38 +891,38 @@ const MarketChart = React.memo(forwardRef(({
     });
 
     // Subscribe to crosshair move for tooltip
-    chart.subscribeCrosshairMove((param) => {
+    chart.subscribeCrosshairMove((param: MouseEventParams) => {
       if (!param.time || !param.point) {
         setTooltipState((prev) => prev.visible ? { visible: false, x: 0, y: 0, data: null } : prev);
         return;
       }
-      const candleData = param.seriesData.get(candlestickSeriesRef.current);
+      const candleData = param.seriesData.get(candlestickSeriesRef.current) as any;
       if (!candleData) {
         setTooltipState((prev) => prev.visible ? { visible: false, x: 0, y: 0, data: null } : prev);
         return;
       }
 
       // Gather MA values from crosshair
-      const maVals = {};
+      const maVals: Record<number, number> = {};
       const enabled = enabledMaPeriodsRef.current;
       MA_CONFIGS.forEach(({ period }) => {
         if (!enabled.includes(period)) return;
         const s = maSeriesRefs.current[period];
         if (!s) return;
-        const val = param.seriesData.get(s);
+        const val = param.seriesData.get(s) as any;
         if (val && val.value != null) maVals[period] = val.value;
       });
 
       // Gather RSI value via lookup map (Bug 3 fix — rsiSeries is on a separate chart instance)
-      const candleTime = candleData.time ?? param.time;
-      let rsiVal = rsiDataMapRef.current.get(candleTime) ?? null;
+      const candleTime = (candleData.time ?? param.time) as number;
+      const rsiVal = rsiDataMapRef.current.get(candleTime) ?? null;
 
       setTooltipState({
         visible: true,
         x: param.point.x,
         y: param.point.y,
         data: {
-          time: candleData.time ?? param.time,
+          time: candleTime,
           open: candleData.open,
           high: candleData.high,
           low: candleData.low,
@@ -940,7 +1001,7 @@ const MarketChart = React.memo(forwardRef(({
         rangeUnsubRef.current();
         rangeUnsubRef.current = null;
       }
-      clearTimeout(rangeChangeTimerRef.current);
+      if (rangeChangeTimerRef.current) clearTimeout(rangeChangeTimerRef.current);
 
       extHoursBgRef.current = null;
       extCloseLineRef.current = null;
@@ -948,7 +1009,7 @@ const MarketChart = React.memo(forwardRef(({
       candlestickSeriesRef.current = null;
       volumeSeriesRef.current = null;
       baselineSeriesRef.current = null;
-      Object.keys(maSeriesRefs.current).forEach(k => { maSeriesRefs.current[k] = null; });
+      Object.keys(maSeriesRefs.current).forEach(k => { maSeriesRefs.current[Number(k)] = null; });
       rsiSeriesRef.current = null;
 
       if (chartRef.current) {
@@ -1072,8 +1133,8 @@ const MarketChart = React.memo(forwardRef(({
         if (s) s.applyOptions({ visible: false });
       });
 
-      const prevClose = quoteData?.previousClose || quoteData?.open;
-      const basePrice = prevClose || (allDataRef.current.length > 0 ? allDataRef.current[0].open : 0);
+      const prevClose = (quoteData?.previousClose || quoteData?.open) as number | undefined;
+      const basePrice: number = prevClose || (allDataRef.current.length > 0 ? allDataRef.current[0].open : 0);
 
       if (!baselineSeriesRef.current) {
         baselineSeriesRef.current = chart.addBaselineSeries({
@@ -1226,8 +1287,8 @@ const MarketChart = React.memo(forwardRef(({
 
           // Subscribe to visible range changes for scroll-based loading (debounced)
           if (chartRef.current) {
-            const unsubscribe = chartRef.current.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-              clearTimeout(rangeChangeTimerRef.current);
+            const unsubscribe = chartRef.current.timeScale().subscribeVisibleLogicalRangeChange((range: LogicalRange | null) => {
+              if (rangeChangeTimerRef.current) clearTimeout(rangeChangeTimerRef.current);
               rangeChangeTimerRef.current = setTimeout(() => {
                 if (!range) return;
                 // Prefetch: start loading next chunk early (150 bars from left)
@@ -1239,7 +1300,7 @@ const MarketChart = React.memo(forwardRef(({
                   handleScrollLoadMore();
                 }
               }, RANGE_CHANGE_DEBOUNCE_MS);
-            });
+            }) as unknown as (() => void);
             rangeUnsubRef.current = unsubscribe;
           }
 
@@ -1268,13 +1329,13 @@ const MarketChart = React.memo(forwardRef(({
                       { signal: stage2Abort.signal });
                     if (stage2Abort.signal.aborted || symbolRef.current !== capturedSym) return;
                     if (gapResult?.data?.length > 0) {
-                      const gapBars = gapResult.data.filter(b => b.time < oldestDateRef.current);
+                      const gapBars = gapResult.data.filter(b => b.time < oldestDateRef.current!);
                       if (gapBars.length > 0) {
                         mergePrependedData(gapBars);
                       }
                     }
-                  } catch (err) {
-                    if (err?.name !== 'AbortError' && err?.name !== 'CanceledError') {
+                  } catch (err: unknown) {
+                    if (err instanceof Error && err.name !== 'AbortError' && err.name !== 'CanceledError') {
                       console.warn('Today gap fill failed:', err);
                     }
                   }
@@ -1284,7 +1345,7 @@ const MarketChart = React.memo(forwardRef(({
               if (stage2Abort.signal.aborted || symbolRef.current !== capturedSym) return;
 
               // --- Backwards backfill: fetch prior days ---
-              const oldest = new Date(oldestDateRef.current * 1000);
+              const oldest = new Date(oldestDateRef.current! * 1000);
               const to = new Date(oldest);
               to.setDate(to.getDate() - 1);
               const from = new Date(to);
@@ -1301,8 +1362,8 @@ const MarketChart = React.memo(forwardRef(({
                 if (result?.data?.length > 0) {
                   mergePrependedData(result.data);
                 }
-              } catch (err) {
-                if (err?.name !== 'AbortError' && err?.name !== 'CanceledError') {
+              } catch (err: unknown) {
+                if (err instanceof Error && err.name !== 'AbortError' && err.name !== 'CanceledError') {
                   console.warn('Stage 2 backfill failed:', err);
                 }
               }
@@ -1332,7 +1393,7 @@ const MarketChart = React.memo(forwardRef(({
           setError(result?.error || fallbackMsg);
           if (typeof onStockMeta === 'function') onStockMeta(null);
         }
-      } catch (err) {
+      } catch (err: unknown) {
         if (abortController.signal.aborted) return;
         // Silently downgrade 1s → 1min when ginlix-data unavailable or symbol ineligible
         if (interval === '1s' && (!ginlixDataEnabled || !supports1sInterval(symbol))) {
@@ -1341,7 +1402,7 @@ const MarketChart = React.memo(forwardRef(({
         }
         console.error('Failed to load stock data:', err);
         clearChartSeries();
-        setError(err?.message || 'Failed to load data');
+        setError(err instanceof Error ? err.message : 'Failed to load data');
       } finally {
         if (!abortController.signal.aborted) {
           setLoading(false);
@@ -1489,11 +1550,11 @@ const MarketChart = React.memo(forwardRef(({
     setAnnotationsVisible((prev) => !prev);
   }, []);
 
-  const handleToggleOverlay = useCallback((key) => {
+  const handleToggleOverlay = useCallback((key: string) => {
     setOverlayVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  const handleTogglePriceScale = useCallback((mode) => {
+  const handleTogglePriceScale = useCallback((mode: number) => {
     setPriceScaleMode((prev) => prev === mode ? PriceScaleMode.Normal : mode);
   }, []);
 
@@ -1628,7 +1689,7 @@ const MarketChart = React.memo(forwardRef(({
                         ? '1s data is not available'
                         : '1s interval is only available for US stocks';
                       setDisabledTooltip(msg);
-                      clearTimeout(disabledTooltipTimer.current);
+                      if (disabledTooltipTimer.current) clearTimeout(disabledTooltipTimer.current);
                       disabledTooltipTimer.current = setTimeout(() => setDisabledTooltip(null), 2000);
                       return;
                     }

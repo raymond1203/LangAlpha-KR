@@ -3,10 +3,48 @@ import { Info, Sunrise, Sunset } from 'lucide-react';
 import './StockHeader.css';
 import { isUSEquity, EXT_COLOR_PRE, EXT_COLOR_POST } from '../utils/chartConstants';
 import { getExtendedHoursInfo } from '@/lib/marketUtils';
+import type { StockInfo, RealTimePrice, SnapshotData } from '@/types/market';
+import type { PriceUpdate, ConnectionStatus, DataLevel } from '../hooks/useMarketDataWS';
 
-const EXCHANGE_LABELS = { HK: 'HK', SS: 'SH', SZ: 'SZ', L: 'LON', T: 'TYO', TO: 'TSX', AX: 'ASX' };
+interface ChartMeta {
+  dateRange?: { from: string; to: string };
+  dataPoints?: number;
+  [key: string]: unknown;
+}
 
-function getDelayedLabel(sym) {
+interface QuoteData {
+  previousClose?: number;
+  open?: number;
+  yearHigh?: number;
+  yearLow?: number;
+  avgVolume?: number;
+  [key: string]: unknown;
+}
+
+interface DisplayOverride {
+  name?: string;
+  exchange?: string;
+}
+
+interface StockHeaderProps {
+  symbol: string;
+  stockInfo: StockInfo | null;
+  realTimePrice: PriceUpdate | RealTimePrice | null;
+  chartMeta: ChartMeta | null;
+  displayOverride: DisplayOverride | null;
+  onToggleOverview: () => void;
+  wsStatus: ConnectionStatus;
+  wsHasData?: boolean;
+  wsDataLevel?: DataLevel;
+  ginlixDataEnabled?: boolean;
+  quoteData: QuoteData | null;
+  marketStatus: Record<string, unknown> | null;
+  snapshot: SnapshotData | null;
+}
+
+const EXCHANGE_LABELS: Record<string, string> = { HK: 'HK', SS: 'SH', SZ: 'SZ', L: 'LON', T: 'TYO', TO: 'TSX', AX: 'ASX' };
+
+function getDelayedLabel(sym: string | null | undefined): string {
   if (!sym) return 'Delayed';
   const dotIdx = sym.lastIndexOf('.');
   if (dotIdx === -1) return 'Delayed';
@@ -14,8 +52,8 @@ function getDelayedLabel(sym) {
   return EXCHANGE_LABELS[suffix] ? `${EXCHANGE_LABELS[suffix]} Delayed` : 'Delayed';
 }
 
-const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta, displayOverride, onToggleOverview, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled = true, quoteData, marketStatus, snapshot }) => {
-  const formatNumber = (num) => {
+const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta, displayOverride, onToggleOverview, wsStatus, wsHasData = false, wsDataLevel = null, ginlixDataEnabled = true, quoteData, marketStatus, snapshot }: StockHeaderProps) => {
+  const formatNumber = (num: number | null | undefined): string => {
     if (num == null || (num !== 0 && !num)) return '—';
     if (num >= 1e12) return (num / 1e12).toFixed(2) + 'T';
     if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
@@ -51,14 +89,14 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta, displayOverr
   // Live = WS connected AND actually delivering aggregate data for this symbol
   const usSymbol = isUSEquity(symbol);
   const isLive = wsStatus === 'connected' && usSymbol && wsHasData;
-  const [tickTime, setTickTime] = useState(null);
+  const [tickTime, setTickTime] = useState<Date | null>(null);
   useEffect(() => {
-    if (realTimePrice?.timestamp) {
-      setTickTime(new Date(realTimePrice.timestamp));
+    if ((realTimePrice as PriceUpdate)?.timestamp) {
+      setTickTime(new Date((realTimePrice as PriceUpdate).timestamp));
     }
-  }, [realTimePrice?.timestamp]);
+  }, [(realTimePrice as PriceUpdate)?.timestamp]);
 
-  const formatTickTime = (date) => {
+  const formatTickTime = (date: Date | null): string | null => {
     if (!date) return null;
     return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
@@ -116,9 +154,9 @@ const StockHeader = ({ symbol, stockInfo, realTimePrice, chartMeta, displayOverr
                 {change >= 0 ? '+' : ''}{change.toFixed(2)} ({extendedChangePercent >= 0 ? '+' : ''}{extendedChangePercent.toFixed(2)}%)
               </div>
               {/* Regular session close — during after-hours show today's 4 PM close, during pre-market show prev close */}
-              {extendedType === 'post' && previousClose != null && snapshot?.regular_trading_change != null ? (
+              {extendedType === 'post' && previousClose != null && (snapshot?.regular_trading_change as number | undefined) != null ? (
                 <div style={{ fontSize: 11, marginTop: 2, color: 'var(--color-text-tertiary, #8b8fa3)' }}>
-                  Close {(previousClose + snapshot.regular_trading_change).toFixed(2)}
+                  Close {(previousClose + (snapshot!.regular_trading_change as number)).toFixed(2)}
                 </div>
               ) : extendedType === 'pre' && previousClose != null ? (
                 <div style={{ fontSize: 11, marginTop: 2, color: 'var(--color-text-tertiary, #8b8fa3)' }}>

@@ -1,10 +1,37 @@
-import { useEffect } from 'react';
+import { useEffect, type RefObject } from 'react';
+import type { ISeriesApi, Time } from 'lightweight-charts';
+import type { ChartDataPoint } from '@/types/market';
+
+interface EarningsEntry {
+  date?: string;
+  fiscalDateEnding?: string;
+  actualEarningResult?: number;
+  estimatedEarning?: number;
+  [key: string]: unknown;
+}
+
+interface GradeEntry {
+  date?: string;
+  action?: string;
+  [key: string]: unknown;
+}
+
+interface OverlayData {
+  grades?: GradeEntry[];
+  [key: string]: unknown;
+}
+
+interface OverlayVisibility {
+  earnings?: boolean;
+  grades?: boolean;
+  [key: string]: boolean | undefined;
+}
 
 /**
  * Binary search to find the nearest chart bar time for a given date string.
  * Returns the closest time that exists in chartData.
  */
-function snapToNearestBar(chartData, dateStr) {
+function snapToNearestBar(chartData: ChartDataPoint[], dateStr: string): number | null {
   if (!chartData || chartData.length === 0) return null;
 
   // Convert date string to unix timestamp (seconds)
@@ -34,7 +61,14 @@ function snapToNearestBar(chartData, dateStr) {
  * Manages series markers on the candlestick series.
  * Combines earnings surprises and analyst grade changes into markers.
  */
-export function useChartOverlays(candlestickSeriesRef, chartData, earningsData, overlayData, overlayVisibility, symbol) {
+export function useChartOverlays(
+  candlestickSeriesRef: RefObject<ISeriesApi<'Candlestick'> | null>,
+  chartData: ChartDataPoint[] | null,
+  earningsData: EarningsEntry[] | null,
+  overlayData: OverlayData | null,
+  overlayVisibility: OverlayVisibility | null,
+  symbol: string | null
+): void {
   useEffect(() => {
     const series = candlestickSeriesRef.current;
     if (!series || !chartData || chartData.length === 0) {
@@ -44,11 +78,11 @@ export function useChartOverlays(candlestickSeriesRef, chartData, earningsData, 
       return;
     }
 
-    const markers = [];
+    const markers: Array<{ time: Time; position: 'aboveBar' | 'belowBar'; shape: 'arrowUp' | 'arrowDown'; color: string; text: string }> = [];
 
     // Earnings markers
     if (overlayVisibility?.earnings && earningsData && Array.isArray(earningsData)) {
-      earningsData.forEach((e) => {
+      earningsData.forEach((e: EarningsEntry) => {
         const date = e.date || e.fiscalDateEnding;
         if (!date) return;
         const time = snapToNearestBar(chartData, date);
@@ -59,7 +93,7 @@ export function useChartOverlays(candlestickSeriesRef, chartData, earningsData, 
           : true;
 
         markers.push({
-          time,
+          time: time as Time,
           position: isBeat ? 'belowBar' : 'aboveBar',
           shape: isBeat ? 'arrowUp' : 'arrowDown',
           color: isBeat ? '#10b981' : '#ef4444',
@@ -70,7 +104,7 @@ export function useChartOverlays(candlestickSeriesRef, chartData, earningsData, 
 
     // Grade change markers
     if (overlayVisibility?.grades && overlayData?.grades && Array.isArray(overlayData.grades)) {
-      overlayData.grades.forEach((g) => {
+      overlayData.grades.forEach((g: GradeEntry) => {
         const date = g.date;
         if (!date) return;
         const time = snapToNearestBar(chartData, date);
@@ -78,7 +112,7 @@ export function useChartOverlays(candlestickSeriesRef, chartData, earningsData, 
 
         const isUpgrade = g.action === 'upgrade' || g.action === 'Upgrade';
         markers.push({
-          time,
+          time: time as Time,
           position: isUpgrade ? 'belowBar' : 'aboveBar',
           shape: isUpgrade ? 'arrowUp' : 'arrowDown',
           color: isUpgrade ? '#22d3ee' : '#f87171',
@@ -88,7 +122,7 @@ export function useChartOverlays(candlestickSeriesRef, chartData, earningsData, 
     }
 
     // Sort markers by time (required by lightweight-charts)
-    markers.sort((a, b) => a.time - b.time);
+    markers.sort((a, b) => (a.time as number) - (b.time as number));
 
     try {
       series.setMarkers(markers);

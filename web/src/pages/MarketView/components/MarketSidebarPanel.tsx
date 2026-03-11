@@ -11,7 +11,36 @@ import { getExtendedHoursInfo } from '@/lib/marketUtils';
 import { EXT_COLOR_PRE, EXT_COLOR_POST } from '../utils/chartConstants';
 import './MarketSidebarPanel.css';
 
-function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
+interface SidebarRow {
+  symbol: string;
+  price: number;
+  previousClose?: number | null;
+  isPositive: boolean;
+  changePercent?: number;
+  unrealizedPlPercent?: number;
+  watchlist_item_id?: string;
+  user_portfolio_id?: string;
+  earlyTradingChangePercent?: number | null;
+  lateTradingChangePercent?: number | null;
+  early_trading_change_percent?: number | null;
+  late_trading_change_percent?: number | null;
+  [key: string]: unknown;
+}
+
+interface DeleteConfirmState {
+  open: boolean;
+  title: string;
+  message: string;
+  onConfirm: (() => Promise<void>) | null;
+}
+
+interface MarketSidebarPanelProps {
+  activeSymbol: string | null;
+  onSymbolClick?: (symbol: string) => void;
+  marketStatus: Record<string, unknown> | null;
+}
+
+function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }: MarketSidebarPanelProps) {
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState('watchlist');
@@ -36,7 +65,7 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
     return () => { if (symbols.length) wsUnsubscribe(symbols); };
   }, [sidebarSymbolsKey, wsSubscribe, wsUnsubscribe]);
 
-  const [deleteConfirm, setDeleteConfirm] = useState({
+  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>({
     open: false,
     title: '',
     message: '',
@@ -44,8 +73,8 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
   });
 
   const handlePortfolioDelete = useCallback(
-    (holdingId) => {
-      setDeleteConfirm(portfolio.handleDelete(holdingId));
+    (holdingId: string) => {
+      setDeleteConfirm(portfolio.handleDelete(holdingId) as DeleteConfirmState);
     },
     [portfolio.handleDelete]
   );
@@ -55,25 +84,25 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
     setDeleteConfirm((p) => ({ ...p, open: false }));
   }, [deleteConfirm.onConfirm]);
 
-  const formatPrice = (price) => {
+  const formatPrice = (price: number | null | undefined): string => {
     if (price == null || price === 0) return '--';
     return Number(price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  const formatChange = (val) => {
+  const formatChange = (val: number | null | undefined): string => {
     if (val == null) return '--';
     const sign = val >= 0 ? '+' : '';
     return `${sign}${val.toFixed(2)}%`;
   };
 
-  const changeClass = (isPositive, val) => {
+  const changeClass = (isPositive: boolean, val: number | null | undefined): string => {
     if (val == null || val === 0) return 'market-sidebar-row-change--neutral';
     return isPositive ? 'market-sidebar-row-change--positive' : 'market-sidebar-row-change--negative';
   };
 
-  const getExtendedHours = (row) => getExtendedHoursInfo(marketStatus, row, { shortLabels: true });
+  const getExtendedHours = (row: SidebarRow) => getExtendedHoursInfo(marketStatus as Record<string, unknown> & { market?: string; afterHours?: boolean; earlyHours?: boolean }, row, { shortLabels: true });
 
-  const renderRows = (items, keyField, changeField, onDelete) => {
+  const renderRows = (items: SidebarRow[], keyField: string, changeField: string, onDelete: (id: string) => void) => {
     return items.map((row) => {
       const isActive = activeSymbol && row.symbol === activeSymbol.toUpperCase();
       const { extPct, extType } = getExtendedHours(row);
@@ -81,14 +110,14 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
       const mainPrice = extType && row.previousClose != null ? row.previousClose : row.price;
       return (
         <div
-          key={row[keyField]}
+          key={row[keyField] as string}
           className={`market-sidebar-row${isActive ? ' market-sidebar-row--active' : ''}`}
           onClick={() => onSymbolClick?.(row.symbol)}
         >
           <span className="market-sidebar-row-symbol">{row.symbol}</span>
           <span className="market-sidebar-row-price">{formatPrice(mainPrice)}</span>
-          <span className={`market-sidebar-row-change ${changeClass(row.isPositive, row[changeField])}`}>
-            {formatChange(row[changeField])}
+          <span className={`market-sidebar-row-change ${changeClass(row.isPositive, row[changeField] as number | null | undefined)}`}>
+            {formatChange(row[changeField] as number | null | undefined)}
             {extType && extPct != null && (
               <span className="market-sidebar-row-ext" style={{ display: 'inline-flex', alignItems: 'center', gap: 2, color: extType === 'pre' ? EXT_COLOR_PRE : EXT_COLOR_POST }}>
                 {extType === 'pre' ? <Sunrise size={10} /> : <Sunset size={10} />}
@@ -99,7 +128,7 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
           <span className="market-sidebar-row-actions">
             <button
               className="market-sidebar-row-delete"
-              onClick={(e) => { e.stopPropagation(); onDelete(row[keyField]); }}
+              onClick={(e: React.MouseEvent) => { e.stopPropagation(); onDelete(row[keyField] as string); }}
               title="Remove"
             >
               <X size={12} />
@@ -162,13 +191,13 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
         <AddWatchlistItemDialog
           open={watchlist.modalOpen}
           onClose={() => watchlist.setModalOpen(false)}
-          onAdd={watchlist.handleAdd}
-          watchlistId={watchlist.currentWatchlistId}
+          onAdd={watchlist.handleAdd as any}
+          watchlistId={watchlist.currentWatchlistId ?? undefined}
         />
         <AddPortfolioHoldingDialog
           open={portfolio.modalOpen}
           onClose={() => portfolio.setModalOpen(false)}
-          onAdd={portfolio.handleAdd}
+          onAdd={portfolio.handleAdd as any}
         />
       </div>
     );
@@ -182,7 +211,7 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
         message={deleteConfirm.message}
         confirmLabel="Delete"
         onConfirm={runDeleteConfirm}
-        onOpenChange={(open) => !open && setDeleteConfirm((p) => ({ ...p, open: false }))}
+        onOpenChange={(open: boolean) => !open && setDeleteConfirm((p) => ({ ...p, open: false }))}
       />
 
       {/* Tab toggle */}
@@ -242,8 +271,8 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
               </div>
             )
             : isWatchlist
-              ? renderRows(currentRows, 'watchlist_item_id', 'changePercent', watchlist.handleDelete)
-              : renderRows(currentRows, 'user_portfolio_id', 'unrealizedPlPercent', handlePortfolioDelete)}
+              ? renderRows(currentRows as SidebarRow[], 'watchlist_item_id', 'changePercent', watchlist.handleDelete)
+              : renderRows(currentRows as SidebarRow[], 'user_portfolio_id', 'unrealizedPlPercent', handlePortfolioDelete)}
       </div>
 
       {/* Footer */}
@@ -262,13 +291,13 @@ function MarketSidebarPanel({ activeSymbol, onSymbolClick, marketStatus }) {
       <AddWatchlistItemDialog
         open={watchlist.modalOpen}
         onClose={() => watchlist.setModalOpen(false)}
-        onAdd={watchlist.handleAdd}
-        watchlistId={watchlist.currentWatchlistId}
+        onAdd={watchlist.handleAdd as any}
+        watchlistId={watchlist.currentWatchlistId ?? undefined}
       />
       <AddPortfolioHoldingDialog
         open={portfolio.modalOpen}
         onClose={() => portfolio.setModalOpen(false)}
-        onAdd={portfolio.handleAdd}
+        onAdd={portfolio.handleAdd as any}
       />
     </div>
   );

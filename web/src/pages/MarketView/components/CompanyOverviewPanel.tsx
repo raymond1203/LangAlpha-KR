@@ -15,7 +15,55 @@ const GREEN = 'var(--color-profit)';
 const RED = 'var(--color-loss)';
 const TEXT_COLOR = 'var(--color-text-secondary)';
 
-const formatNumber = (num) => {
+interface QuoteData {
+  price?: number;
+  change?: number;
+  changePct?: number;
+  open?: number;
+  previousClose?: number;
+  dayLow?: number;
+  dayHigh?: number;
+  yearLow?: number;
+  yearHigh?: number;
+  volume?: number;
+  marketCap?: number;
+  pe?: number;
+  eps?: number;
+}
+
+// TODO: type properly once MarketDataCharts exports its prop types
+interface OverviewData {
+  symbol?: string;
+  name?: string;
+  quote?: QuoteData;
+  performance?: unknown;
+  analystRatings?: unknown;
+  quarterlyFundamentals?: unknown;
+  earningsSurprises?: unknown;
+  cashFlow?: unknown;
+  revenueByProduct?: unknown;
+  revenueByGeo?: unknown;
+  [key: string]: unknown;
+}
+
+interface QuoteStatProps {
+  label: string;
+  value: string;
+}
+
+interface QuoteSummaryProps {
+  data: OverviewData;
+}
+
+interface CompanyOverviewPanelProps {
+  symbol: string;
+  visible: boolean;
+  onClose: () => void;
+  data: OverviewData | null;
+  loading: boolean;
+}
+
+const formatNumber = (num: number | null | undefined): string => {
   if (num == null) return 'N/A';
   if (Math.abs(num) >= 1e12) return `$${(num / 1e12).toFixed(2)}T`;
   if (Math.abs(num) >= 1e9) return `$${(num / 1e9).toFixed(2)}B`;
@@ -24,7 +72,7 @@ const formatNumber = (num) => {
   return typeof num === 'number' ? `$${num.toFixed(2)}` : String(num);
 };
 
-function QuoteStat({ label, value }) {
+function QuoteStat({ label, value }: QuoteStatProps) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
       <span style={{ fontSize: 12, color: TEXT_COLOR, opacity: 0.7 }}>{label}</span>
@@ -33,7 +81,7 @@ function QuoteStat({ label, value }) {
   );
 }
 
-function QuoteSummary({ data }) {
+function QuoteSummary({ data }: QuoteSummaryProps) {
   const { symbol, name, quote } = data;
   if (!quote) return null;
 
@@ -73,7 +121,7 @@ function QuoteSummary({ data }) {
   );
 }
 
-export default function CompanyOverviewPanel({ symbol, visible, onClose, data, loading }) {
+export default function CompanyOverviewPanel({ symbol, visible, onClose, data, loading }: CompanyOverviewPanelProps) {
   if (!visible) return null;
 
   const error = !data && !loading ? 'No data available' : null;

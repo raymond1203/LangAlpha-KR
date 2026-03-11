@@ -1,22 +1,27 @@
 import React, { useRef, useEffect } from 'react';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 import MessageList from '../../ChatAgent/components/MessageList';
 import LogoLoading from '../../../components/ui/logo-loading';
 import './MarketPanel.css';
 
-/**
- * MarketPanel Component
- *
- * Displays chat messages in the right panel of MarketView.
- * Reuses ChatAgent message components for consistent rendering.
- *
- * @param {Object} props
- * @param {Array} props.messages - Array of chat messages
- * @param {boolean} props.isLoading - Whether a message is currently loading
- * @param {string} props.error - Error message if any
- */
-const MarketPanel = ({ messages = [], isLoading = false, error = null }) => {
-  const messagesEndRef = useRef(null);
-  const messagesContainerRef = useRef(null);
+// TODO: type properly once ChatAgent message types are exported
+interface ChatMessage {
+  id?: string;
+  role?: string;
+  content?: string;
+  isStreaming?: boolean;
+  [key: string]: unknown;
+}
+
+interface MarketPanelProps {
+  messages?: ChatMessage[];
+  isLoading?: boolean;
+  error?: string | null;
+}
+
+const MarketPanel = ({ messages = [], isLoading = false, error = null }: MarketPanelProps) => {
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when messages change or when streaming
   useEffect(() => {
@@ -78,6 +83,7 @@ const MarketPanel = ({ messages = [], isLoading = false, error = null }) => {
           </div>
         ) : (
           <div style={{ padding: '16px 24px', maxWidth: '100%' }}>
+            {/* @ts-expect-error MessageList is still JSX — will be typed after ChatAgent migration */}
             <MessageList
               messages={messages}
               hideAvatar

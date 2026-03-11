@@ -1,12 +1,35 @@
-import { useEffect, useRef } from 'react';
-import { LineStyle } from 'lightweight-charts';
+import { useEffect, useRef, type RefObject } from 'react';
+import { LineStyle, type ISeriesApi, type IPriceLine } from 'lightweight-charts';
+
+interface QuoteData {
+  yearHigh?: number;
+  yearLow?: number;
+  dayHigh?: number;
+  dayLow?: number;
+  previousClose?: number;
+  [key: string]: unknown;
+}
+
+interface PriceTargets {
+  targetHigh?: number;
+  targetLow?: number;
+  targetConsensus?: number;
+  [key: string]: unknown;
+}
 
 /**
  * Manages horizontal price lines on the candlestick series.
  * Draws 52-week high/low, day high/low, previous close, and analyst price targets.
  */
-export function useChartAnnotations(candlestickSeriesRef, _stockMeta, quoteData, priceTargets, annotationsVisible, symbol) {
-  const priceLinesRef = useRef([]);
+export function useChartAnnotations(
+  candlestickSeriesRef: RefObject<ISeriesApi<'Candlestick'> | null>,
+  _stockMeta: unknown,
+  quoteData: QuoteData | null,
+  priceTargets: PriceTargets | null,
+  annotationsVisible: boolean,
+  symbol: string | null
+): void {
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
   useEffect(() => {
     // Clear all existing price lines
@@ -20,9 +43,9 @@ export function useChartAnnotations(candlestickSeriesRef, _stockMeta, quoteData,
 
     if (!annotationsVisible || !series) return;
 
-    const lines = [];
+    const lines: IPriceLine[] = [];
 
-    const addLine = (price, title, color, lineStyle) => {
+    const addLine = (price: number | undefined, title: string, color: string, lineStyle: LineStyle): void => {
       if (price == null || isNaN(price)) return;
       const line = series.createPriceLine({
         price,
