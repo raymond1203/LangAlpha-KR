@@ -13,6 +13,7 @@
  * @returns {Object} Message state and handlers
  */
 
+import type React from 'react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sendChatMessageStream, replayThreadHistory, getWorkflowStatus, reconnectToWorkflowStream, sendHitlResponse, streamSubagentTaskEvents, fetchThreadTurns, submitFeedback, removeFeedback, getThreadFeedback } from '../utils/api';
@@ -48,13 +49,211 @@ import {
   isSubagentHistoryEvent,
 } from './utils/historyEventHandlers';
 
+// --- Internal types for useChatMessages ---
+
+/** Loosely-typed message record — matches handlers in streamEventHandlers/historyEventHandlers. */
+// TODO: type properly — tighten once ChatMessage covers all dynamic properties
+type MessageRecord = Record<string, unknown>;
+
+/** React state setter for messages array. */
+type SetMessages = React.Dispatch<React.SetStateAction<MessageRecord[]>>;
+
+/** Token usage state for context window progress ring. */
+interface TokenUsage {
+  totalInput: number;
+  totalOutput: number;
+  lastOutput: number;
+  total: number;
+  threshold: number;
+}
+
+/** Pending HITL interrupt state. */
+interface PendingInterrupt {
+  type?: string;
+  interruptId?: string;
+  assistantMessageId?: string;
+  planApprovalId?: string;
+  questionId?: string;
+  proposalId?: string;
+  planMode?: boolean;
+  actionRequests?: Record<string, unknown>[];
+  threadId?: string;
+}
+
+/** Pending rejection (user rejected a plan). */
+interface PendingRejection {
+  interruptId: string;
+  planMode: boolean;
+}
+
+/** Loosely-typed SSE event — all event shapes merged. */
+// TODO: type properly — use discriminated union from src/types/sse.ts
+interface SSEEvent {
+  event?: string;
+  agent?: string;
+  content?: string | Record<string, unknown>;
+  content_type?: string;
+  role?: string;
+  turn_index?: number;
+  _eventId?: number | string;
+  timestamp?: string | number;
+  metadata?: Record<string, unknown>;
+  tool_calls?: Record<string, unknown>[];
+  tool_call_id?: string;
+  tool_call_chunks?: Record<string, unknown>[];
+  finish_reason?: string;
+  artifact_type?: string;
+  artifact_id?: string;
+  artifact?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+  thread_id?: string;
+  messages?: Record<string, unknown>[];
+  interrupt_id?: string;
+  action_requests?: Record<string, unknown>[];
+  status?: string;
+  signal?: string;
+  action?: string;
+  error?: string;
+  message?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  threshold?: number;
+  original_message_count?: number;
+  offloaded_args?: number;
+  offloaded_reads?: number;
+  kind?: string;
+  position?: number;
+  active_tasks?: string[];
+  can_reconnect?: boolean;
+  is_shared?: boolean;
+  [key: string]: unknown;
+}
+
+/** Workflow status response. */
+interface WorkflowStatusResponse {
+  can_reconnect: boolean;
+  status: string;
+  active_tasks?: string[];
+  is_shared?: boolean;
+  [key: string]: unknown;
+}
+
+/** Model options for send/edit/regenerate. */
+interface ModelOptions {
+  model?: string | null;
+  reasoningEffort?: string | null;
+  fastMode?: boolean | null;
+}
+
+/** Offload batch ref state. */
+interface OffloadBatch {
+  args: number;
+  reads: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  msgId?: string | null;
+}
+
+/** Callbacks for handleContextWindowEvent. */
+interface ContextWindowCallbacks {
+  getMsgId: () => string | null;
+  nextOrder: () => number | string;
+  setMessages: SetMessages;
+  setTokenUsage: React.Dispatch<React.SetStateAction<TokenUsage | null>>;
+  setIsCompacting: ((v: string | false) => void) | null;
+  insertNotification: (text: string) => void;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+  offloadBatch: React.MutableRefObject<OffloadBatch>;
+}
+
+/** Subagent history entry stored in subagentHistoryRef. */
+interface SubagentHistoryEntry {
+  taskId: string;
+  description: string;
+  prompt: string;
+  type: string;
+  messages: MessageRecord[];
+  status: string;
+  toolCalls: number;
+  currentTool: string;
+}
+
+/** Per-task ref state used by stream handlers. */
+interface TaskRefs {
+  contentOrderCounterRef: { current: number };
+  currentReasoningIdRef: { current: string | null };
+  currentToolCallIdRef: { current: string | null };
+  messages: MessageRecord[];
+  runIndex: number;
+}
+
+/** History interrupt info stored during replay. */
+interface HistoryInterruptInfo {
+  type: string;
+  assistantMessageId: string;
+  planApprovalId?: string;
+  questionId?: string;
+  proposalId?: string;
+  interruptId?: string;
+  answer?: string | null;
+}
+
+/** Subagent history data accumulated during replay. */
+interface SubagentHistoryData {
+  messages: MessageRecord[];
+  events: SSEEvent[];
+  description?: string;
+  prompt?: string;
+  type?: string;
+  resumePoints: Array<{ description: string; turnIndex?: number }>;
+}
+
+/** Refs passed to createStreamEventProcessor and its processEvent closure. */
+interface StreamProcessorRefs {
+  contentOrderCounterRef: { current: number };
+  currentReasoningIdRef: { current: string | null };
+  currentToolCallIdRef: { current: string | null };
+  queuedAtOrderRef?: { current: number | null };
+  updateTodoListCard?: ((data: Record<string, unknown>) => void) | null;
+  isNewConversation?: boolean;
+  subagentStateRefs?: Record<string, TaskRefs>;
+  updateSubagentCard?: ((agentId: string, data: Record<string, unknown>) => void);
+  isReconnect?: boolean;
+  unresolvedHistoryInterruptRef?: React.MutableRefObject<HistoryInterruptInfo[]>;
+  [key: string]: unknown;
+}
+
+/** Pair state tracked per turn_index during history replay. */
+interface PairState {
+  contentOrderCounter: number;
+  reasoningId: string | null;
+  toolCallId: string | null;
+}
+
+/**
+ * Typed wrappers for message helpers that bridge MessageRecord[] <-> ChatMessage[].
+ * These allow updateMessage/appendMessage to work with our loosely-typed MessageRecord state.
+ */
+// TODO: type properly — remove these wrappers once ChatMessage covers all dynamic properties
+function updateMessageRecord(
+  messages: MessageRecord[],
+  messageId: string,
+  updater: (msg: MessageRecord) => MessageRecord,
+): MessageRecord[] {
+  return updateMessage(messages as any, messageId, updater as any) as unknown as MessageRecord[];
+}
+
+function appendMessageRecord(messages: MessageRecord[], newMessage: MessageRecord): MessageRecord[] {
+  return appendMessage(messages as any, newMessage as any) as unknown as MessageRecord[];
+}
+
 /**
  * Checks if a tool result indicates an onboarding-related success.
  * Onboarding tools: update_user_data for risk_preference, watchlist_item, portfolio_holding.
  * @param {string|object} resultContent - Raw result content (JSON string or parsed object)
  * @returns {boolean}
  */
-function isOnboardingRelatedToolSuccess(resultContent) {
+function isOnboardingRelatedToolSuccess(resultContent: unknown): boolean {
   if (resultContent == null) return false;
   let parsed;
   if (typeof resultContent === 'string') {
@@ -87,13 +286,13 @@ function isOnboardingRelatedToolSuccess(resultContent) {
  * @param {Function} callbacks.t - i18n translation function
  * @param {React.MutableRefObject} callbacks.offloadBatch - Mutable ref for batching offload events
  */
-function handleContextWindowEvent(event, { getMsgId, nextOrder, setMessages, setTokenUsage, setIsCompacting, insertNotification, t, offloadBatch }) {
+function handleContextWindowEvent(event: SSEEvent, { getMsgId, nextOrder, setMessages, setTokenUsage, setIsCompacting, insertNotification, t, offloadBatch }: ContextWindowCallbacks): void {
   const action = event.action;
 
   if (action === 'token_usage') {
     const callInput = event.input_tokens || 0;
     const callOutput = event.output_tokens || 0;
-    setTokenUsage((prev) => ({
+    setTokenUsage((prev: TokenUsage | null) => ({
       totalInput: (prev?.totalInput || 0) + callInput,
       totalOutput: (prev?.totalOutput || 0) + callOutput,
       lastOutput: callOutput,
@@ -114,9 +313,9 @@ function handleContextWindowEvent(event, { getMsgId, nextOrder, setMessages, set
       const msgId = getMsgId();
       if (msgId) {
         const order = nextOrder();
-        setMessages((prev) => updateMessage(prev, msgId, (msg) => ({
+        setMessages((prev) => updateMessageRecord(prev,msgId, (msg) => ({
           ...msg,
-          contentSegments: [...(msg.contentSegments || []), { type: 'notification', content: text, order }],
+          contentSegments: [...((msg.contentSegments || []) as any[]), { type: 'notification', content: text, order }],
         })));
       } else {
         insertNotification(text);
@@ -146,7 +345,7 @@ function handleContextWindowEvent(event, { getMsgId, nextOrder, setMessages, set
       }
 
       // Debounce: merge back-to-back offload events into a single notification
-      clearTimeout(batch.current.timer);
+      if (batch.current.timer) clearTimeout(batch.current.timer);
       batch.current.timer = setTimeout(() => {
         const { args, reads, msgId } = batch.current;
         let text;
@@ -161,9 +360,9 @@ function handleContextWindowEvent(event, { getMsgId, nextOrder, setMessages, set
         if (text) {
           if (msgId) {
             const order = nextOrder();
-            setMessages((prev) => updateMessage(prev, msgId, (msg) => ({
+            setMessages((prev) => updateMessageRecord(prev,msgId, (msg) => ({
               ...msg,
-              contentSegments: [...(msg.contentSegments || []), { type: 'notification', content: text, order }],
+              contentSegments: [...((msg.contentSegments || []) as any[]), { type: 'notification', content: text, order }],
             })));
           } else {
             insertNotification(text);
@@ -178,11 +377,23 @@ function handleContextWindowEvent(event, { getMsgId, nextOrder, setMessages, set
   }
 }
 
-export function useChatMessages(workspaceId, initialThreadId = null, updateTodoListCard = null, updateSubagentCard = null, inactivateAllSubagents = null, completePendingTodos = null, onOnboardingRelatedToolComplete = null, onFileArtifact = null, agentMode = 'ptc', clearSubagentCards = null, onWorkspaceCreated = null) {
+export function useChatMessages(
+  workspaceId: string,
+  initialThreadId: string | null = null,
+  updateTodoListCard: ((todoData: Record<string, unknown>) => void) | null = null,
+  updateSubagentCard: ((agentId: string, data: Record<string, unknown>) => void) | null = null,
+  inactivateAllSubagents: (() => void) | null = null,
+  completePendingTodos: (() => void) | null = null,
+  onOnboardingRelatedToolComplete: (() => void) | null = null,
+  onFileArtifact: ((event: SSEEvent) => void) | null = null,
+  agentMode: string = 'ptc',
+  clearSubagentCards: (() => void) | null = null,
+  onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null = null,
+) {
   const { t } = useTranslation();
   // State
-  const [messages, setMessages] = useState([]);
-  const [threadId, setThreadId] = useState(() => {
+  const [messages, setMessages] = useState<MessageRecord[]>([]);
+  const [threadId, setThreadId] = useState<string>(() => {
     // If threadId is provided from URL, use it; otherwise use localStorage
     if (initialThreadId) {
       return initialThreadId;
@@ -195,64 +406,64 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   );
   const [hasActiveSubagents, setHasActiveSubagents] = useState(false);  // Subagent streams open after main agent finished
   const [workspaceStarting, setWorkspaceStarting] = useState(false);  // Workspace is starting up (stopped/archived sandbox)
-  const [isCompacting, setIsCompacting] = useState(false);  // Context compaction in progress (summarization/offload)
-  const [messageError, setMessageError] = useState(null);
+  const [isCompacting, setIsCompacting] = useState<string | false>(false);  // Context compaction in progress (summarization/offload)
+  const [messageError, setMessageError] = useState<string | null>(null);
   // Queued message returned by the server (agent finished before consuming it)
-  const [returnedQueuedMessage, setReturnedQueuedMessage] = useState(null);
+  const [returnedQueuedMessage, setReturnedQueuedMessage] = useState<string | null>(null);
   // HITL (Human-in-the-Loop) plan mode interrupt state
-  const [pendingInterrupt, setPendingInterrupt] = useState(null);
+  const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
   // When user clicks Reject on a plan, this stores the interruptId so the next message
   // sent via handleSendMessage is routed as rejection feedback via hitl_response.
-  const [pendingRejection, setPendingRejection] = useState(null);
+  const [pendingRejection, setPendingRejection] = useState<PendingRejection | null>(null);
 
   // Token usage tracking (for context window progress ring)
-  const [tokenUsage, setTokenUsage] = useState(null);
+  const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const [isShared, setIsShared] = useState(false);
 
   // Track current plan mode so HITL resume can forward it
   const currentPlanModeRef = useRef(false);
 
   // Track last-used model options so HITL resume can forward them
-  const lastModelOptionsRef = useRef({ model: null, reasoningEffort: null, fastMode: null });
+  const lastModelOptionsRef = useRef<ModelOptions>({ model: null, reasoningEffort: null, fastMode: null });
 
   // Refs for streaming state
-  const currentMessageRef = useRef(null);
+  const currentMessageRef = useRef<string | null>(null);
   const contentOrderCounterRef = useRef(0);
-  const currentReasoningIdRef = useRef(null);
-  const currentToolCallIdRef = useRef(null);
-  const queuedAtOrderRef = useRef(null); // Shared across streams for queued message rollback
+  const currentReasoningIdRef = useRef<string | null>(null);
+  const currentToolCallIdRef = useRef<string | null>(null);
+  const queuedAtOrderRef = useRef<number | null>(null); // Shared across streams for queued message rollback
 
   // Refs for history loading state
   const historyLoadingRef = useRef(false);
-  const historyMessagesRef = useRef(new Set()); // Track message IDs from history
+  const historyMessagesRef = useRef(new Set<string>()); // Track message IDs from history
   const newMessagesStartIndexRef = useRef(0); // Index where new messages start
 
   // Track all LLM models used in this thread (ordered, deduplicated)
-  const [threadModels, setThreadModels] = useState([]);
+  const [threadModels, setThreadModels] = useState<string[]>([]);
 
   // Track if streaming is in progress to prevent history loading during streaming
   const isStreamingRef = useRef(false);
 
   // Feedback state: { [turnIndex]: { rating, ... } }
-  const feedbackMapRef = useRef({});
+  const feedbackMapRef = useRef<Record<number, Record<string, unknown>>>({});
 
   // Track if history replay found an unresolved interrupt (skip reconnection in that case)
   const historyHasUnresolvedInterruptRef = useRef(false);
   // Store the full interrupt details from history so loadAndMaybeReconnect can decide
   // whether to make it interactive or reconnect to get resolution events
-  const unresolvedHistoryInterruptRef = useRef([]);
+  const unresolvedHistoryInterruptRef = useRef<HistoryInterruptInfo[]>([]);
 
   // Batch parallel interrupt responses: track all interrupt IDs in current batch
   // and collect individual responses until all are answered, then resume at once.
-  const pendingInterruptIdsRef = useRef(new Set());
-  const collectedHitlResponsesRef = useRef({});
+  const pendingInterruptIdsRef = useRef(new Set<string>());
+  const collectedHitlResponsesRef = useRef<Record<string, { decisions: Array<{ type: string; message?: string }> }>>({});
 
   // Track the last received SSE event ID for reconnection
-  const lastEventIdRef = useRef(null);
+  const lastEventIdRef = useRef<number | string | null>(null);
   // Ref-based thread ID for use inside closures (avoids stale React state in callbacks)
   const threadIdRef = useRef(threadId);
   // Batch back-to-back offload events into a single notification
-  const offloadBatchRef = useRef({ args: 0, reads: 0, timer: null });
+  const offloadBatchRef = useRef<OffloadBatch>({ args: 0, reads: 0, timer: null });
   // Track reconnection state for UI indicator
   const [isReconnecting, setIsReconnecting] = useState(false);
 
@@ -263,24 +474,24 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const recentlySentTrackerRef = useRef(createRecentlySentTracker());
 
   // Map tool call IDs (from main agent's task tool calls) to agent_ids for routing subagent events
-  const toolCallIdToTaskIdMapRef = useRef(new Map()); // Map<toolCallId, agentId>
+  const toolCallIdToTaskIdMapRef = useRef(new Map<string, string>()); // Map<toolCallId, agentId>
 
   // Per-task SSE connections: taskId → AbortController
-  const subagentStreamsRef = useRef(new Map());
+  const subagentStreamsRef = useRef(new Map<string, AbortController>());
 
   // Track completed task IDs to prevent reactivation by stale artifact events
-  const completedTaskIdsRef = useRef(new Set());
+  const completedTaskIdsRef = useRef(new Set<string>());
 
   // Track subagent history loaded from replay so it can be shown lazily
   // Keyed by agent_id. Structure: { [agentId]: { taskId, description, type, messages, status, ... } }
-  const subagentHistoryRef = useRef({});
+  const subagentHistoryRef = useRef<Record<string, SubagentHistoryEntry>>({});
 
   // Persistent subagent state refs — survives across turns so resumed subagents
   // retain messages from previous runs. Keyed by taskId (e.g., "task:k7Xm2p").
-  const subagentStateRefsRef = useRef({});
+  const subagentStateRefsRef = useRef<Record<string, TaskRefs>>({});
 
   // During history load: queue task tool call IDs until the matching artifact 'spawned' event drains them
-  const historyPendingTaskToolCallIdsRef = useRef([]);
+  const historyPendingTaskToolCallIdsRef = useRef<string[]>([]);
 
   // Keep threadIdRef in sync with state (for use inside closures)
   useEffect(() => {
@@ -345,24 +556,26 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       console.log('[History] Loading history for thread:', threadIdToUse);
 
       // Track pairs being processed - use Map to handle multiple pairs
-      const assistantMessagesByPair = new Map(); // Map<turn_index, assistantMessageId>
-      const pairStateByPair = new Map(); // Map<turn_index, { contentOrderCounter, reasoningId, toolCallId }>
-      
+      const assistantMessagesByPair = new Map<number, string>(); // Map<turn_index, assistantMessageId>
+      const pairStateByPair = new Map<number, PairState>(); // Map<turn_index, { contentOrderCounter, reasoningId, toolCallId }>
+
       // Track the currently active pair for artifacts (which don't have turn_index)
       // This ensures artifacts get the correct chronological order
-      let currentActivePairIndex = null;
-      let currentActivePairState = null;
+      let currentActivePairIndex: number | null = null;
+      let currentActivePairState: PairState | null | undefined = null;
 
       // Track pending HITL interrupts from history to resolve status on next user_message
-      const pendingHistoryInterrupts = [];
+      const pendingHistoryInterrupts: HistoryInterruptInfo[] = [];
 
       // Track subagent events by task ID for this history load
       // Map<taskId, { messages: Array, events: Array, description?: string, type?: string }>
-      const subagentHistoryByTaskId = new Map();
+      const subagentHistoryByTaskId = new Map<string, SubagentHistoryData>();
       // Track which agentIds had message_queued actions (for inline card "Updated" label)
-      const messageQueuedAgentIds = new Set();
+      const messageQueuedAgentIds = new Set<string>();
       try {
-        await replayThreadHistory(threadIdToUse, (event) => {
+        await replayThreadHistory(threadIdToUse, (_rawEvent) => {
+        // Cast to SSEEvent for type-safe field access within this callback
+        const event = _rawEvent as SSEEvent;
         const eventType = event.event;
         const contentType = event.content_type;
         const hasRole = event.role !== undefined;
@@ -374,11 +587,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         }
 
         // Check if this is a subagent event - filter it out from main chat view
-        const isSubagent = isSubagentHistoryEvent(event);
-        
+        const isSubagent = isSubagentHistoryEvent(event as any);
+
         // Update current active pair when we see an event with turn_index
         if (hasPairIndex) {
-          const pairIndex = event.turn_index;
+          const pairIndex = event.turn_index!;
           currentActivePairIndex = pairIndex;
           currentActivePairState = pairStateByPair.get(pairIndex);
           console.log('[History] Updated active pair to:', pairIndex, 'counter:', currentActivePairState?.contentOrderCounter);
@@ -389,7 +602,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         if (eventType === 'context_window' && !isSubagent) {
           handleContextWindowEvent(event, {
             getMsgId: () => currentActivePairIndex !== null
-              ? assistantMessagesByPair.get(currentActivePairIndex) : null,
+              ? (assistantMessagesByPair.get(currentActivePairIndex) ?? null) : null,
             nextOrder: () => {
               const eventId = event._eventId;
               if (eventId != null) return eventId;
@@ -413,7 +626,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         if (eventType === 'token_usage') {
           const callInput = event.input_tokens || 0;
           const callOutput = event.output_tokens || 0;
-          setTokenUsage((prev) => ({
+          setTokenUsage((prev: TokenUsage | null) => ({
             totalInput: (prev?.totalInput || 0) + callInput,
             totalOutput: (prev?.totalOutput || 0) + callOutput,
             lastOutput: callOutput,
@@ -426,12 +639,12 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         // Handle queued_message_injected events from sse_events
         if (eventType === 'queued_message_injected' && hasPairIndex) {
           handleHistoryQueuedMessageInjected({
-            event,
-            pairIndex: event.turn_index,
+            event: event as any,
+            pairIndex: event.turn_index!,
             assistantMessagesByPair,
             pairStateByPair,
             refs: { newMessagesStartIndexRef, historyMessagesRef },
-            setMessages,
+            setMessages: setMessages as any,
           });
           return;
         }
@@ -451,7 +664,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               });
             }
 
-            const subagentHistory = subagentHistoryByTaskId.get(taskId);
+            const subagentHistory = subagentHistoryByTaskId.get(taskId)!;
             // Store the event for later processing
             subagentHistory.events.push(event);
           } else {
@@ -470,26 +683,31 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         if (eventType === 'user_message' && hasPairIndex) {
           // Collect LLM models from query metadata (may differ across turns)
           if (event.metadata?.llm_model) {
-            setThreadModels(prev => prev.includes(event.metadata.llm_model) ? prev : [...prev, event.metadata.llm_model]);
+            const llmModel = event.metadata.llm_model as string;
+            setThreadModels(prev => prev.includes(llmModel) ? prev : [...prev, llmModel]);
           }
           // Resolve pending plan_approval interrupt from content (empty = approved, non-empty = rejected).
           {
             const idx = pendingHistoryInterrupts.findIndex((p) => p.type === 'plan_approval');
             if (idx !== -1) {
               const matched = pendingHistoryInterrupts[idx];
-              const hasContent = event.content && event.content.trim();
+              const hasContent = typeof event.content === 'string' && event.content.trim();
               const resolvedStatus = hasContent ? 'rejected' : 'approved';
               setMessages((prev) =>
-                updateMessage(prev, matched.assistantMessageId, (msg) => ({
-                  ...msg,
-                  planApprovals: {
-                    ...(msg.planApprovals || {}),
-                    [matched.planApprovalId]: {
-                      ...(msg.planApprovals?.[matched.planApprovalId] || {}),
-                      status: resolvedStatus,
+                updateMessageRecord(prev,matched.assistantMessageId, (msg) => {
+                  const approvals = (msg.planApprovals || {}) as Record<string, Record<string, unknown>>;
+                  const key = matched.planApprovalId!;
+                  return {
+                    ...msg,
+                    planApprovals: {
+                      ...approvals,
+                      [key]: {
+                        ...(approvals[key] || {}),
+                        status: resolvedStatus,
+                      },
                     },
-                  },
-                }))
+                  };
+                })
               );
               pendingHistoryInterrupts.splice(idx, 1);
             }
@@ -498,7 +716,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           // Resolve ask_user_question interrupts from resume query metadata (hitl_answers).
           // Persisted immediately by persist_query_start(), keyed by interrupt_id.
           {
-            const hitlAnswers = event.metadata?.hitl_answers;
+            const hitlAnswers = event.metadata?.hitl_answers as Record<string, unknown> | undefined;
             if (hitlAnswers && pendingHistoryInterrupts.length > 0) {
               for (const [interruptId, answerValue] of Object.entries(hitlAnswers)) {
                 const idx = pendingHistoryInterrupts.findIndex(
@@ -507,18 +725,22 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 if (idx !== -1) {
                   const matched = pendingHistoryInterrupts[idx];
                   const resolvedStatus = answerValue !== null ? 'answered' : 'skipped';
+                  const qKey = matched.questionId!;
                   setMessages((prev) =>
-                    updateMessage(prev, matched.assistantMessageId, (msg) => ({
-                      ...msg,
-                      userQuestions: {
-                        ...(msg.userQuestions || {}),
-                        [matched.questionId]: {
-                          ...(msg.userQuestions?.[matched.questionId] || {}),
-                          status: resolvedStatus,
-                          answer: answerValue,
+                    updateMessageRecord(prev,matched.assistantMessageId, (msg) => {
+                      const questions = (msg.userQuestions || {}) as Record<string, Record<string, unknown>>;
+                      return {
+                        ...msg,
+                        userQuestions: {
+                          ...questions,
+                          [qKey]: {
+                            ...(questions[qKey] || {}),
+                            status: resolvedStatus,
+                            answer: answerValue,
+                          },
                         },
-                      },
-                    }))
+                      };
+                    })
                   );
                   pendingHistoryInterrupts.splice(idx, 1);
                 }
@@ -526,7 +748,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             }
           }
 
-          const pairIndex = event.turn_index;
+          const pairIndex = event.turn_index!;
           const refs = {
             recentlySentTracker: recentlySentTrackerRef.current,
             currentMessageRef,
@@ -535,20 +757,20 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           };
 
           handleHistoryUserMessage({
-            event,
+            event: event as any,
             pairIndex,
             assistantMessagesByPair,
             pairStateByPair,
             refs,
-            messages,
-            setMessages,
+            messages: messages as any,
+            setMessages: setMessages as any,
           });
           return;
         }
 
         // Handle message_chunk events (assistant messages)
         if (eventType === 'message_chunk' && hasRole && event.role === 'assistant' && hasPairIndex) {
-          const pairIndex = event.turn_index;
+          const pairIndex = event.turn_index!;
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -559,14 +781,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
           // Process reasoning_signal
           if (contentType === 'reasoning_signal') {
-            const signalContent = event.content || '';
+            const signalContent = (event.content as string) || '';
             handleHistoryReasoningSignal({
               assistantMessageId: currentAssistantMessageId,
               signalContent,
               pairIndex,
               pairState,
-              setMessages,
-              eventId: event._eventId,
+              setMessages: setMessages as any,
+              eventId: event._eventId as number | undefined,
             });
             return;
           }
@@ -575,9 +797,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           if (contentType === 'reasoning' && event.content) {
             handleHistoryReasoningContent({
               assistantMessageId: currentAssistantMessageId,
-              content: event.content,
+              content: event.content as string,
               pairState,
-              setMessages,
+              setMessages: setMessages as any,
             });
             return;
           }
@@ -586,11 +808,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           if (contentType === 'text' && event.content) {
             handleHistoryTextContent({
               assistantMessageId: currentAssistantMessageId,
-              content: event.content,
+              content: event.content as string,
               finishReason: event.finish_reason,
               pairState,
-              setMessages,
-              eventId: event._eventId,
+              setMessages: setMessages as any,
+              eventId: event._eventId as number | undefined,
             });
             return;
           }
@@ -598,7 +820,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           // Handle finish_reason (end of assistant message)
           if (event.finish_reason) {
             setMessages((prev) =>
-              updateMessage(prev, currentAssistantMessageId, (msg) => ({
+              updateMessageRecord(prev,currentAssistantMessageId, (msg) => ({
                 ...msg,
                 isStreaming: false,
               }))
@@ -633,7 +855,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
             // Artifacts in history replay have turn_index - use it!
             if (hasPairIndex) {
-              const pairIndex = event.turn_index;
+              const pairIndex = event.turn_index!;
               // Update active pair tracking
               currentActivePairIndex = pairIndex;
               currentActivePairState = pairStateByPair.get(pairIndex);
@@ -649,12 +871,12 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               console.log('[History] Processing todo_update artifact for pair:', pairIndex, 'counter:', pairState.contentOrderCounter);
               handleHistoryTodoUpdate({
                 assistantMessageId: currentAssistantMessageId,
-                artifactType,
-                artifactId: event.artifact_id,
+                artifactType: artifactType as string,
+                artifactId: event.artifact_id as string,
                 payload,
                 pairState: pairState,
-                setMessages,
-                eventId: event._eventId,
+                setMessages: setMessages as any,
+                eventId: event._eventId as number | undefined,
               });
             } else {
               // Fallback: artifacts without turn_index (shouldn't happen in history, but handle gracefully)
@@ -675,19 +897,23 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               if (targetAssistantMessageId && targetPairState) {
                 handleHistoryTodoUpdate({
                   assistantMessageId: targetAssistantMessageId,
-                  artifactType,
-                  artifactId: event.artifact_id,
+                  artifactType: artifactType as string,
+                  artifactId: event.artifact_id as string,
                   payload,
                   pairState: targetPairState,
-                  setMessages,
-                  eventId: event._eventId,
+                  setMessages: setMessages as any,
+                  eventId: event._eventId as number | undefined,
                 });
               }
             }
           }
           if (artifactType === 'task') {
             const payload = event.payload || {};
-            const { task_id, action: rawAction, description, prompt, type } = payload;
+            const task_id = payload.task_id as string | undefined;
+            const rawAction = payload.action as string | undefined;
+            const description = payload.description as string | undefined;
+            const prompt = payload.prompt as string | undefined;
+            const type = payload.type as string | undefined;
             const action = (() => { if (rawAction === 'spawned') return 'init'; if (rawAction === 'message_queued') return 'update'; if (rawAction === 'resumed') return 'resume'; return rawAction || 'init'; })();
             if (task_id) {
               const agentId = `task:${task_id}`;
@@ -701,7 +927,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                   resumePoints: [],
                 });
               } else {
-                const existing = subagentHistoryByTaskId.get(agentId);
+                const existing = subagentHistoryByTaskId.get(agentId)!;
                 if (description && !existing.description) existing.description = description;
                 if (prompt && !existing.prompt) existing.prompt = prompt || description || '';
                 if (type && !existing.type) existing.type = type;
@@ -745,11 +971,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
         // Handle tool_calls events
         if (eventType === 'tool_calls' && hasPairIndex) {
-          const pairIndex = event.turn_index;
+          const pairIndex = event.turn_index!;
           // Update active pair tracking
           currentActivePairIndex = pairIndex;
           currentActivePairState = pairStateByPair.get(pairIndex);
-          
+
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -762,9 +988,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           // Skip follow-up/resume calls (task_id present) — they target existing subagents
           if (event.tool_calls) {
             const taskToolCalls = event.tool_calls.filter(
-              (tc) => (tc.name === 'task' || tc.name === 'Task') && tc.id && !tc.args?.task_id
+              (tc) => (tc.name === 'task' || tc.name === 'Task') && tc.id && !(tc.args as any)?.task_id
             );
-            const toolCallIds = taskToolCalls.map((tc) => tc.id).filter(Boolean);
+            const toolCallIds = taskToolCalls.map((tc) => tc.id).filter(Boolean) as string[];
             if (toolCallIds.length > 0) {
               historyPendingTaskToolCallIdsRef.current = [
                 ...historyPendingTaskToolCallIdsRef.current,
@@ -775,21 +1001,21 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
           handleHistoryToolCalls({
             assistantMessageId: currentAssistantMessageId,
-            toolCalls: event.tool_calls,
+            toolCalls: event.tool_calls as any,
             pairState,
-            setMessages,
-            eventId: event._eventId,
+            setMessages: setMessages as any,
+            eventId: event._eventId as number | undefined,
           });
           return;
         }
 
         // Handle tool_call_result events
         if (eventType === 'tool_call_result' && hasPairIndex) {
-          const pairIndex = event.turn_index;
+          const pairIndex = event.turn_index!;
           // Update active pair tracking
           currentActivePairIndex = pairIndex;
           currentActivePairState = pairStateByPair.get(pairIndex);
-          
+
           const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
           const pairState = pairStateByPair.get(pairIndex);
 
@@ -799,25 +1025,27 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           }
 
           // Build toolCallId → agentId mapping from Task tool artifact (preferred over order-based)
-          if (event.artifact?.task_id && event.tool_call_id) {
-            const agentId = `task:${event.artifact.task_id}`;
+          const artifact = event.artifact as Record<string, unknown> | undefined;
+          if (artifact?.task_id && event.tool_call_id) {
+            const agentId = `task:${artifact.task_id}`;
             toolCallIdToTaskIdMapRef.current.set(event.tool_call_id, agentId);
 
             // Ensure subagentHistoryByTaskId has description from artifact.
             // Resume calls are filtered out of the tool_calls handler, so this
             // is the only place to pick up the description for resumed tasks.
-            if (event.artifact.description) {
+            if (artifact.description) {
               const existing = subagentHistoryByTaskId.get(agentId);
               if (existing) {
-                if (!existing.description) existing.description = event.artifact.description;
-                if (!existing.prompt) existing.prompt = event.artifact.prompt || event.artifact.description || '';
+                if (!existing.description) existing.description = artifact.description as string;
+                if (!existing.prompt) existing.prompt = (artifact.prompt || artifact.description || '') as string;
               } else {
                 subagentHistoryByTaskId.set(agentId, {
                   messages: [],
                   events: [],
-                  description: event.artifact.description,
-                  prompt: event.artifact.prompt || event.artifact.description || '',
-                  type: event.artifact.type || 'general-purpose',
+                  description: artifact.description as string,
+                  prompt: (artifact.prompt || artifact.description || '') as string,
+                  type: (artifact.type || 'general-purpose') as string,
+                  resumePoints: [],
                 });
               }
             }
@@ -825,7 +1053,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
           handleHistoryToolCallResult({
             assistantMessageId: currentAssistantMessageId,
-            toolCallId: event.tool_call_id,
+            toolCallId: event.tool_call_id as string,
             result: {
               content: event.content,
               content_type: event.content_type,
@@ -833,7 +1061,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               artifact: event.artifact,
             },
             pairState,
-            setMessages,
+            setMessages: setMessages as any,
           });
 
           // Resolve pending create_workspace or start_question interrupt from tool_call_result
@@ -854,17 +1082,21 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 } catch { /* non-JSON → treat as approved */ }
               }
 
+              const pKey = matched.proposalId!;
               setMessages((prev) =>
-                updateMessage(prev, matched.assistantMessageId, (msg) => ({
-                  ...msg,
-                  [dataKey]: {
-                    ...(msg[dataKey] || {}),
-                    [matched.proposalId]: {
-                      ...(msg[dataKey]?.[matched.proposalId] || {}),
-                      status: resolvedStatus,
+                updateMessageRecord(prev,matched.assistantMessageId, (msg) => {
+                  const existing = ((msg as any)[dataKey] || {}) as Record<string, Record<string, unknown>>;
+                  return {
+                    ...msg,
+                    [dataKey]: {
+                      ...existing,
+                      [pKey]: {
+                        ...(existing[pKey] || {}),
+                        status: resolvedStatus,
+                      },
                     },
-                  },
-                }))
+                  };
+                })
               );
               pendingHistoryInterrupts.splice(idx, 1);
             }
@@ -880,33 +1112,34 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           const pairState = pairIndex != null ? pairStateByPair.get(pairIndex) : null;
 
           if (interruptAssistantId && pairState) {
-            const actionType = event.action_requests?.[0]?.type;
+            const actionRequests = event.action_requests || [];
+            const actionType = actionRequests[0]?.type as string | undefined;
 
             if (actionType === 'ask_user_question') {
               // --- User question interrupt (history) ---
               const questionId = event.interrupt_id || `question-history-${Date.now()}`;
-              const questionData = event.action_requests[0];
+              const questionData = actionRequests[0] as Record<string, unknown>;
               const order = event._eventId != null ? event._eventId : ++pairState.contentOrderCounter;
 
               setMessages((prev) =>
-                updateMessage(prev, interruptAssistantId, (msg) => ({
-                  ...msg,
-                  contentSegments: [
-                    ...(msg.contentSegments || []),
-                    { type: 'user_question', questionId, order },
-                  ],
-                  userQuestions: {
-                    ...(msg.userQuestions || {}),
-                    [questionId]: {
-                      question: questionData.question,
-                      options: questionData.options || [],
-                      allow_multiple: questionData.allow_multiple || false,
-                      interruptId: event.interrupt_id,
-                      status: 'pending', // Default pending; resolved by tool_call_result or user_message
-                      answer: null,
+                updateMessageRecord(prev,interruptAssistantId, (m) => {
+                  const msg = m as any;
+                  return {
+                    ...msg,
+                    contentSegments: [...(msg.contentSegments || []), { type: 'user_question', questionId, order }],
+                    userQuestions: {
+                      ...(msg.userQuestions || {}),
+                      [questionId]: {
+                        question: questionData.question,
+                        options: questionData.options || [],
+                        allow_multiple: questionData.allow_multiple || false,
+                        interruptId: event.interrupt_id,
+                        status: 'pending',
+                        answer: null,
+                      },
                     },
-                  },
-                }))
+                  };
+                })
               );
 
               pendingHistoryInterrupts.push({
@@ -919,26 +1152,26 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             } else if (actionType === 'create_workspace') {
               // --- Create workspace interrupt (history) ---
               const proposalId = event.interrupt_id || `workspace-history-${Date.now()}`;
-              const proposalData = event.action_requests[0];
+              const proposalData = actionRequests[0] as Record<string, unknown>;
               const order = event._eventId != null ? event._eventId : ++pairState.contentOrderCounter;
 
               setMessages((prev) =>
-                updateMessage(prev, interruptAssistantId, (msg) => ({
-                  ...msg,
-                  contentSegments: [
-                    ...(msg.contentSegments || []),
-                    { type: 'create_workspace', proposalId, order },
-                  ],
-                  workspaceProposals: {
-                    ...(msg.workspaceProposals || {}),
-                    [proposalId]: {
-                      workspace_name: proposalData.workspace_name,
-                      workspace_description: proposalData.workspace_description,
-                      interruptId: event.interrupt_id,
-                      status: 'pending',
+                updateMessageRecord(prev,interruptAssistantId, (m) => {
+                  const msg = m as any;
+                  return {
+                    ...msg,
+                    contentSegments: [...(msg.contentSegments || []), { type: 'create_workspace', proposalId, order }],
+                    workspaceProposals: {
+                      ...(msg.workspaceProposals || {}),
+                      [proposalId]: {
+                        workspace_name: proposalData.workspace_name,
+                        workspace_description: proposalData.workspace_description,
+                        interruptId: event.interrupt_id,
+                        status: 'pending',
+                      },
                     },
-                  },
-                }))
+                  };
+                })
               );
 
               pendingHistoryInterrupts.push({
@@ -950,26 +1183,26 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             } else if (actionType === 'start_question') {
               // --- Start question interrupt (history) ---
               const proposalId = event.interrupt_id || `question-start-history-${Date.now()}`;
-              const proposalData = event.action_requests[0];
+              const proposalData = actionRequests[0] as Record<string, unknown>;
               const order = event._eventId != null ? event._eventId : ++pairState.contentOrderCounter;
 
               setMessages((prev) =>
-                updateMessage(prev, interruptAssistantId, (msg) => ({
-                  ...msg,
-                  contentSegments: [
-                    ...(msg.contentSegments || []),
-                    { type: 'start_question', proposalId, order },
-                  ],
-                  questionProposals: {
-                    ...(msg.questionProposals || {}),
-                    [proposalId]: {
-                      workspace_id: proposalData.workspace_id,
-                      question: proposalData.question,
-                      interruptId: event.interrupt_id,
-                      status: 'pending',
+                updateMessageRecord(prev,interruptAssistantId, (m) => {
+                  const msg = m as any;
+                  return {
+                    ...msg,
+                    contentSegments: [...(msg.contentSegments || []), { type: 'start_question', proposalId, order }],
+                    questionProposals: {
+                      ...(msg.questionProposals || {}),
+                      [proposalId]: {
+                        workspace_id: proposalData.workspace_id,
+                        question: proposalData.question,
+                        interruptId: event.interrupt_id,
+                        status: 'pending',
+                      },
                     },
-                  },
-                }))
+                  };
+                })
               );
 
               pendingHistoryInterrupts.push({
@@ -982,27 +1215,27 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               // --- Plan approval interrupt (existing) ---
               const planApprovalId = event.interrupt_id || `plan-history-${Date.now()}`;
               const description =
-                event.action_requests?.[0]?.description ||
-                event.action_requests?.[0]?.args?.plan ||
+                (actionRequests[0]?.description as string) ||
+                ((actionRequests[0]?.args as any)?.plan as string) ||
                 'No plan description provided.';
               const order = event._eventId != null ? event._eventId : ++pairState.contentOrderCounter;
 
               setMessages((prev) =>
-                updateMessage(prev, interruptAssistantId, (msg) => ({
-                  ...msg,
-                  contentSegments: [
-                    ...(msg.contentSegments || []),
-                    { type: 'plan_approval', planApprovalId, order },
-                  ],
-                  planApprovals: {
-                    ...(msg.planApprovals || {}),
-                    [planApprovalId]: {
-                      description,
-                      interruptId: event.interrupt_id,
-                      status: 'pending', // Default pending; resolved on next user_message
+                updateMessageRecord(prev,interruptAssistantId, (m) => {
+                  const msg = m as any;
+                  return {
+                    ...msg,
+                    contentSegments: [...(msg.contentSegments || []), { type: 'plan_approval', planApprovalId, order }],
+                    planApprovals: {
+                      ...(msg.planApprovals || {}),
+                      [planApprovalId]: {
+                        description,
+                        interruptId: event.interrupt_id,
+                        status: 'pending',
+                      },
                     },
-                  },
-                }))
+                  };
+                })
               );
 
               pendingHistoryInterrupts.push({
@@ -1081,7 +1314,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               },
             };
 
-            const tempRefs = {
+            // TODO: type properly — tempRefs should match StreamRefs
+            const tempRefs: any = {
               subagentStateRefs: tempSubagentStateRefs,
               isReconnect: true, // Suppress Date.now() timestamps so items go straight to accordion zone
             };
@@ -1112,7 +1346,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               const eventTurnIndex = event.turn_index;
               if (eventTurnIndex != null && eventTurnIndex !== lastTurnIndex && resumeByTurnIndex.has(eventTurnIndex)) {
                 const resumePoint = resumeByTurnIndex.get(eventTurnIndex);
-                const taskRefsLocal = tempSubagentStateRefs[taskId];
+                const taskRefsLocal = tempSubagentStateRefs[taskId] as any;
 
                 // Finalize the previous run's last assistant message
                 for (let j = taskRefsLocal.messages.length - 1; j >= 0; j--) {
@@ -1161,8 +1395,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 const result = handleSubagentMessageChunk({
                   taskId,
                   assistantMessageId,
-                  contentType,
-                  content: event.content,
+                  contentType: contentType as string,
+                  content: event.content as string,
                   finishReason: event.finish_reason,
                   refs: tempRefs,
                   updateSubagentCard: historyUpdateSubagentCard,
@@ -1181,7 +1415,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 const result = handleSubagentToolCallResult({
                   taskId,
                   assistantMessageId,
-                  toolCallId: event.tool_call_id,
+                  toolCallId: event.tool_call_id as string,
                   result: {
                     content: event.content,
                     content_type: event.content_type,
@@ -1199,7 +1433,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 if (event.content) {
                   handleTaskMessageQueued({
                     taskId,
-                    content: event.content,
+                    content: event.content as string,
                     refs: tempRefs,
                     updateSubagentCard: historyUpdateSubagentCard,
                   });
@@ -1210,7 +1444,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 if (event.content) {
                   handleTaskMessageQueued({
                     taskId,
-                    content: event.content,
+                    content: event.content as string,
                     refs: tempRefs,
                     updateSubagentCard: historyUpdateSubagentCard,
                   });
@@ -1234,10 +1468,10 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                     else if (args > 0) text = t('chat.offloadedArgsNotification', { count: args });
                   }
                   if (text) {
-                    const taskRefsLocal = tempSubagentStateRefs[taskId];
+                    const taskRefsLocal = tempSubagentStateRefs[taskId] as any;
                     const order = ++taskRefsLocal.contentOrderCounterRef.current;
                     // Find the last assistant message and append notification segment
-                    const msgIdx = taskRefsLocal.messages.findLastIndex(m => m.role === 'assistant');
+                    const msgIdx = (taskRefsLocal.messages as any[]).findLastIndex((m: any) => m.role === 'assistant');
                     if (msgIdx !== -1) {
                       const msg = { ...taskRefsLocal.messages[msgIdx] };
                       msg.contentSegments = [...(msg.contentSegments || []), { type: 'notification', content: text, order }];
@@ -1251,28 +1485,28 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             }
             
             // Get final messages from temp refs
-            const rawMessages = tempSubagentStateRefs[taskId]?.messages || [];
+            const rawMessages = (tempSubagentStateRefs[taskId]?.messages || []) as any[];
 
             // Finalize messages: set isStreaming=false and close open reasoning/tool
             // processes on the last assistant message so SubagentStatusBar shows 'completed'.
-            const finalMessages = rawMessages.map((msg) => {
+            const finalMessages = rawMessages.map((msg: any) => {
               if (msg.role !== 'assistant') return msg;
               // Only finalize the last assistant message (or all, to be safe)
               const m = { ...msg, isStreaming: false };
               if (m.toolCallProcesses) {
-                const procs = { ...m.toolCallProcesses };
+                const procs = { ...m.toolCallProcesses } as Record<string, any>;
                 for (const [id, proc] of Object.entries(procs)) {
-                  if (proc.isInProgress) {
-                    procs[id] = { ...proc, isInProgress: false, isComplete: true };
+                  if ((proc as any).isInProgress) {
+                    procs[id] = { ...(proc as any), isInProgress: false, isComplete: true };
                   }
                 }
                 m.toolCallProcesses = procs;
               }
               if (m.reasoningProcesses) {
-                const rps = { ...m.reasoningProcesses };
+                const rps = { ...m.reasoningProcesses } as Record<string, any>;
                 for (const [id, rp] of Object.entries(rps)) {
-                  if (rp.isReasoning) {
-                    rps[id] = { ...rp, isReasoning: false, reasoningComplete: true };
+                  if ((rp as any).isReasoning) {
+                    rps[id] = { ...(rp as any), isReasoning: false, reasoningComplete: true };
                   }
                 }
                 m.reasoningProcesses = rps;
@@ -1313,9 +1547,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             console.log('[History] Stored subagent history for task:', taskId, 'with', finalMessages.length, 'messages, runIndex:', currentRunIndex);
           }
         }
-      } catch (replayError) {
+      } catch (replayError: unknown) {
         // Handle 404 gracefully - it's expected for brand new threads that haven't been fully initialized yet
-        if (replayError.message && replayError.message.includes('404')) {
+        if ((replayError as Error).message && (replayError as Error).message.includes('404')) {
           console.log('[History] Thread not found (404) - this is normal for new threads, skipping history load');
           // Don't set error message for 404 - it's expected for new threads
         } else {
@@ -1332,10 +1566,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         setMessages(prev => prev.map(msg => {
           if (!msg.subagentTasks) return msg;
           let changed = false;
-          const newTasks = { ...msg.subagentTasks };
+          const newTasks = { ...(msg.subagentTasks as Record<string, any>) };
           for (const [tcId, task] of Object.entries(newTasks)) {
-            if (task.resumeTargetId && messageQueuedAgentIds.has(task.resumeTargetId) && task.action === 'resume') {
-              newTasks[tcId] = { ...task, action: 'update' };
+            const t = task as any;
+            if (t.resumeTargetId && messageQueuedAgentIds.has(t.resumeTargetId) && t.action === 'resume') {
+              newTasks[tcId] = { ...t, action: 'update' };
               changed = true;
             }
           }
@@ -1350,19 +1585,19 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       if (threadId) {
         try {
           const feedbackList = await getThreadFeedback(threadId);
-          const map = {};
-          feedbackList.forEach(fb => { map[fb.turn_index] = fb; });
+          const map: Record<number, Record<string, unknown>> = {};
+          feedbackList.forEach((fb: Record<string, unknown>) => { map[fb.turn_index as number] = fb; });
           feedbackMapRef.current = map;
         } catch (e) {
           // Non-critical — feedback display is best-effort
           console.warn('[History] Failed to load feedback:', e);
         }
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[History] Error loading conversation history:', error);
       // Only show error if it's not a 404 (404 is expected for new threads)
-      if (!error.message || !error.message.includes('404')) {
-        setMessageError(error.message || 'Failed to load conversation history');
+      if (!(error as Error).message || !(error as Error).message.includes('404')) {
+        setMessageError((error as Error).message || 'Failed to load conversation history');
       }
       setIsLoadingHistory(false);
       historyLoadingRef.current = false;
@@ -1373,7 +1608,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Reconnects to an in-progress workflow stream after page refresh.
    * Creates an assistant message placeholder and processes live SSE events.
    */
-  const reconnectToStream = async ({ activeTasks = [] } = {}) => {
+  const reconnectToStream = async ({ activeTasks = [] }: { activeTasks?: string[] } = {}) => {
     if (!threadId || threadId === '__default__') return;
 
     console.log('[Reconnect] Starting reconnection for thread:', threadId);
@@ -1395,7 +1630,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     currentToolCallIdRef.current = null;
 
     {
-      const assistantMessage = createAssistantMessage(assistantMessageId);
+      const assistantMessage = createAssistantMessage(assistantMessageId) as unknown as MessageRecord;
       // Replace trailing empty history assistant message (created by history replay for the
       // in-progress pair) to avoid a duplicate bubble. If the last message is a non-empty
       // history assistant or something else, just append normally.
@@ -1405,13 +1640,13 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           if (
             lastMsg.role === 'assistant' &&
             lastMsg.isHistory &&
-            (!lastMsg.contentSegments || lastMsg.contentSegments.length === 0) &&
+            (!lastMsg.contentSegments || (lastMsg.contentSegments as any[]).length === 0) &&
             !lastMsg.content
           ) {
             return [...prev.slice(0, -1), assistantMessage];
           }
         }
-        return appendMessage(prev, assistantMessage);
+        return appendMessageRecord(prev,assistantMessage);
       });
       currentMessageRef.current = assistantMessageId;
     }
@@ -1426,7 +1661,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       isNewConversation: false,
       subagentStateRefs: subagentStateRefsRef.current,
       updateSubagentCard: updateSubagentCard
-        ? (agentId, data) => updateSubagentCard(agentId, { ...data, isReconnect: true })
+        ? (agentId: string, data: Record<string, unknown>) => updateSubagentCard(agentId, { ...data, isReconnect: true })
         : (() => {}),
       isReconnect: true,
       unresolvedHistoryInterruptRef,
@@ -1439,14 +1674,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       // Replay buffered events first — this processes artifact{task,spawned} events
       // which create subagent cards with the correct description/type. Per-task streams
       // are opened AFTER so they merge into existing cards instead of creating empty ones.
-      const result = await reconnectToWorkflowStream(threadId, lastEventIdRef.current, processEvent);
+      const result = await reconnectToWorkflowStream(threadId, lastEventIdRef.current as number | null, processEvent);
       if (result?.disconnected) {
         throw new Error('Reconnection stream disconnected');
       }
 
       // Mark message as complete
       setMessages((prev) =>
-        updateMessage(prev, assistantMessageId, (msg) => ({
+        updateMessageRecord(prev,assistantMessageId, (msg) => ({
           ...msg,
           isStreaming: false,
         }))
@@ -1483,14 +1718,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           openSubagentStream(threadId, taskId, processEvent);
         }
       }
-    } catch (err) {
+    } catch (err: unknown) {
       // 404/410 = workflow no longer available, not a real error
-      const status = err.message?.match(/status:\s*(\d+)/)?.[1];
+      const status = (err as Error).message?.match(/status:\s*(\d+)/)?.[1];
       if (status === '404' || status === '410') {
         console.log('[Reconnect] Workflow no longer available (', status, '), cleaning up');
       } else {
         console.error('[Reconnect] Error during reconnection:', err);
-        setMessageError(err.message || 'Failed to reconnect to stream');
+        setMessageError((err as Error).message || 'Failed to reconnect to stream');
       }
     } finally {
       setIsReconnecting(false);
@@ -1498,7 +1733,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       // Clean up empty reconnect messages (no content segments = nothing was streamed)
       setMessages((prev) => {
         const msg = prev.find((m) => m.id === assistantMessageId);
-        if (msg && (!msg.contentSegments || msg.contentSegments.length === 0) && !msg.content) {
+        if (msg && (!msg.contentSegments || (msg.contentSegments as any[]).length === 0) && !msg.content) {
           return prev.filter((m) => m.id !== assistantMessageId);
         }
         return prev;
@@ -1515,7 +1750,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Uses exponential backoff (1s, 2s, 4s, 8s, 16s) with up to 5 retries.
    * Falls back to cleanupAfterStreamEnd if workflow completes or retries exhaust.
    */
-  const attemptReconnectAfterDisconnect = async (assistantMessageId) => {
+  const attemptReconnectAfterDisconnect = async (assistantMessageId: string) => {
     const MAX_RETRIES = 5;
     const BASE_DELAY = 1000;
 
@@ -1540,8 +1775,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
         setIsReconnecting(false);
         return;
-      } catch (err) {
-        console.warn('[Reconnect] Attempt', attempt + 1, 'failed:', err.message);
+      } catch (err: unknown) {
+        console.warn('[Reconnect] Attempt', attempt + 1, 'failed:', (err as Error).message);
       }
     }
 
@@ -1581,9 +1816,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       // persists Turn N (on_background_workflow_complete) while /status already
       // sees COMPLETED — which would cause the frontend to skip reconnect and
       // miss the latest turn's events entirely.
-      const status = await getWorkflowStatus(threadId).catch((statusErr) => {
-        console.log('[Reconnect] Could not check workflow status:', statusErr.message);
-        return { can_reconnect: false };
+      const status: WorkflowStatusResponse = await getWorkflowStatus(threadId).catch((statusErr: unknown) => {
+        console.log('[Reconnect] Could not check workflow status:', (statusErr as Error).message);
+        return { can_reconnect: false, status: 'error' } as WorkflowStatusResponse;
       });
 
       if (cancelled) return;
@@ -1669,7 +1904,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           isNewConversation: false,
           subagentStateRefs: subagentStateRefsRef.current,
           updateSubagentCard: updateSubagentCard
-            ? (agentId, data) => updateSubagentCard(agentId, { ...data, isReconnect: true })
+            ? (agentId: string, data: Record<string, unknown>) => updateSubagentCard(agentId, { ...data, isReconnect: true })
             : (() => {}),
           isReconnect: true,
         };
@@ -1741,8 +1976,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             if (activeShortIds.has(shortId)) return;
           }
 
-          if (updatedTasks[toolCallId].status !== 'completed') {
-            updatedTasks[toolCallId] = { ...updatedTasks[toolCallId], status: 'completed' };
+          if ((updatedTasks as any)[toolCallId].status !== 'completed') {
+            (updatedTasks as any)[toolCallId] = { ...(updatedTasks as any)[toolCallId], status: 'completed' };
             changed = true;
           }
         });
@@ -1762,7 +1997,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * @param {string} shortTaskId - The 6-char task identifier (e.g., 'k7Xm2p')
    * @param {Function} processEvent - The event processor (from createStreamEventProcessor)
    */
-  const openSubagentStream = (tid, shortTaskId, processEvent) => {
+  const openSubagentStream = (tid: string, shortTaskId: string, processEvent: (event: SSEEvent) => void) => {
     if (subagentStreamsRef.current.has(shortTaskId)) return; // already open
     const controller = new AbortController();
     subagentStreamsRef.current.set(shortTaskId, controller);
@@ -1804,7 +2039,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Routes subagent events to the correct task based on agent ID mapping.
    * Defined at hook level so it can be shared between handleSendMessage and reconnectToStream.
    */
-  const getTaskIdFromEvent = (event) => {
+  const getTaskIdFromEvent = (event: SSEEvent): string | null => {
     // With task:{task_id} format, the task ID is embedded in the agent field.
     // e.g., agent = "task:pkyRHQ" → taskId = "task:pkyRHQ"
     // This is the agent_id used as key throughout the frontend.
@@ -1822,7 +2057,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Shared cleanup logic for all stream-end paths (send, reconnect, HITL resume).
    * Resets loading/streaming state, finalizes subagents, and auto-completes todos.
    */
-  const cleanupAfterStreamEnd = (assistantMessageId) => {
+  const cleanupAfterStreamEnd = (assistantMessageId: string) => {
     setIsLoading(false);
     setWorkspaceStarting(false);
     setIsCompacting(false);
@@ -1841,17 +2076,17 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     if (completePendingTodos) completePendingTodos();
     setMessages((prev) => {
       const msg = prev.find((m) => m.id === assistantMessageId);
-      if (!msg?.todoListProcesses || Object.keys(msg.todoListProcesses).length === 0) return prev;
-      const entries = Object.entries(msg.todoListProcesses);
-      const lastEntry = entries.reduce((a, b) => ((a[1].order || 0) >= (b[1].order || 0) ? a : b));
+      if (!msg?.todoListProcesses || Object.keys(msg.todoListProcesses as Record<string, any>).length === 0) return prev;
+      const entries = Object.entries(msg.todoListProcesses as Record<string, any>);
+      const lastEntry = entries.reduce((a: [string, any], b: [string, any]) => ((a[1].order || 0) >= (b[1].order || 0) ? a : b));
       const [lastKey, lastVal] = lastEntry;
-      const hasIncomplete = lastVal.todos?.some((t) => t.status !== 'completed');
+      const hasIncomplete = lastVal.todos?.some((t: any) => t.status !== 'completed');
       if (!hasIncomplete) return prev;
-      const completedTodos = lastVal.todos.map((t) => ({ ...t, status: 'completed' }));
+      const completedTodos = lastVal.todos.map((t: any) => ({ ...t, status: 'completed' }));
       return prev.map((m) => m.id !== assistantMessageId ? m : {
         ...m,
         todoListProcesses: {
-          ...m.todoListProcesses,
+          ...(m.todoListProcesses as Record<string, any>),
           [lastKey]: {
             ...lastVal,
             todos: completedTodos,
@@ -1873,19 +2108,20 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * @param {Function} getTaskIdFromEvent - Helper to route subagent events
    * @returns {Function} Event handler: (event) => void
    */
-  const createStreamEventProcessor = (assistantMessageId, refs, getTaskIdFromEvent, wasInterruptedRef = null) => {
+  // TODO: type properly — refs should use a proper interface matching StreamRefs from streamEventHandlers
+  const createStreamEventProcessor = (assistantMessageId: string, refs: any, getTaskIdFromEvent: (event: SSEEvent) => string | null, wasInterruptedRef: { current: boolean } | null = null) => {
     // Snapshot of the old assistant message's content order at the time the user
     // sent a queued message.  Used to roll back any content that leaked into the
     // old bubble due to stream-mode multiplexing (custom events can arrive after
     // message chunks from the post-injection model call).
-    let queuedAtOrder = null;
+    let queuedAtOrder: number | null = null;
 
     // FIFO queue for matching Task tool call IDs to artifact 'spawned' events.
     // Populated by the tool_calls handler, drained by the artifact/spawned handler.
     // This ensures toolCallIdToTaskIdMapRef is populated before tool_call_result.
-    const pendingTaskToolCallIds = [];
+    const pendingTaskToolCallIds: string[] = [];
 
-    const processEvent = (event) => {
+    const processEvent = (event: SSEEvent): void => {
       const eventType = event.event || 'message_chunk';
 
       // Track last event ID for reconnection
@@ -1959,33 +2195,33 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             }
 
             // Keep only segments at or before the queue point
-            const keptSegments = (msg.contentSegments || []).filter(
-              (s) => s.order <= effectiveQueuedAtOrder
+            const keptSegments = ((msg.contentSegments || []) as any[]).filter(
+              (s: any) => s.order <= effectiveQueuedAtOrder
             );
 
             // Rebuild plain-text content from kept text segments
             const keptContent = keptSegments
-              .filter((s) => s.type === 'text')
-              .map((s) => s.content || '')
+              .filter((s: any) => s.type === 'text')
+              .map((s: any) => s.content || '')
               .join('');
 
             // Collect IDs of kept processes so we can prune orphans
             const keptReasoningIds = new Set(
-              keptSegments.filter((s) => s.type === 'reasoning').map((s) => s.reasoningId)
+              keptSegments.filter((s: any) => s.type === 'reasoning').map((s: any) => s.reasoningId)
             );
             const keptToolCallIds = new Set(
-              keptSegments.filter((s) => s.type === 'tool_call').map((s) => s.toolCallId)
+              keptSegments.filter((s: any) => s.type === 'tool_call').map((s: any) => s.toolCallId)
             );
             const keptTodoListIds = new Set(
-              keptSegments.filter((s) => s.type === 'todo_list').map((s) => s.todoListId)
+              keptSegments.filter((s: any) => s.type === 'todo_list').map((s: any) => s.todoListId)
             );
             const keptSubagentIds = new Set(
-              keptSegments.filter((s) => s.type === 'subagent_task').map((s) => s.subagentId)
+              keptSegments.filter((s: any) => s.type === 'subagent_task').map((s: any) => s.subagentId)
             );
 
-            const filterObj = (obj, keepSet) => {
+            const filterObj = (obj: any, keepSet: Set<string>) => {
               if (!obj) return {};
-              const out = {};
+              const out: Record<string, any> = {};
               for (const [id, val] of Object.entries(obj)) {
                 if (keepSet.has(id)) out[id] = val;
               }
@@ -2018,14 +2254,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             );
           }
           // Reconnect path: create user bubbles from event payload
-          const queuedMsgs = (event.messages || []).filter((qMsg) => qMsg.content);
+          const queuedMsgs = ((event.messages || []) as any[]).filter((qMsg: any) => qMsg.content);
           if (queuedMsgs.length === 0) return prev;
-          const newUserMessages = queuedMsgs.map((qMsg) => ({
+          const newUserMessages = queuedMsgs.map((qMsg: any) => ({
             id: `queued-user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
             role: 'user',
             content: qMsg.content,
             contentType: 'text',
-            timestamp: qMsg.timestamp ? new Date(qMsg.timestamp * 1000) : new Date(),
+            timestamp: qMsg.timestamp ? new Date((qMsg.timestamp as number) * 1000) : new Date(),
             isStreaming: false,
             queueDelivered: true,
           }));
@@ -2034,8 +2270,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
         // 3. Create new assistant message placeholder
         const newAssistantId = `assistant-${Date.now()}`;
-        const newAssistant = createAssistantMessage(newAssistantId);
-        setMessages((prev) => appendMessage(prev, newAssistant));
+        const newAssistant = createAssistantMessage(newAssistantId) as unknown as MessageRecord;
+        setMessages((prev) => appendMessageRecord(prev,newAssistant));
 
         // 4. Switch closure & refs to new assistant message
         assistantMessageId = newAssistantId;
@@ -2085,8 +2321,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
               const taskRefs = getOrCreateTaskRefs(refs, taskId);
               const order = ++taskRefs.contentOrderCounterRef.current;
               // Find the last assistant message and append the notification segment
-              const updatedMessages = [...taskRefs.messages];
-              const msgIdx = updatedMessages.findLastIndex(m => m.role === 'assistant');
+              const updatedMessages = [...taskRefs.messages] as any[];
+              const msgIdx = updatedMessages.findLastIndex((m: any) => m.role === 'assistant');
               if (msgIdx !== -1) {
                 const msg = { ...updatedMessages[msgIdx] };
                 msg.contentSegments = [...(msg.contentSegments || []), { type: 'notification', content: text, order }];
@@ -2133,12 +2369,12 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           const subagentAssistantMessageId = `subagent-${taskId}-assistant-${taskRefs.runIndex}`;
 
           if (eventType === 'message_chunk') {
-            const contentType = event.content_type || 'text';
+            const contentType = (event.content_type || 'text') as string;
             handleSubagentMessageChunk({
               taskId,
               assistantMessageId: subagentAssistantMessageId,
               contentType,
-              content: event.content,
+              content: event.content as string,
               finishReason: event.finish_reason,
               refs,
               updateSubagentCard,
@@ -2147,7 +2383,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             handleSubagentToolCallChunks({
               taskId,
               assistantMessageId: subagentAssistantMessageId,
-              chunks: event.tool_call_chunks,
+              chunks: event.tool_call_chunks as any[],
               refs,
               updateSubagentCard,
             });
@@ -2155,12 +2391,12 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             handleSubagentToolCalls({
               taskId,
               assistantMessageId: subagentAssistantMessageId,
-              toolCalls: event.tool_calls,
+              toolCalls: event.tool_calls as any[],
               refs,
               updateSubagentCard,
             });
           } else if (eventType === 'tool_call_result') {
-            const toolCallId = event.tool_call_id;
+            const toolCallId = event.tool_call_id as string;
 
             if (process.env.NODE_ENV === 'development') {
               console.log('[Stream] Subagent tool_call_result event:', {
@@ -2197,7 +2433,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             if (event.content) {
               handleTaskMessageQueued({
                 taskId,
-                content: event.content,
+                content: event.content as string,
                 refs,
                 updateSubagentCard,
               });
@@ -2209,11 +2445,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
       if (eventType === 'message_chunk') {
         const contentType = event.content_type || 'text';
-        const eventId = event._eventId;
+        const eventId = event._eventId as number | undefined;
 
         // Handle reasoning_signal events
         if (contentType === 'reasoning_signal') {
-          const signalContent = event.content || '';
+          const signalContent = (event.content || '') as string;
           if (handleReasoningSignal({
             assistantMessageId,
             signalContent,
@@ -2229,7 +2465,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         if (contentType === 'reasoning' && event.content) {
           if (handleReasoningContent({
             assistantMessageId,
-            content: event.content,
+            content: event.content as string,
             refs,
             setMessages,
           })) {
@@ -2241,7 +2477,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         if (contentType === 'text') {
           if (handleTextContent({
             assistantMessageId,
-            content: event.content,
+            content: event.content as string,
             finishReason: event.finish_reason,
             refs,
             setMessages,
@@ -2257,7 +2493,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         const errorMessage = event.error || event.message || 'An error occurred while processing your request.';
         setMessageError(errorMessage);
         setMessages((prev) =>
-          updateMessage(prev, assistantMessageId, (msg) => ({
+          updateMessageRecord(prev,assistantMessageId, (msg) => ({
             ...msg,
             content: msg.content || errorMessage,
             contentType: 'text',
@@ -2268,31 +2504,31 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       } else if (eventType === 'tool_call_chunks') {
         handleToolCallChunks({
           assistantMessageId,
-          chunks: event.tool_call_chunks,
+          chunks: event.tool_call_chunks as any[],
           setMessages,
         });
         return;
       } else if (eventType === 'artifact') {
-        const artifactType = event.artifact_type;
+        const artifactType = event.artifact_type as string;
         console.log('[Stream] Received artifact event:', { artifactType, artifactId: event.artifact_id, payload: event.payload });
         if (artifactType === 'todo_update') {
           console.log('[Stream] Processing todo_update artifact for assistant message:', assistantMessageId);
           const result = handleTodoUpdate({
             assistantMessageId,
             artifactType,
-            artifactId: event.artifact_id,
+            artifactId: event.artifact_id as string,
             payload: event.payload || {},
             refs,
             setMessages,
-            eventId: event._eventId,
+            eventId: event._eventId as number,
           });
           console.log('[Stream] handleTodoUpdate result:', result);
         } else if (artifactType === 'file_operation' && onFileArtifact) {
           onFileArtifact(event);
         } else if (artifactType === 'task') {
-          const payload = event.payload || {};
+          const payload = (event.payload || {}) as Record<string, any>;
           const { task_id, action: rawAction, description, prompt, type } = payload;
-          const action = (() => { if (rawAction === 'spawned') return 'init'; if (rawAction === 'message_queued') return 'update'; if (rawAction === 'resumed') return 'resume'; return rawAction || 'init'; })();
+          const action = (() => { if (rawAction === 'spawned') return 'init'; if (rawAction === 'message_queued') return 'update'; if (rawAction === 'resumed') return 'resume'; return rawAction || 'init'; })() as string;
           if (!task_id) return;
           const agentId = `task:${task_id}`;
 
@@ -2300,32 +2536,32 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             // Drain pending Task tool call ID to establish toolCallId → agentId mapping
             // immediately, so clicking the inline card before tool_call_result resolves correctly
             if (pendingTaskToolCallIds.length > 0) {
-              const toolCallId = pendingTaskToolCallIds.shift();
+              const toolCallId = pendingTaskToolCallIds.shift()!;
               toolCallIdToTaskIdMapRef.current.set(toolCallId, agentId);
             }
-            const alreadyCompleted = completedTaskIdsRef.current.has(task_id);
+            const alreadyCompleted = completedTaskIdsRef.current.has(task_id as string);
             if (updateSubagentCard) {
               updateSubagentCard(agentId, {
                 agentId,
                 displayId: `Task-${task_id}`,
                 taskId: agentId,
-                type: type || 'general-purpose',
-                description: description || '',
-                prompt: prompt || description || '',
+                type: (type || 'general-purpose') as string,
+                description: (description || '') as string,
+                prompt: (prompt || description || '') as string,
                 status: alreadyCompleted ? 'completed' : 'active',
                 isActive: !alreadyCompleted,
               });
             }
             if (!alreadyCompleted) {
-              const currentThreadId = event.thread_id || threadIdRef.current;
-              openSubagentStream(currentThreadId, task_id, processEvent);
+              const currentThreadId = (event.thread_id || threadIdRef.current) as string;
+              openSubagentStream(currentThreadId, task_id as string, processEvent);
             }
           } else if (action === 'resume') {
             // Resume: preserve existing messages, inject user boundary, bump runIndex
             const taskRefsForResume = getOrCreateTaskRefs(refs, agentId);
 
             // Finalize the last assistant message from the previous run
-            const updatedMessages = [...taskRefsForResume.messages];
+            const updatedMessages = [...taskRefsForResume.messages] as any[];
             for (let i = updatedMessages.length - 1; i >= 0; i--) {
               if (updatedMessages[i].role === 'assistant' && updatedMessages[i].isStreaming) {
                 updatedMessages[i] = { ...updatedMessages[i], isStreaming: false };
@@ -2360,7 +2596,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 agentId,
                 displayId: `Task-${task_id}`,
                 taskId: agentId,
-                type: type || 'general-purpose',
+                type: (type || 'general-purpose') as string,
                 status: 'active',
                 isActive: true,
                 messages: updatedMessages,
@@ -2370,14 +2606,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             }
 
             // Abort existing stream before opening new one (race condition safety)
-            const existingController = subagentStreamsRef.current.get(task_id);
+            const existingController = subagentStreamsRef.current.get(task_id as string);
             if (existingController) {
               existingController.abort();
-              subagentStreamsRef.current.delete(task_id);
+              subagentStreamsRef.current.delete(task_id as string);
             }
 
-            const currentThreadId = event.thread_id || threadIdRef.current;
-            openSubagentStream(currentThreadId, task_id, processEvent);
+            const currentThreadId = (event.thread_id || threadIdRef.current) as string;
+            openSubagentStream(currentThreadId, task_id as string, processEvent);
           } else if (action === 'update') {
             if (updateSubagentCard) {
               updateSubagentCard(agentId, { queuedMessage: prompt || payload.description });
@@ -2386,10 +2622,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             setMessages(prev => prev.map(msg => {
               if (!msg.subagentTasks) return msg;
               let changed = false;
-              const newTasks = { ...msg.subagentTasks };
+              const newTasks = { ...(msg.subagentTasks as Record<string, any>) };
               for (const [tcId, task] of Object.entries(newTasks)) {
-                if (task.resumeTargetId === agentId && task.action === 'resume') {
-                  newTasks[tcId] = { ...task, action: 'update' };
+                const t = task as any;
+                if (t.resumeTargetId === agentId && t.action === 'resume') {
+                  newTasks[tcId] = { ...t, action: 'update' };
                   changed = true;
                 }
               }
@@ -2401,28 +2638,28 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       } else if (eventType === 'tool_calls') {
         handleToolCalls({
           assistantMessageId,
-          toolCalls: event.tool_calls,
+          toolCalls: event.tool_calls as any[],
           finishReason: event.finish_reason,
           refs,
           setMessages,
-          eventId: event._eventId,
+          eventId: event._eventId as number,
         });
         // Queue new Task tool call IDs for matching with upcoming artifact 'spawned' events
         if (event.tool_calls) {
           for (const tc of event.tool_calls) {
-            if ((tc.name === 'task' || tc.name === 'Task') && tc.id && !tc.args?.task_id) {
-              pendingTaskToolCallIds.push(tc.id);
+            if (((tc as any).name === 'task' || (tc as any).name === 'Task') && (tc as any).id && !(tc as any).args?.task_id) {
+              pendingTaskToolCallIds.push((tc as any).id);
             }
           }
         }
       } else if (eventType === 'tool_call_result') {
         // Check if this resolves an unresolved interrupt from history replay (FIFO array matching)
-        const unresolvedList = refs.unresolvedHistoryInterruptRef?.current;
-        if (unresolvedList?.length > 0 && typeof event.content === 'string') {
-          const content = event.content;
+        const unresolvedList = refs.unresolvedHistoryInterruptRef?.current as HistoryInterruptInfo[] | undefined;
+        if (unresolvedList && unresolvedList.length > 0 && typeof event.content === 'string') {
+          const content = event.content as string;
 
           // Try create_workspace / start_question
-          const matchIdx = unresolvedList.findIndex((u) => u.type === 'create_workspace' || u.type === 'start_question');
+          const matchIdx = unresolvedList.findIndex((u: HistoryInterruptInfo) => u.type === 'create_workspace' || u.type === 'start_question');
           if (matchIdx !== -1) {
             const matched = unresolvedList[matchIdx];
             const dataKey = matched.type === 'create_workspace' ? 'workspaceProposals' : 'questionProposals';
@@ -2432,23 +2669,24 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             } else {
               try { if (JSON.parse(content)?.success === false) resolvedStatus = 'rejected'; } catch { /* not JSON */ }
             }
+            const proposalId = matched.proposalId!;
             setMessages((prev) =>
-              updateMessage(prev, matched.assistantMessageId, (msg) => ({
+              updateMessageRecord(prev,matched.assistantMessageId, (m) => { const msg = m as any; return {
                 ...msg,
                 [dataKey]: {
                   ...(msg[dataKey] || {}),
-                  [matched.proposalId]: {
-                    ...(msg[dataKey]?.[matched.proposalId] || {}),
+                  [proposalId]: {
+                    ...(msg[dataKey]?.[proposalId] || {}),
                     status: resolvedStatus,
                   },
                 },
-              }))
+              }; })
             );
             unresolvedList.splice(matchIdx, 1);
           }
         }
 
-        const toolCallId = event.tool_call_id;
+        const toolCallId = event.tool_call_id as string;
 
         // Build toolCallId → agentId mapping from Task tool artifact
         if (event.artifact?.task_id && toolCallId) {
@@ -2465,11 +2703,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
         handleToolCallResult({
           assistantMessageId,
-          toolCallId: event.tool_call_id,
+          toolCallId,
           result: {
             content: event.content,
             content_type: event.content_type,
-            tool_call_id: event.tool_call_id,
+            tool_call_id: toolCallId,
             artifact: event.artifact,
           },
           refs,
@@ -2491,16 +2729,17 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           } catch { /* not JSON, ignore */ }
         }
       } else if (eventType === 'interrupt') {
-        const actionType = event.action_requests?.[0]?.type;
+        const actionRequests = event.action_requests || [];
+        const actionType = actionRequests[0]?.type as string | undefined;
 
         if (actionType === 'ask_user_question') {
           // --- User question interrupt ---
           const questionId = event.interrupt_id || `question-${Date.now()}`;
-          const questionData = event.action_requests[0];
+          const questionData = actionRequests[0] as Record<string, any>;
           const order = event._eventId != null ? event._eventId : ++refs.contentOrderCounterRef.current;
 
           setMessages((prev) =>
-            updateMessage(prev, assistantMessageId, (msg) => ({
+            updateMessageRecord(prev,assistantMessageId, (m) => { const msg = m as any; return {
               ...msg,
               contentSegments: [
                 ...(msg.contentSegments || []),
@@ -2518,10 +2757,10 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 },
               },
               isStreaming: false,
-            }))
+            }; })
           );
 
-          pendingInterruptIdsRef.current.add(event.interrupt_id);
+          pendingInterruptIdsRef.current.add(event.interrupt_id!);
           setPendingInterrupt({
             type: 'ask_user_question',
             interruptId: event.interrupt_id,
@@ -2531,11 +2770,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         } else if (actionType === 'create_workspace') {
           // --- Create workspace interrupt ---
           const proposalId = event.interrupt_id || `workspace-${Date.now()}`;
-          const proposalData = event.action_requests[0];
+          const proposalData = actionRequests[0] as Record<string, any>;
           const order = event._eventId != null ? event._eventId : ++refs.contentOrderCounterRef.current;
 
           setMessages((prev) =>
-            updateMessage(prev, assistantMessageId, (msg) => ({
+            updateMessageRecord(prev,assistantMessageId, (m) => { const msg = m as any; return {
               ...msg,
               contentSegments: [
                 ...(msg.contentSegments || []),
@@ -2551,10 +2790,10 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 },
               },
               isStreaming: false,
-            }))
+            }; })
           );
 
-          pendingInterruptIdsRef.current.add(event.interrupt_id);
+          pendingInterruptIdsRef.current.add(event.interrupt_id!);
           setPendingInterrupt({
             type: 'create_workspace',
             interruptId: event.interrupt_id,
@@ -2564,11 +2803,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         } else if (actionType === 'start_question') {
           // --- Start question interrupt ---
           const proposalId = event.interrupt_id || `question-start-${Date.now()}`;
-          const proposalData = event.action_requests[0];
+          const proposalData = actionRequests[0] as Record<string, any>;
           const order = event._eventId != null ? event._eventId : ++refs.contentOrderCounterRef.current;
 
           setMessages((prev) =>
-            updateMessage(prev, assistantMessageId, (msg) => ({
+            updateMessageRecord(prev,assistantMessageId, (m) => { const msg = m as any; return {
               ...msg,
               contentSegments: [
                 ...(msg.contentSegments || []),
@@ -2584,10 +2823,10 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 },
               },
               isStreaming: false,
-            }))
+            }; })
           );
 
-          pendingInterruptIdsRef.current.add(event.interrupt_id);
+          pendingInterruptIdsRef.current.add(event.interrupt_id!);
           setPendingInterrupt({
             type: 'start_question',
             interruptId: event.interrupt_id,
@@ -2598,14 +2837,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
           // --- Plan approval interrupt (existing) ---
           const planApprovalId = event.interrupt_id || `plan-${Date.now()}`;
           const description =
-            event.action_requests?.[0]?.description ||
-            event.action_requests?.[0]?.args?.plan ||
+            (actionRequests[0] as any)?.description ||
+            (actionRequests[0] as any)?.args?.plan ||
             'No plan description provided.';
 
           const order = event._eventId != null ? event._eventId : ++refs.contentOrderCounterRef.current;
 
           setMessages((prev) =>
-            updateMessage(prev, assistantMessageId, (msg) => ({
+            updateMessageRecord(prev,assistantMessageId, (m) => { const msg = m as any; return {
               ...msg,
               contentSegments: [
                 ...(msg.contentSegments || []),
@@ -2620,17 +2859,17 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
                 },
               },
               isStreaming: false,
-            }))
+            }; })
           );
 
-          pendingInterruptIdsRef.current.add(event.interrupt_id);
+          pendingInterruptIdsRef.current.add(event.interrupt_id!);
           setPendingInterrupt({
             interruptId: event.interrupt_id,
-            actionRequests: event.action_requests || [],
+            actionRequests: actionRequests,
             threadId: event.thread_id,
             assistantMessageId,
             planApprovalId,
-            planMode: event.action_requests?.some(r => r.name === 'SubmitPlan') || currentPlanModeRef.current,
+            planMode: actionRequests.some((r: any) => r.name === 'SubmitPlan') || currentPlanModeRef.current,
           });
         }
 
@@ -2648,12 +2887,12 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Handles sending a message while the agent is already streaming.
    * The backend will queue it for injection before the next LLM call.
    */
-  const handleSendQueuedMessage = async (message, planMode = false, additionalContext = null, attachmentMeta = null) => {
+  const handleSendQueuedMessage = async (message: string, planMode: boolean = false, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null) => {
     // Show user message in chat with queued indicator
-    const userMessage = createUserMessage(message, attachmentMeta);
+    const userMessage = createUserMessage(message, attachmentMeta as any) as unknown as MessageRecord;
     userMessage.queued = true;
-    recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
-    setMessages((prev) => appendMessage(prev, userMessage));
+    recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp as Date, userMessage.id as string);
+    setMessages((prev) => appendMessageRecord(prev,userMessage));
 
     try {
       // Send to same endpoint — backend will auto-queue and return message_queued SSE
@@ -2671,7 +2910,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             queuedAtOrderRef.current = contentOrderCounterRef.current;
             // Update the user message to reflect queued status
             setMessages((prev) =>
-              updateMessage(prev, userMessage.id, (msg) => ({
+              updateMessageRecord(prev,userMessage.id as string, (msg) => ({
                 ...msg,
                 queued: true,
                 queuePosition: event.position,
@@ -2679,17 +2918,17 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             );
           }
         },
-        additionalContext,
+        additionalContext as any,
         agentMode
       );
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Error queuing message:', err);
       // Update user message to show queue failure
       setMessages((prev) =>
-        updateMessage(prev, userMessage.id, (msg) => ({
+        updateMessageRecord(prev,userMessage.id as string, (msg) => ({
           ...msg,
           queued: false,
-          queueError: err.message || 'Failed to queue message',
+          queueError: (err as Error).message || 'Failed to queue message',
         }))
       );
     }
@@ -2703,7 +2942,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * @param {Array|null} additionalContext - Optional additional context for skill loading
    * @param {Array|null} attachmentMeta - Optional attachment metadata for user message display
    */
-  const handleSendMessage = async (message, planMode = false, additionalContext = null, attachmentMeta = null, { model, reasoningEffort, fastMode } = {}) => {
+  const handleSendMessage = async (message: string, planMode: boolean = false, additionalContext: Record<string, unknown>[] | null = null, attachmentMeta: Record<string, unknown>[] | null = null, { model, reasoningEffort, fastMode }: ModelOptions = {}) => {
     const hasContent = message.trim() || (additionalContext && additionalContext.length > 0);
     if (!workspaceId || !hasContent) {
       return;
@@ -2726,9 +2965,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       setPendingRejection(null);
 
       // Show user message in chat
-      const userMsg = createUserMessage(message);
-      recentlySentTrackerRef.current.track(message.trim(), userMsg.timestamp, userMsg.id);
-      setMessages((prev) => appendMessage(prev, userMsg));
+      const userMsg = createUserMessage(message) as unknown as MessageRecord;
+      recentlySentTrackerRef.current.track(message.trim(), userMsg.timestamp as Date, userMsg.id as string);
+      setMessages((prev) => appendMessageRecord(prev,userMsg));
 
       // Send as rejection feedback via hitl_response
       const hitlResponse = {
@@ -2740,8 +2979,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     }
 
     // Create and add user message
-    const userMessage = createUserMessage(message, attachmentMeta);
-    recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
+    const userMessage = createUserMessage(message, attachmentMeta as any) as unknown as MessageRecord;
+    recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp as Date, userMessage.id as string);
 
     // Check if this is a new conversation
     // Only consider it a new conversation if:
@@ -2760,7 +2999,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
     // Add user message after history messages
     setMessages((prev) => {
-      const newMessages = appendMessage(prev, userMessage);
+      const newMessages = appendMessageRecord(prev,userMessage);
       // Update new messages start index if this is the first new message
       if (newMessagesStartIndexRef.current === prev.length) {
         newMessagesStartIndexRef.current = newMessages.length;
@@ -2782,11 +3021,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     currentReasoningIdRef.current = null;
     currentToolCallIdRef.current = null;
 
-    const assistantMessage = createAssistantMessage(assistantMessageId);
+    const assistantMessage = createAssistantMessage(assistantMessageId) as unknown as MessageRecord;
 
     // Add assistant message after history messages
     setMessages((prev) => {
-      const newMessages = appendMessage(prev, assistantMessage);
+      const newMessages = appendMessageRecord(prev,assistantMessage);
       // Update new messages start index
       newMessagesStartIndexRef.current = newMessages.length;
       return newMessages;
@@ -2818,7 +3057,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         [],
         planMode,
         processEvent,
-        additionalContext,
+        additionalContext as any,
         agentMode,
         undefined, undefined, undefined, undefined,
         model || null,
@@ -2837,16 +3076,16 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       {
         const finalId = currentMessageRef.current || assistantMessageId;
         setMessages((prev) =>
-          updateMessage(prev, finalId, (msg) => ({
+          updateMessageRecord(prev,finalId, (msg) => ({
             ...msg,
             isStreaming: false,
           }))
         );
       }
-    } catch (err) {
+    } catch (err: unknown) {
           // Handle rate limit (429) — show limit message and remove optimistic assistant message
-          if (err.status === 429) {
-            const info = err.rateLimitInfo || {};
+          if ((err as any).status === 429) {
+            const info = (err as any).rateLimitInfo || {};
             const limitMsg = info.type === 'credit_limit'
               ? `Daily credit limit reached (${info.used_credits}/${info.credit_limit} credits). Resets at midnight UTC.`
               : info.type === 'workspace_limit'
@@ -2856,9 +3095,9 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
           } else {
             console.error('Error sending message:', err);
-            setMessageError(err.message || 'Failed to send message');
+            setMessageError((err as Error).message || 'Failed to send message');
             setMessages((prev) =>
-              updateMessage(prev, assistantMessageId, (msg) => ({
+              updateMessageRecord(prev,assistantMessageId, (msg) => ({
                 ...msg,
                 content: msg.content || 'Failed to send message. Please try again.',
                 isStreaming: false,
@@ -2871,7 +3110,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
             // Mark message as complete (use live ref in case queued_message_injected switched it)
             const finalId = currentMessageRef.current || assistantMessageId;
             setMessages((prev) =>
-              updateMessage(prev, finalId, (msg) => ({
+              updateMessageRecord(prev,finalId, (msg) => ({
                 ...msg,
                 isStreaming: false,
               }))
@@ -2886,7 +3125,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Resumes an interrupted workflow with an HITL response (approve or reject).
    * Follows the same pattern as handleSendMessage but sends messages: [] with hitl_response.
    */
-  const resumeWithHitlResponse = useCallback(async (hitlResponse, planMode = false) => {
+  const resumeWithHitlResponse = useCallback(async (hitlResponse: Record<string, { decisions: Array<{ type: string; message?: string }> }>, planMode: boolean = false) => {
     setPendingInterrupt(null);
     pendingInterruptIdsRef.current.clear();
     collectedHitlResponsesRef.current = {};
@@ -2897,8 +3136,8 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     currentReasoningIdRef.current = null;
     currentToolCallIdRef.current = null;
 
-    const assistantMessage = createAssistantMessage(assistantMessageId);
-    setMessages((prev) => appendMessage(prev, assistantMessage));
+    const assistantMessage = createAssistantMessage(assistantMessageId) as unknown as MessageRecord;
+    setMessages((prev) => appendMessageRecord(prev,assistantMessage));
     currentMessageRef.current = assistantMessageId;
 
     setIsLoading(true);
@@ -2928,7 +3167,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
         hitlResponse,
         processEvent,
         planMode,
-        lastModelOptionsRef.current
+        lastModelOptionsRef.current as any
       );
 
       if (result?.disconnected) {
@@ -2942,17 +3181,17 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       {
         const finalId = currentMessageRef.current || assistantMessageId;
         setMessages((prev) =>
-          updateMessage(prev, finalId, (msg) => ({
+          updateMessageRecord(prev,finalId, (msg) => ({
             ...msg,
             isStreaming: false,
           }))
         );
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('[HITL] Error resuming workflow:', err);
-      setMessageError(err.message || 'Failed to resume workflow');
+      setMessageError((err as Error).message || 'Failed to resume workflow');
       setMessages((prev) =>
-        updateMessage(prev, assistantMessageId, (msg) => ({
+        updateMessageRecord(prev,assistantMessageId, (msg) => ({
           ...msg,
           content: msg.content || 'Failed to resume workflow. Please try again.',
           isStreaming: false,
@@ -2971,23 +3210,24 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const handleApproveInterrupt = useCallback(() => {
     if (!pendingInterrupt) return;
     const { interruptId, assistantMessageId, planApprovalId, planMode } = pendingInterrupt;
+    const approvalId = planApprovalId!;
 
     // Update plan card status to "approved"
     setMessages((prev) =>
-      updateMessage(prev, assistantMessageId, (msg) => ({
+      updateMessageRecord(prev,assistantMessageId!, (m) => { const msg = m as any; return {
         ...msg,
         planApprovals: {
           ...(msg.planApprovals || {}),
-          [planApprovalId]: {
-            ...(msg.planApprovals?.[planApprovalId] || {}),
+          [approvalId]: {
+            ...(msg.planApprovals?.[approvalId] || {}),
             status: 'approved',
           },
         },
-      }))
+      }; })
     );
 
     const hitlResponse = {
-      [interruptId]: { decisions: [{ type: 'approve' }] },
+      [interruptId!]: { decisions: [{ type: 'approve' }] },
     };
     resumeWithHitlResponse(hitlResponse, planMode);
   }, [pendingInterrupt, resumeWithHitlResponse]);
@@ -2995,33 +3235,35 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const handleRejectInterrupt = useCallback(() => {
     if (!pendingInterrupt) return;
     const { interruptId, assistantMessageId, planApprovalId, planMode } = pendingInterrupt;
+    const approvalId = planApprovalId!;
 
     // Update plan card status to "rejected"
     setMessages((prev) =>
-      updateMessage(prev, assistantMessageId, (msg) => ({
+      updateMessageRecord(prev,assistantMessageId!, (m) => { const msg = m as any; return {
         ...msg,
         planApprovals: {
           ...(msg.planApprovals || {}),
-          [planApprovalId]: {
-            ...(msg.planApprovals?.[planApprovalId] || {}),
+          [approvalId]: {
+            ...(msg.planApprovals?.[approvalId] || {}),
             status: 'rejected',
           },
         },
-      }))
+      }; })
     );
 
     // Store interruptId + planMode so next handleSendMessage routes as rejection feedback
-    setPendingRejection({ interruptId, planMode });
+    setPendingRejection({ interruptId: interruptId!, planMode: planMode! });
     setPendingInterrupt(null);
   }, [pendingInterrupt]);
 
-  const handleAnswerQuestion = useCallback((answer, questionId, interruptId) => {
+  const handleAnswerQuestion = useCallback((answer: string, questionId: string, interruptId: string) => {
     if (!questionId || !interruptId) return;
 
     // Optimistically mark the card as answered
     setMessages((prev) =>
-      prev.map((msg) => {
-        if (!msg.userQuestions?.[questionId]) return msg;
+      prev.map((m) => {
+        const msg = m as any;
+        if (!msg.userQuestions?.[questionId]) return m;
         return {
           ...msg,
           userQuestions: {
@@ -3048,13 +3290,14 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     }
   }, [resumeWithHitlResponse]);
 
-  const handleSkipQuestion = useCallback((questionId, interruptId) => {
+  const handleSkipQuestion = useCallback((questionId: string, interruptId: string) => {
     if (!questionId || !interruptId) return;
 
     // Mark the card as skipped
     setMessages((prev) =>
-      prev.map((msg) => {
-        if (!msg.userQuestions?.[questionId]) return msg;
+      prev.map((m) => {
+        const msg = m as any;
+        if (!msg.userQuestions?.[questionId]) return m;
         return {
           ...msg,
           userQuestions: {
@@ -3083,16 +3326,18 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const handleApproveCreateWorkspace = useCallback(() => {
     if (!pendingInterrupt || pendingInterrupt.type !== 'create_workspace') return;
     const { interruptId, proposalId } = pendingInterrupt;
+    const pid = proposalId!;
 
     setMessages((prev) =>
-      prev.map((msg) => {
-        if (!msg.workspaceProposals?.[proposalId]) return msg;
+      prev.map((m) => {
+        const msg = m as any;
+        if (!msg.workspaceProposals?.[pid]) return m;
         return {
           ...msg,
           workspaceProposals: {
             ...msg.workspaceProposals,
-            [proposalId]: {
-              ...msg.workspaceProposals[proposalId],
+            [pid]: {
+              ...msg.workspaceProposals[pid],
               status: 'approved',
             },
           },
@@ -3101,7 +3346,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     );
 
     const hitlResponse = {
-      [interruptId]: { decisions: [{ type: 'approve' }] },
+      [interruptId!]: { decisions: [{ type: 'approve' }] },
     };
     resumeWithHitlResponse(hitlResponse, false);
   }, [pendingInterrupt, resumeWithHitlResponse]);
@@ -3109,16 +3354,18 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const handleRejectCreateWorkspace = useCallback(() => {
     if (!pendingInterrupt || pendingInterrupt.type !== 'create_workspace') return;
     const { interruptId, proposalId } = pendingInterrupt;
+    const pid = proposalId!;
 
     setMessages((prev) =>
-      prev.map((msg) => {
-        if (!msg.workspaceProposals?.[proposalId]) return msg;
+      prev.map((m) => {
+        const msg = m as any;
+        if (!msg.workspaceProposals?.[pid]) return m;
         return {
           ...msg,
           workspaceProposals: {
             ...msg.workspaceProposals,
-            [proposalId]: {
-              ...msg.workspaceProposals[proposalId],
+            [pid]: {
+              ...msg.workspaceProposals[pid],
               status: 'rejected',
             },
           },
@@ -3127,7 +3374,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     );
 
     const hitlResponse = {
-      [interruptId]: { decisions: [{ type: 'reject' }] },
+      [interruptId!]: { decisions: [{ type: 'reject' }] },
     };
     resumeWithHitlResponse(hitlResponse, false);
   }, [pendingInterrupt, resumeWithHitlResponse]);
@@ -3135,16 +3382,18 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const handleApproveStartQuestion = useCallback(() => {
     if (!pendingInterrupt || pendingInterrupt.type !== 'start_question') return;
     const { interruptId, proposalId } = pendingInterrupt;
+    const pid = proposalId!;
 
     setMessages((prev) =>
-      prev.map((msg) => {
-        if (!msg.questionProposals?.[proposalId]) return msg;
+      prev.map((m) => {
+        const msg = m as any;
+        if (!msg.questionProposals?.[pid]) return m;
         return {
           ...msg,
           questionProposals: {
             ...msg.questionProposals,
-            [proposalId]: {
-              ...msg.questionProposals[proposalId],
+            [pid]: {
+              ...msg.questionProposals[pid],
               status: 'approved',
             },
           },
@@ -3153,7 +3402,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     );
 
     const hitlResponse = {
-      [interruptId]: { decisions: [{ type: 'approve' }] },
+      [interruptId!]: { decisions: [{ type: 'approve' }] },
     };
     resumeWithHitlResponse(hitlResponse, false);
   }, [pendingInterrupt, resumeWithHitlResponse]);
@@ -3161,16 +3410,18 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   const handleRejectStartQuestion = useCallback(() => {
     if (!pendingInterrupt || pendingInterrupt.type !== 'start_question') return;
     const { interruptId, proposalId } = pendingInterrupt;
+    const pid = proposalId!;
 
     setMessages((prev) =>
-      prev.map((msg) => {
-        if (!msg.questionProposals?.[proposalId]) return msg;
+      prev.map((m) => {
+        const msg = m as any;
+        if (!msg.questionProposals?.[pid]) return m;
         return {
           ...msg,
           questionProposals: {
             ...msg.questionProposals,
-            [proposalId]: {
-              ...msg.questionProposals[proposalId],
+            [pid]: {
+              ...msg.questionProposals[pid],
               status: 'rejected',
             },
           },
@@ -3179,13 +3430,13 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     );
 
     const hitlResponse = {
-      [interruptId]: { decisions: [{ type: 'reject' }] },
+      [interruptId!]: { decisions: [{ type: 'reject' }] },
     };
     resumeWithHitlResponse(hitlResponse, false);
   }, [pendingInterrupt, resumeWithHitlResponse]);
 
-  const insertNotification = useCallback((text, variant = 'info') => {
-    setMessages((prev) => appendMessage(prev, createNotificationMessage(text, variant)));
+  const insertNotification = useCallback((text: string, variant: 'info' | 'success' | 'warning' = 'info') => {
+    setMessages((prev) => appendMessageRecord(prev,createNotificationMessage(text, variant) as unknown as MessageRecord));
   }, []);
 
   // =====================================================================
@@ -3193,7 +3444,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   // =====================================================================
 
   /** Lazy-cached turn checkpoint data. Invalidated after each edit/regenerate. */
-  const turnCheckpointsRef = useRef(null);
+  const turnCheckpointsRef = useRef<{ turns: Array<{ edit_checkpoint_id: string | null; regenerate_checkpoint_id: string; turn_index: number }>; retry_checkpoint_id: string | null } | null>(null);
 
   /**
    * Helper: get or fetch turn checkpoints for the current thread.
@@ -3216,7 +3467,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Helper: run a checkpoint-based stream (shared by edit, regenerate, retry).
    * Sets up assistant placeholder, event processor, and handles the stream lifecycle.
    */
-  const streamFromCheckpoint = useCallback(async (message, checkpointId, truncateIndex, forkFromTurn = null, modelOptions = {}) => {
+  const streamFromCheckpoint = useCallback(async (message: string | null, checkpointId: string, truncateIndex: number, forkFromTurn: number | null = null, modelOptions: ModelOptions = {}) => {
     if (isLoading) return;
 
     setIsLoading(true);
@@ -3231,11 +3482,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     currentReasoningIdRef.current = null;
     currentToolCallIdRef.current = null;
 
-    const assistantMessage = createAssistantMessage(assistantMessageId);
-    const userMessage = message ? createUserMessage(message) : null;
+    const assistantMessage = createAssistantMessage(assistantMessageId) as unknown as MessageRecord;
+    const userMessage = message ? createUserMessage(message) as unknown as MessageRecord : null;
 
     if (userMessage) {
-      recentlySentTrackerRef.current.track(message.trim(), userMessage.timestamp, userMessage.id);
+      recentlySentTrackerRef.current.track(message!.trim(), userMessage.timestamp as Date, userMessage.id as string);
     }
 
     setMessages((prev) => {
@@ -3292,16 +3543,16 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
       const finalId = currentMessageRef.current || assistantMessageId;
       setMessages((prev) =>
-        updateMessage(prev, finalId, (msg) => ({
+        updateMessageRecord(prev,finalId, (msg) => ({
           ...msg,
           isStreaming: false,
         }))
       );
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('[streamFromCheckpoint] Error:', err);
-      setMessageError(err.message || 'Failed to process request');
+      setMessageError((err as Error).message || 'Failed to process request');
       setMessages((prev) =>
-        updateMessage(prev, assistantMessageId, (msg) => ({
+        updateMessageRecord(prev,assistantMessageId, (msg) => ({
           ...msg,
           content: msg.content || 'Failed to process request. Please try again.',
           isStreaming: false,
@@ -3312,7 +3563,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
       if (!wasDisconnected && !wasInterruptedRef.current) {
         const finalId = currentMessageRef.current || assistantMessageId;
         setMessages((prev) =>
-          updateMessage(prev, finalId, (msg) => ({
+          updateMessageRecord(prev,finalId, (msg) => ({
             ...msg,
             isStreaming: false,
           }))
@@ -3327,7 +3578,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Edit a user message: truncate to before that message, send modified content
    * from the checkpoint before the original message was added.
    */
-  const handleEditMessage = useCallback(async (messageId, newContent, modelOptions = {}) => {
+  const handleEditMessage = useCallback(async (messageId: string, newContent: string, modelOptions: ModelOptions = {}) => {
     if (!newContent?.trim()) return;
 
     const msgIndex = messages.findIndex((m) => m.id === messageId);
@@ -3357,7 +3608,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
    * Regenerate an assistant response: truncate the assistant message,
    * re-run from the checkpoint that has the user message but before AI response.
    */
-  const handleRegenerate = useCallback(async (messageId, modelOptions = {}) => {
+  const handleRegenerate = useCallback(async (messageId: string, modelOptions: ModelOptions = {}) => {
     const msgIndex = messages.findIndex((m) => m.id === messageId);
     if (msgIndex === -1) return;
 
@@ -3380,7 +3631,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
   /**
    * Retry the last failed/errored turn from the latest checkpoint.
    */
-  const handleRetry = useCallback(async (modelOptions = {}) => {
+  const handleRetry = useCallback(async (modelOptions: ModelOptions = {}) => {
     const turnsData = await getTurnCheckpoints();
     const checkpointId = turnsData?.retry_checkpoint_id;
     if (!checkpointId) {
@@ -3394,7 +3645,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     }
 
     // Find the last error message and truncate from there
-    const lastErrorIndex = messages.findLastIndex((m) => m.error);
+    const lastErrorIndex = (messages as any[]).findLastIndex((m: any) => m.error);
     const truncateIndex = lastErrorIndex !== -1 ? lastErrorIndex : messages.length;
 
     // Retry overwrites the last turn
@@ -3404,13 +3655,13 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
 
   // ==================== Feedback ====================
 
-  const deriveTurnIndex = useCallback((messageId) => {
+  const deriveTurnIndex = useCallback((messageId: string): number => {
     const msgIndex = messages.findIndex(m => m.id === messageId);
     if (msgIndex === -1) return -1;
     return messages.slice(0, msgIndex + 1).filter(m => m.role === 'assistant').length - 1;
   }, [messages]);
 
-  const handleThumbUp = useCallback(async (messageId) => {
+  const handleThumbUp = useCallback(async (messageId: string) => {
     const turnIndex = deriveTurnIndex(messageId);
     if (turnIndex === -1) return null;
 
@@ -3431,7 +3682,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     }
   }, [deriveTurnIndex, threadId]);
 
-  const handleThumbDown = useCallback(async (messageId, issueCategories, comment, consentHumanReview) => {
+  const handleThumbDown = useCallback(async (messageId: string, issueCategories: string[] | undefined, comment: string | undefined, consentHumanReview: boolean | undefined) => {
     const turnIndex = deriveTurnIndex(messageId);
     if (turnIndex === -1) return null;
 
@@ -3445,7 +3696,7 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     }
   }, [deriveTurnIndex, threadId]);
 
-  const getFeedbackForMessage = useCallback((messageId) => {
+  const getFeedbackForMessage = useCallback((messageId: string) => {
     const turnIndex = deriveTurnIndex(messageId);
     if (turnIndex === -1) return null;
     return feedbackMapRef.current[turnIndex] || null;
@@ -3486,11 +3737,11 @@ export function useChatMessages(workspaceId, initialThreadId = null, updateTodoL
     handleThumbDown,
     getFeedbackForMessage,
     // Resolve subagentId (e.g. toolCallId from segment) to stable agent_id for card operations.
-    resolveSubagentIdToAgentId: (subagentId) =>
+    resolveSubagentIdToAgentId: (subagentId: string) =>
       toolCallIdToTaskIdMapRef.current.get(subagentId) || subagentId,
     // Expose subagent history for lazy loading. Resolves toolCallId -> agent_id via mapping.
     // Returns { ...historyData, agentId } so caller can use agentId for card operations.
-    getSubagentHistory: (subagentId) => {
+    getSubagentHistory: (subagentId: string) => {
       const agentId = toolCallIdToTaskIdMapRef.current.get(subagentId) || subagentId;
       const data = subagentHistoryRef.current?.[agentId];
       return data ? { ...data, agentId } : null;

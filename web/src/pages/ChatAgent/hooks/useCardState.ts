@@ -1,25 +1,69 @@
 import { useState } from 'react';
 
-/**
- * useCardState Hook
- *
- * Manages state for subagent cards and todo list data.
- * The floating card UI (draggable, minimizable cards) has been removed —
- * subagents render via NavigationPanel + MessageList, and todos via TodoDrawer.
- * This hook still stores card data keyed by cardId for those consumers.
- *
- * @param {Object} initialCards - Initial cards configuration
- * @returns {Object} Cards state and handlers
- */
-export function useCardState(initialCards = {}) {
-  const [cards, setCards] = useState(initialCards);
+// --- Card-level types ---
 
-  /**
-   * Update or create todo list card data.
-   * Called when todo list is detected/updated during live streaming.
-   * @param {Object} todoData - Todo list data { todos, total, completed, in_progress, pending }
-   */
-  const updateTodoListCard = (todoData) => {
+interface TodoItem {
+  status: string;
+  [key: string]: unknown;
+}
+
+interface TodoData {
+  todos: TodoItem[];
+  total: number;
+  completed: number;
+  in_progress: number;
+  pending: number;
+  fromHistory?: boolean;
+  [key: string]: unknown;
+}
+
+interface SubagentMessage {
+  role: string;
+  isStreaming?: boolean;
+  toolCallProcesses?: Record<string, { isInProgress?: boolean; isComplete?: boolean; [key: string]: unknown }>;
+  reasoningProcesses?: Record<string, { isReasoning?: boolean; reasoningComplete?: boolean; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+interface SubagentData {
+  agentId?: string;
+  taskId?: string;
+  description?: string;
+  prompt?: string;
+  type?: string;
+  toolCalls?: number;
+  currentTool?: string;
+  status?: string;
+  messages?: SubagentMessage[];
+  isActive?: boolean;
+  isHistory?: boolean;
+  isReconnect?: boolean;
+  title?: string;
+  [key: string]: unknown;
+}
+
+interface Card {
+  title?: string;
+  todoData?: TodoData;
+  subagentData?: SubagentData;
+  [key: string]: unknown;
+}
+
+type CardsMap = Record<string, Card>;
+
+export interface UseCardStateResult {
+  cards: CardsMap;
+  updateTodoListCard: (todoData: TodoData) => void;
+  updateSubagentCard: (agentId: string, subagentDataUpdate: SubagentData) => void;
+  inactivateAllSubagents: () => void;
+  completePendingTodos: () => void;
+  clearSubagentCards: () => void;
+}
+
+export function useCardState(initialCards: CardsMap = {}): UseCardStateResult {
+  const [cards, setCards] = useState<CardsMap>(initialCards);
+
+  const updateTodoListCard = (todoData: TodoData) => {
     const cardId = 'todo-list-card';
 
     setCards((prev) => {
@@ -43,13 +87,7 @@ export function useCardState(initialCards = {}) {
     });
   };
 
-  /**
-   * Update or create subagent card data.
-   * Called when subagent status is detected/updated during live streaming.
-   * @param {string} agentId - Stable agent identity (format: "type:uuid", e.g., "research:550e8400-...")
-   * @param {Object} subagentDataUpdate - Partial subagent data to merge
-   */
-  const updateSubagentCard = (agentId, subagentDataUpdate) => {
+  const updateSubagentCard = (agentId: string, subagentDataUpdate: SubagentData) => {
     const cardId = `subagent-${agentId}`;
 
     setCards((prev) => {
@@ -89,23 +127,18 @@ export function useCardState(initialCards = {}) {
           return prev;
         }
         // Compute resolved values before building the card
-        let finalMessages = (() => {
+        let finalMessages: SubagentMessage[] = (() => {
           if (subagentDataUpdate.messages === undefined) {
             return existingSubagentData.messages || [];
           }
-          // Guard: a fresh streaming accumulator (e.g. after reconnect)
-          // starts from [] and builds up incrementally.  Don't let it
-          // overwrite a longer existing array until it catches up —
-          // otherwise tab-switching during reconnect shows a flash of
-          // empty/partial messages.
           const existing = existingSubagentData.messages || [];
-          if (existing.length > 0 && subagentDataUpdate.messages.length < existing.length) {
+          if (existing.length > 0 && subagentDataUpdate.messages!.length < existing.length) {
             return existing;
           }
-          return subagentDataUpdate.messages;
+          return subagentDataUpdate.messages!;
         })();
 
-        const finalStatus = (() => {
+        const finalStatus: string = (() => {
           const newStatus = subagentDataUpdate.status;
           const existingStatus = existingSubagentData.status;
 
@@ -140,12 +173,10 @@ export function useCardState(initialCards = {}) {
               : true);
 
         // Auto-finalize messages whenever the card is in completed state.
-        // This covers both the initial transition AND late tail-loop events
-        // that arrive with isStreaming: true after the stream already closed.
         if (finalStatus === 'completed' && finalMessages.length > 0) {
           finalMessages = finalMessages.map(msg => {
             if (msg.role !== 'assistant') return msg;
-            const m = { ...msg, isStreaming: false };
+            const m: SubagentMessage = { ...msg, isStreaming: false };
             if (m.toolCallProcesses) {
               const procs = { ...m.toolCallProcesses };
               for (const [id, proc] of Object.entries(procs)) {
@@ -220,10 +251,6 @@ export function useCardState(initialCards = {}) {
     });
   };
 
-  /**
-   * Inactivate all subagent cards.
-   * Called at the end of streaming to mark all subagents as inactive.
-   */
   const inactivateAllSubagents = () => {
     setCards((prev) => {
       const updated = { ...prev };
@@ -232,15 +259,13 @@ export function useCardState(initialCards = {}) {
       Object.keys(updated).forEach((cardId) => {
         if (cardId.startsWith('subagent-') && updated[cardId]?.subagentData) {
           const card = updated[cardId];
-          if (card.subagentData.isActive !== false) {
-            // Finalize all assistant messages: stop streaming, complete in-progress items
-            const msgs = card.subagentData.messages;
+          if (card.subagentData!.isActive !== false) {
+            const msgs = card.subagentData!.messages;
             let finalizedMsgs = msgs;
-            if (msgs?.length > 0) {
+            if (msgs && msgs.length > 0) {
               finalizedMsgs = msgs.map(msg => {
                 if (msg.role !== 'assistant') return msg;
-                const m = { ...msg, isStreaming: false };
-                // Complete in-progress tool calls
+                const m: SubagentMessage = { ...msg, isStreaming: false };
                 if (m.toolCallProcesses) {
                   const procs = { ...m.toolCallProcesses };
                   for (const [id, proc] of Object.entries(procs)) {
@@ -250,7 +275,6 @@ export function useCardState(initialCards = {}) {
                   }
                   m.toolCallProcesses = procs;
                 }
-                // Complete active reasoning
                 if (m.reasoningProcesses) {
                   const rps = { ...m.reasoningProcesses };
                   for (const [id, rp] of Object.entries(rps)) {
@@ -277,9 +301,9 @@ export function useCardState(initialCards = {}) {
             hasChanges = true;
             if (process.env.NODE_ENV === 'development') {
               console.log('[inactivateAllSubagents] Marking subagent as inactive:', {
-                taskId: card.subagentData.taskId,
+                taskId: card.subagentData!.taskId,
                 cardId,
-                previousStatus: card.subagentData.status,
+                previousStatus: card.subagentData!.status,
               });
             }
           }
@@ -290,10 +314,6 @@ export function useCardState(initialCards = {}) {
     });
   };
 
-  /**
-   * Complete all pending todos in the todo list card.
-   * Called at the end of streaming to mark remaining in_progress/pending items as completed.
-   */
   const completePendingTodos = () => {
     setCards((prev) => {
       const card = prev['todo-list-card'];
@@ -323,13 +343,9 @@ export function useCardState(initialCards = {}) {
     });
   };
 
-  /**
-   * Remove all subagent cards from state.
-   * Called before reconnect to prevent cache + Redis replay overlap (duplicate content).
-   */
   const clearSubagentCards = () => {
     setCards((prev) => {
-      const cleaned = {};
+      const cleaned: CardsMap = {};
       Object.entries(prev).forEach(([key, value]) => {
         if (!key.startsWith('subagent-')) {
           cleaned[key] = value;

@@ -1,23 +1,22 @@
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-/**
- * Custom hook for handling chat input in ThreadGallery
- * Manages message state, plan mode, and navigation to new thread
- * 
- * @param {string} workspaceId - The workspace ID to create thread in
- * @returns {Object} Input state and handlers
- */
-export function useThreadGalleryInput(workspaceId) {
+interface UseThreadGalleryInputResult {
+  message: string;
+  setMessage: React.Dispatch<React.SetStateAction<string>>;
+  planMode: boolean;
+  setPlanMode: React.Dispatch<React.SetStateAction<boolean>>;
+  isLoading: boolean;
+  handleSend: () => Promise<void>;
+  handleKeyPress: (e: KeyboardEvent) => void;
+}
+
+export function useThreadGalleryInput(workspaceId: string): UseThreadGalleryInputResult {
   const [message, setMessage] = useState('');
   const [planMode, setPlanMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
-  /**
-   * Handles sending a message and navigating to a new thread
-   * Creates a new thread (using '__default__') and navigates with the message
-   */
   const handleSend = async () => {
     if (!message.trim() || isLoading || !workspaceId) {
       return;
@@ -25,8 +24,6 @@ export function useThreadGalleryInput(workspaceId) {
 
     setIsLoading(true);
     try {
-      // Navigate to ChatAgent page with workspace, new thread, and message in state
-      // Use '__default__' as threadId to create a new thread
       navigate(`/chat/t/__default__`, {
         state: {
           workspaceId,
@@ -35,7 +32,6 @@ export function useThreadGalleryInput(workspaceId) {
         },
       });
 
-      // Clear input
       setMessage('');
     } catch (error) {
       console.error('Error navigating to thread:', error);
@@ -44,10 +40,7 @@ export function useThreadGalleryInput(workspaceId) {
     }
   };
 
-  /**
-   * Handles key press events (Enter key to send)
-   */
-  const handleKeyPress = (e) => {
+  const handleKeyPress = (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();

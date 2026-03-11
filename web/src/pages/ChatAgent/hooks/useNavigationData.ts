@@ -4,46 +4,59 @@ import { useWorkspaces } from '../../../hooks/useWorkspaces';
 import { queryKeys } from '../../../lib/queryKeys';
 import { getWorkspaces, getWorkspaceThreads } from '../utils/api';
 
-/**
- * useNavigationData — fetches workspace + thread data for the navigation panel.
- *
- * Display order: 2 most recent unpinned → pinned → remaining unpinned (up to 5).
- * "Load more" fetches the next page and appends.
- *
- * @param {string} currentWorkspaceId
- * @returns {{ workspaces, workspaceThreads, loading, hasMore, loadAll, expandWorkspace }}
- */
+interface WorkspaceRecord {
+  workspace_id: string;
+  is_pinned?: boolean;
+  [key: string]: unknown;
+}
+
+interface ThreadRecord {
+  thread_id: string;
+  [key: string]: unknown;
+}
+
+interface ThreadsData {
+  threads: ThreadRecord[];
+  loading: boolean;
+}
+
+interface WorkspacesResponse {
+  workspaces: WorkspaceRecord[];
+  total: number;
+}
+
+interface ThreadsResponse {
+  threads: ThreadRecord[];
+  [key: string]: unknown;
+}
+
 const NAV_WS_PARAMS = { limit: 20, sortBy: 'custom' };
 
-export function useNavigationData(currentWorkspaceId) {
+export function useNavigationData(currentWorkspaceId: string) {
   const queryClient = useQueryClient();
 
   // Workspace list via React Query
   const { data: wsData, isLoading } = useWorkspaces(NAV_WS_PARAMS);
-  const allFetched = wsData?.workspaces || [];
-  const totalCount = wsData?.total || 0;
+  const allFetched: WorkspaceRecord[] = (wsData as WorkspacesResponse | undefined)?.workspaces || [];
+  const totalCount = (wsData as WorkspacesResponse | undefined)?.total || 0;
 
-  const [workspaceThreads, setWorkspaceThreads] = useState({});
-  const [visibleCount, setVisibleCount] = useState(9); // 2 recent + pinned + 5 rest initially
+  const [workspaceThreads, setWorkspaceThreads] = useState<Record<string, ThreadsData>>({});
+  const [visibleCount, setVisibleCount] = useState(9);
 
   // Build ordered workspace list: 2 most recent → remaining pinned → rest
   const workspaces = useMemo(() => {
     if (!allFetched.length) return [];
 
-    // First 2 most recent (pinned or not — API returns by recency)
     const recentTwo = allFetched.slice(0, 2);
     const recentIds = new Set(recentTwo.map((ws) => ws.workspace_id));
 
-    // Remaining pinned that aren't already in recent two
     const remainingPinned = allFetched.filter((ws) => ws.is_pinned && !recentIds.has(ws.workspace_id));
     const pinnedIds = new Set(remainingPinned.map((ws) => ws.workspace_id));
 
-    // Rest: everything not in recent two or remaining pinned
     const rest = allFetched.filter((ws) => !recentIds.has(ws.workspace_id) && !pinnedIds.has(ws.workspace_id));
 
     const ordered = [...recentTwo, ...remainingPinned, ...rest];
     const sliced = ordered.slice(0, visibleCount);
-    // Always include the current workspace even if it fell outside the visible slice
     if (currentWorkspaceId && !sliced.some((ws) => ws.workspace_id === currentWorkspaceId)) {
       const currentWs = allFetched.find((ws) => ws.workspace_id === currentWorkspaceId);
       if (currentWs) sliced.unshift(currentWs);
@@ -52,14 +65,11 @@ export function useNavigationData(currentWorkspaceId) {
   }, [allFetched, visibleCount, currentWorkspaceId]);
 
   const hasMore = useMemo(() => {
-    // More to show from already fetched
     if (visibleCount < allFetched.length) return true;
-    // More to fetch from server
     if (allFetched.length < totalCount) return true;
     return false;
   }, [visibleCount, allFetched.length, totalCount]);
 
-  // Subscribe to current workspace's threads via useQuery — auto-updates when cache is invalidated
   const { data: currentWsThreadData, isLoading: currentWsThreadsLoading } = useQuery({
     queryKey: queryKeys.threads.byWorkspace(currentWorkspaceId),
     queryFn: () => getWorkspaceThreads(currentWorkspaceId, 10, 0),
@@ -67,12 +77,11 @@ export function useNavigationData(currentWorkspaceId) {
     staleTime: 30_000,
   });
 
-  // Merge current workspace's thread data directly (avoids useEffect sync lag)
   const mergedThreads = useMemo(() => ({
     ...workspaceThreads,
     ...(currentWorkspaceId && currentWsThreadData !== undefined ? {
       [currentWorkspaceId]: {
-        threads: currentWsThreadData?.threads || [],
+        threads: (currentWsThreadData as ThreadsResponse)?.threads || [],
         loading: currentWsThreadsLoading,
       },
     } : currentWorkspaceId ? {
@@ -83,9 +92,8 @@ export function useNavigationData(currentWorkspaceId) {
     } : {}),
   }), [workspaceThreads, currentWorkspaceId, currentWsThreadData, currentWsThreadsLoading]);
 
-  // Lazy-load threads for a workspace on expand
-  const expandWorkspace = useCallback((wsId) => {
-    const cached = queryClient.getQueryData(queryKeys.threads.byWorkspace(wsId));
+  const expandWorkspace = useCallback((wsId: string) => {
+    const cached = queryClient.getQueryData(queryKeys.threads.byWorkspace(wsId)) as ThreadsResponse | undefined;
     if (cached) {
       setWorkspaceThreads(prev => ({
         ...prev,
@@ -103,10 +111,10 @@ export function useNavigationData(currentWorkspaceId) {
       queryKey: queryKeys.threads.byWorkspace(wsId),
       queryFn: () => getWorkspaceThreads(wsId, 10, 0),
       staleTime: 30_000,
-    }).then(data => {
+    }).then((data: unknown) => {
       setWorkspaceThreads(prev => ({
         ...prev,
-        [wsId]: { threads: data.threads || [], loading: false },
+        [wsId]: { threads: (data as ThreadsResponse).threads || [], loading: false },
       }));
     }).catch(() => {
       setWorkspaceThreads(prev => ({
@@ -121,14 +129,13 @@ export function useNavigationData(currentWorkspaceId) {
 
     if (allFetched.length < totalCount) {
       try {
-        // Fetch remaining and let query cache handle it
-        const data = await getWorkspaces(100, allFetched.length, 'custom');
-        // Merge into current query data
-        queryClient.setQueryData(queryKeys.workspaces.list({ ...NAV_WS_PARAMS, offset: 0 }), (old) => {
-          if (!old) return data;
-          const existingIds = new Set(old.workspaces.map(w => w.workspace_id));
+        const data = await getWorkspaces(100, allFetched.length, 'custom') as WorkspacesResponse;
+        queryClient.setQueryData(queryKeys.workspaces.list({ ...NAV_WS_PARAMS, offset: 0 }), (old: unknown) => {
+          const oldData = old as WorkspacesResponse | undefined;
+          if (!oldData) return data;
+          const existingIds = new Set(oldData.workspaces.map(w => w.workspace_id));
           const unique = (data.workspaces || []).filter(w => !existingIds.has(w.workspace_id));
-          return { ...old, workspaces: [...old.workspaces, ...unique], total: data.total || old.total };
+          return { ...oldData, workspaces: [...oldData.workspaces, ...unique], total: data.total || oldData.total };
         });
       } catch (e) {
         console.warn('[useNavigationData] Failed to load all workspaces:', e);

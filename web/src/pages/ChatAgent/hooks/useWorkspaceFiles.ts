@@ -3,15 +3,21 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../../../lib/queryKeys';
 import { listWorkspaceFiles } from '../utils/api';
 
-/**
- * Shared hook for workspace file listing.
- * Uses React Query for automatic caching, retry, and deduplication.
- *
- * @param {string} workspaceId
- * @param {{ includeSystem?: boolean }} options
- * @returns {{ files: string[], loading: boolean, error: string|null, refresh: () => void }}
- */
-export function useWorkspaceFiles(workspaceId, { includeSystem = false } = {}) {
+interface UseWorkspaceFilesOptions {
+  includeSystem?: boolean;
+}
+
+interface UseWorkspaceFilesResult {
+  files: string[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+}
+
+export function useWorkspaceFiles(
+  workspaceId: string,
+  { includeSystem = false }: UseWorkspaceFilesOptions = {},
+): UseWorkspaceFilesResult {
   const queryClient = useQueryClient();
   const opts = { includeSystem };
 
@@ -19,8 +25,9 @@ export function useWorkspaceFiles(workspaceId, { includeSystem = false } = {}) {
     queryKey: queryKeys.workspaceFiles.byWs(workspaceId, opts),
     queryFn: () => listWorkspaceFiles(workspaceId, '.', { autoStart: false, includeSystem }),
     enabled: !!workspaceId,
-    retry: (count, err) => count < 3 && [500, 503].includes(err?.response?.status),
-    retryDelay: (attempt) => (attempt + 1) * 1000, // 1s, 2s, 3s
+    retry: (count, err: { response?: { status?: number } }) =>
+      count < 3 && [500, 503].includes(err?.response?.status ?? 0),
+    retryDelay: (attempt: number) => (attempt + 1) * 1000,
     staleTime: 30_000,
   });
 
@@ -31,7 +38,11 @@ export function useWorkspaceFiles(workspaceId, { includeSystem = false } = {}) {
   return {
     files: data?.files || [],
     loading: isLoading,
-    error: error ? (error.response?.status === 503 ? 'Sandbox not available' : 'Failed to load files') : null,
+    error: error
+      ? ((error as { response?: { status?: number } }).response?.status === 503
+        ? 'Sandbox not available'
+        : 'Failed to load files')
+      : null,
     refresh,
   };
 }
