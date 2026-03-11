@@ -1064,6 +1064,37 @@ export function useChatMessages(
             setMessages: setMessages as any,
           });
 
+          // Resolve pending ask_user_question interrupt from tool_call_result
+          // (fallback for conversations where hitl_answers wasn't persisted)
+          {
+            const idx = pendingHistoryInterrupts.findIndex((p) => p.type === 'ask_user_question');
+            if (idx !== -1 && typeof event.content === 'string' &&
+                (event.content.startsWith('User answered:') || event.content.startsWith('User skipped'))) {
+              const matched = pendingHistoryInterrupts[idx];
+              const content = event.content;
+              const isAnswered = content.startsWith('User answered:');
+              const answerText = isAnswered ? content.replace('User answered: ', '') : null;
+              const qKey = matched.questionId!;
+              setMessages((prev) =>
+                updateMessageRecord(prev, matched.assistantMessageId, (msg) => {
+                  const questions = (msg.userQuestions || {}) as Record<string, Record<string, unknown>>;
+                  return {
+                    ...msg,
+                    userQuestions: {
+                      ...questions,
+                      [qKey]: {
+                        ...(questions[qKey] || {}),
+                        status: isAnswered ? 'answered' : 'skipped',
+                        answer: answerText,
+                      },
+                    },
+                  };
+                })
+              );
+              pendingHistoryInterrupts.splice(idx, 1);
+            }
+          }
+
           // Resolve pending create_workspace or start_question interrupt from tool_call_result
           {
             const idx = pendingHistoryInterrupts.findIndex((p) => p.type === 'create_workspace' || p.type === 'start_question');
@@ -3167,7 +3198,8 @@ export function useChatMessages(
         hitlResponse,
         processEvent,
         planMode,
-        lastModelOptionsRef.current as any
+        lastModelOptionsRef.current as any,
+        agentMode
       );
 
       if (result?.disconnected) {

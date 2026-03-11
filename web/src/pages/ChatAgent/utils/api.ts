@@ -438,13 +438,15 @@ export async function sendHitlResponse(
   hitlResponse: Record<string, unknown>,
   onEvent: (event: Record<string, unknown>) => void = () => {},
   planMode: boolean = false,
-  modelOptions: { model?: string; reasoningEffort?: string; fastMode?: boolean } = {}
+  modelOptions: { model?: string; reasoningEffort?: string; fastMode?: boolean } = {},
+  agentMode: string = 'ptc'
 ) {
   const body: Record<string, unknown> = {
     workspace_id: workspaceId,
     messages: [],
     hitl_response: hitlResponse,
     plan_mode: planMode,
+    agent_mode: agentMode,
   };
   if (modelOptions?.model) body.llm_model = modelOptions.model;
   if (modelOptions?.reasoningEffort) body.reasoning_effort = modelOptions.reasoningEffort;
