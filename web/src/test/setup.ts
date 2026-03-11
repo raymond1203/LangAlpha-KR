@@ -1,7 +1,7 @@
 /// <reference types="vitest/globals" />
 import '@testing-library/jest-dom';
 
-// Mock window.matchMedia for antd/framer-motion
+// Mock window.matchMedia for framer-motion
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query: string) => ({

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Tooltip } from 'antd';
+import { Popover, PopoverTrigger, PopoverContent } from './popover';
 
 const SIZE = 16;
 const STROKE_WIDTH = 1.5;
@@ -53,36 +53,41 @@ export function TokenUsageRing({ tokenUsage }: TokenUsageRingProps) {
   );
 
   return (
-    <Tooltip title={tooltipContent} placement="top" trigger="click">
-      <div
-        className="inline-flex items-center justify-center"
-        style={{ width: SIZE, height: SIZE, cursor: 'pointer', marginLeft: 2 }}
-      >
-        <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-          <circle
-            cx={SIZE / 2}
-            cy={SIZE / 2}
-            r={RADIUS}
-            fill="none"
-            stroke="var(--color-border-muted)"
-            strokeWidth={STROKE_WIDTH}
-          />
-          <motion.circle
-            cx={SIZE / 2}
-            cy={SIZE / 2}
-            r={RADIUS}
-            fill="none"
-            stroke={color}
-            strokeWidth={STROKE_WIDTH}
-            strokeLinecap="round"
-            strokeDasharray={CIRCUMFERENCE}
-            initial={false}
-            animate={{ strokeDashoffset: dashOffset }}
-            transition={{ duration: 0.6, ease: 'easeOut' }}
-            style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }}
-          />
-        </svg>
-      </div>
-    </Tooltip>
+    <Popover>
+      <PopoverTrigger asChild>
+        <div
+          className="inline-flex items-center justify-center"
+          style={{ width: SIZE, height: SIZE, cursor: 'pointer', marginLeft: 2 }}
+        >
+          <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+            <circle
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={RADIUS}
+              fill="none"
+              stroke="var(--color-border-muted)"
+              strokeWidth={STROKE_WIDTH}
+            />
+            <motion.circle
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={RADIUS}
+              fill="none"
+              stroke={color}
+              strokeWidth={STROKE_WIDTH}
+              strokeLinecap="round"
+              strokeDasharray={CIRCUMFERENCE}
+              initial={false}
+              animate={{ strokeDashoffset: dashOffset }}
+              transition={{ duration: 0.6, ease: 'easeOut' }}
+              style={{ transform: 'rotate(-90deg)', transformOrigin: '50% 50%' }}
+            />
+          </svg>
+        </div>
+      </PopoverTrigger>
+      <PopoverContent side="top" className="w-auto p-3" style={{ background: 'var(--color-bg-elevated, #1a1a1a)', border: '1px solid var(--color-border-muted)', color: 'var(--text-primary, #ccc)' }}>
+        {tooltipContent}
+      </PopoverContent>
+    </Popover>
   );
 }

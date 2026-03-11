@@ -27,9 +27,8 @@ npx vitest                            # Watch mode
 QueryClientProvider (React Query — 2min staleTime, retry: 1)
   → BrowserRouter (react-router-dom v6, v7 compat flags on)
     → ThemeProvider (light/dark via CSS variables)
-      → AntdThemeProvider (syncs Ant Design theme algorithm)
-        → AuthProvider (Supabase session or local-dev bypass)
-          → App + Toaster
+      → AuthProvider (Supabase session or local-dev bypass)
+        → App + Toaster
 ```
 
 ### Routing
@@ -73,7 +72,6 @@ Cross-page data goes through shared hooks in `hooks/`.
 
 - **Tailwind CSS 3** for utility classes
 - **CSS custom properties** (`var(--color-*)`) for theme-aware colors — used directly in style props alongside Tailwind
-- **Ant Design 5** components (ConfigProvider theme synced with app theme)
 - **Per-component `.css` files** for scoped styles
 - **`clsx` + `tailwind-merge`** (`cn()` pattern) for conditional class merging in `components/ui/`
 
