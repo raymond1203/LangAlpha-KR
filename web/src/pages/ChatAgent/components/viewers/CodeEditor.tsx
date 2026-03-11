@@ -62,6 +62,21 @@ export default function CodeEditor({ value, onChange, fileName, readOnly = false
   const theme = getTheme();
   const showDiff = diffMode && originalValue != null;
 
+  // Track DiffEditor listener disposables to prevent "TextModel got disposed" race
+  const diffDisposablesRef = React.useRef<{ dispose(): void }[]>([]);
+  const diffDisposedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (showDiff) {
+      diffDisposedRef.current = false;
+    }
+    return () => {
+      diffDisposedRef.current = true;
+      diffDisposablesRef.current.forEach((d) => d.dispose());
+      diffDisposablesRef.current = [];
+    };
+  }, [showDiff]);
+
   return (
     <div style={{ position: 'relative', height, width: '100%' }}>
       {/* Always-mounted editor — preserves undo stack across diff toggles */}
@@ -130,33 +145,43 @@ export default function CodeEditor({ value, onChange, fileName, readOnly = false
             original={originalValue}
             modified={value ?? ''}
             onMount={(diffEditor: editor.IStandaloneDiffEditor) => {
+              // Dispose any stale listeners from a previous mount
+              diffDisposablesRef.current.forEach((d) => d.dispose());
+              diffDisposablesRef.current = [];
+
               const modifiedEditor = diffEditor.getModifiedEditor();
-              modifiedEditor.onDidChangeModelContent(() => {
-                onChange?.(modifiedEditor.getValue());
-              });
+              diffDisposablesRef.current.push(
+                modifiedEditor.onDidChangeModelContent(() => {
+                  if (diffDisposedRef.current) return;
+                  onChange?.(modifiedEditor.getValue());
+                }),
+              );
               if (onTextSelect) {
-                modifiedEditor.onDidChangeCursorSelection(() => {
-                  const sel = modifiedEditor.getSelection();
-                  if (!sel || sel.isEmpty()) {
-                    onTextSelect(null);
-                    return;
-                  }
-                  const text = modifiedEditor.getModel()?.getValueInRange(sel);
-                  if (!text?.trim()) {
-                    onTextSelect(null);
-                    return;
-                  }
-                  const pos = modifiedEditor.getScrolledVisiblePosition(sel.getStartPosition());
-                  const editorDom = modifiedEditor.getDomNode();
-                  const editorRect = editorDom?.getBoundingClientRect();
-                  const rect = (pos && editorRect) ? {
-                    left: editorRect.left + pos.left,
-                    top: editorRect.top + pos.top,
-                    width: 0,
-                    height: pos.height || 18,
-                  } : null;
-                  onTextSelect({ text, startLine: sel.startLineNumber, endLine: sel.endLineNumber, rect });
-                });
+                diffDisposablesRef.current.push(
+                  modifiedEditor.onDidChangeCursorSelection(() => {
+                    if (diffDisposedRef.current) return;
+                    const sel = modifiedEditor.getSelection();
+                    if (!sel || sel.isEmpty()) {
+                      onTextSelect(null);
+                      return;
+                    }
+                    const text = modifiedEditor.getModel()?.getValueInRange(sel);
+                    if (!text?.trim()) {
+                      onTextSelect(null);
+                      return;
+                    }
+                    const pos = modifiedEditor.getScrolledVisiblePosition(sel.getStartPosition());
+                    const editorDom = modifiedEditor.getDomNode();
+                    const editorRect = editorDom?.getBoundingClientRect();
+                    const rect = (pos && editorRect) ? {
+                      left: editorRect.left + pos.left,
+                      top: editorRect.top + pos.top,
+                      width: 0,
+                      height: pos.height || 18,
+                    } : null;
+                    onTextSelect({ text, startLine: sel.startLineNumber, endLine: sel.endLineNumber, rect });
+                  }),
+                );
               }
             }}
             options={{ ...EDITOR_OPTIONS, readOnly, renderSideBySide: true }}
