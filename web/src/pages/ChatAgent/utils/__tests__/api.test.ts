@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Mock } from 'vitest';
 
 vi.mock('@/api/client', () => {
@@ -31,6 +31,7 @@ import {
   getWorkspace,
   getThread,
   deleteThread,
+  sendHitlResponse,
 } from '../api';
 
 const mockGet = api.get as Mock;
@@ -134,6 +135,71 @@ describe('ChatAgent API utilities', () => {
       const result = await deleteThread('t-1');
       expect(mockDelete).toHaveBeenCalledWith('/api/v1/threads/t-1');
       expect(result).toEqual(mockResp);
+    });
+  });
+
+  describe('sendHitlResponse', () => {
+    let originalFetch: typeof global.fetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      // Mock fetch to return a readable stream that ends immediately
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+          }),
+        },
+      });
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it('includes agent_mode in request body defaulting to ptc', async () => {
+      await sendHitlResponse('ws-1', 't-1', { int1: { decisions: [{ type: 'approve' }] } }, () => {});
+
+      const fetchMock = global.fetch as Mock;
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.agent_mode).toBe('ptc');
+    });
+
+    it('passes custom agentMode', async () => {
+      await sendHitlResponse(
+        'ws-1', 't-1',
+        { int1: { decisions: [{ type: 'approve' }] } },
+        () => {},
+        false,
+        {},
+        'flash',
+      );
+
+      const fetchMock = global.fetch as Mock;
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.agent_mode).toBe('flash');
+    });
+
+    it('includes model options when provided', async () => {
+      await sendHitlResponse(
+        'ws-1', 't-1',
+        { int1: { decisions: [{ type: 'approve' }] } },
+        () => {},
+        false,
+        { model: 'gpt-4o', reasoningEffort: 'high', fastMode: true },
+      );
+
+      const fetchMock = global.fetch as Mock;
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.llm_model).toBe('gpt-4o');
+      expect(body.reasoning_effort).toBe('high');
+      expect(body.fast_mode).toBe(true);
     });
   });
 });

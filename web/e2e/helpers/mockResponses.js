@@ -291,4 +291,73 @@ export const sseEvents = {
       timestamp: new Date().toISOString(),
     },
   }),
+
+  createWorkspaceInterrupt: (interruptId, name, description) => ({
+    event: 'interrupt',
+    data: {
+      thread_id: 'th-1',
+      interrupt_id: interruptId,
+      finish_reason: 'interrupt',
+      action_requests: [{
+        type: 'create_workspace',
+        workspace_name: name,
+        workspace_description: description,
+      }],
+    },
+  }),
+
+  startQuestionInterrupt: (interruptId, workspaceId, question) => ({
+    event: 'interrupt',
+    data: {
+      thread_id: 'th-1',
+      interrupt_id: interruptId,
+      finish_reason: 'interrupt',
+      action_requests: [{
+        type: 'start_question',
+        workspace_id: workspaceId,
+        question: question,
+      }],
+    },
+  }),
+
+  navigateToWorkspaceResult: (toolCallId, workspaceId, question) => ({
+    event: 'tool_call_result',
+    data: {
+      thread_id: 'th-1',
+      agent: 'tools',
+      id: `result-${toolCallId}`,
+      role: 'assistant',
+      content: JSON.stringify({ success: true, workspace_id: workspaceId, question, action: 'navigate_to_workspace' }),
+      content_type: 'text',
+      tool_call_id: toolCallId,
+    },
+  }),
+
+  createWorkspaceResult: (toolCallId, workspaceId, workspaceName) => ({
+    event: 'tool_call_result',
+    data: {
+      thread_id: 'th-1',
+      agent: 'tools',
+      id: `result-${toolCallId}`,
+      role: 'assistant',
+      content: JSON.stringify({ success: true, workspace_id: workspaceId, workspace_name: workspaceName }),
+      content_type: 'text',
+      tool_call_id: toolCallId,
+    },
+  }),
+
+  askUserInterrupt: (interruptId, questionId, question, options = null) => ({
+    event: 'interrupt',
+    data: {
+      thread_id: 'th-1',
+      interrupt_id: interruptId,
+      finish_reason: 'interrupt',
+      action_requests: [{
+        type: 'ask_user_question',
+        question_id: questionId,
+        question: question,
+        ...(options ? { options } : {}),
+      }],
+    },
+  }),
 };
