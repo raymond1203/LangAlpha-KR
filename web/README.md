@@ -14,7 +14,7 @@ React frontend for LangAlpha — a vibe investing agent with AI-powered research
 - **Document Viewers** — Inline rendering of PDF, Excel, CSV, and HTML artifacts from agent responses
 - **Monaco Code Editor** — Syntax-highlighted code editor for code artifacts
 - **Todo Tracking** — Drawer-based task list synced with agent todo updates
-- **Dark/Light Theme** — Theme switching with CSS custom properties and synced Ant Design algorithm
+- **Dark/Light Theme** — Theme switching with CSS custom properties
 - **i18n** — Internationalization with English and Chinese locale support
 - **Math Rendering** — KaTeX-based LaTeX math in markdown responses
 - **Drag-and-Drop** — Workspace and thread reordering via `@dnd-kit`
@@ -29,7 +29,7 @@ React frontend for LangAlpha — a vibe investing agent with AI-powered research
 | Framework | React 19, Vite 7 |
 | Routing | React Router 6 |
 | State / Fetching | `@tanstack/react-query` 5 |
-| UI Components | Ant Design 5, Radix UI (dialog, toast), shadcn-style `ui/` components |
+| UI Components | shadcn/ui (Radix UI + Tailwind primitives) |
 | Styling | Tailwind CSS 3, `clsx`, `tailwind-merge`, `class-variance-authority` |
 | Animation | Framer Motion 12 |
 | Icons | Lucide React |
@@ -43,7 +43,7 @@ React frontend for LangAlpha — a vibe investing agent with AI-powered research
 | i18n | `i18next`, `react-i18next` |
 | File Handling | `react-pdf`, `exceljs`, `html2canvas`, `react-to-print` |
 | Testing | Vitest, `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event` |
-| Dev Tools | ESLint 9 |
+| Dev Tools | ESLint 9, TypeScript 5.9 |
 
 ## Project Structure
 
@@ -73,8 +73,8 @@ src/
 ├── test/                   # Vitest global setup (matchMedia, IntersectionObserver mocks)
 ├── styles/                 # Global styles
 ├── utils/                  # Shared utilities
-├── App.jsx                 # Root component with top-level routes
-└── main.jsx                # Entry point (provider stack)
+├── App.tsx                 # Root component with top-level routes
+└── main.tsx                # Entry point (provider stack)
 ```
 
 ## Routes
@@ -114,24 +114,24 @@ cp .env.example .env
 
 ### Prerequisites
 
-- Node.js 18+
-- npm
+- Node.js 24+
+- pnpm
 
 ### Install
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### Scripts
 
 ```bash
-npm run dev        # Start dev server (http://localhost:5173)
-npm run build      # Production build → dist/
-npm run preview    # Preview production build
-npm run lint       # Run ESLint
-npm run test       # Run tests (Vitest, single run)
-npm run test:watch # Run tests in watch mode
+pnpm dev           # Start dev server (http://localhost:5173)
+pnpm build         # Production build → dist/
+pnpm preview       # Preview production build
+pnpm lint          # Run ESLint
+pnpm test          # Run tests (Vitest, single run)
+pnpm test:watch    # Run tests in watch mode
 ```
 
 ## Navigation

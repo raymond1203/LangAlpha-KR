@@ -13,11 +13,11 @@ langalpha is the core AI agent service of the Ginlix financial research platform
 uv run python server.py --reload
 
 # Run frontend dev server (port 5173)
-cd web && npm run dev
+cd web && pnpm dev
 
 # Lint
 uv run ruff check src/                    # backend
-cd web && npm run lint                     # frontend (ESLint 9 flat config)
+cd web && pnpm lint                        # frontend (ESLint 9 flat config)
 
 # Tests — backend
 uv run pytest tests/unit/ -v --tb=short                     # unit only (default)
@@ -36,7 +36,7 @@ make migrate      # run migrations + setup tables
 
 # Install dependencies
 uv sync --group dev --extra test           # backend
-cd web && npm install                      # frontend
+cd web && pnpm install                     # frontend
 ```
 
 ## Architecture Overview
@@ -55,7 +55,7 @@ cd web && npm install                      # frontend
 
 ### Frontend (`web/src/`)
 
-React 19 + Vite 7, Tailwind CSS 3, Ant Design 5. State via React Query (`@tanstack/react-query`). Auth via Supabase (optional — disabled locally with `VITE_SUPABASE_URL` unset).
+React 19 + Vite 7, TypeScript, Tailwind CSS 3, shadcn/ui. State via React Query (`@tanstack/react-query`). Auth via Supabase (optional — disabled locally with `VITE_SUPABASE_URL` unset).
 
 | Directory | Purpose |
 |---|---|
@@ -127,7 +127,7 @@ Jinja2 templates in `src/ptc_agent/agent/prompts/templates/`, config in `prompts
 
 - **Python**: Ruff for linting (only `E741` ignored globally). Python 3.12+. Async-first (`async def` for all handlers/services).
 - **Frontend**: ESLint 9 flat config. Tests co-located in `__tests__/` subdirectories using Vitest + Testing Library.
-- **Package managers**: `uv` for Python, `npm` for frontend.
+- **Package managers**: `uv` for Python, `pnpm` for frontend.
 - **No SQLAlchemy** — all DB access is raw SQL via psycopg3.
 - **Two config layers**: `.env` for credentials/URLs, YAML files for behavioral settings.
 - **Middleware-driven architecture**: agent behavior is composed via middleware, not graph nodes.

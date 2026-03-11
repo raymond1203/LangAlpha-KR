@@ -284,7 +284,7 @@ The web UI is more than a chat interface — it's a full research workbench:
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager
 - Docker (for PostgreSQL and Redis)
-- Node.js 18+ (optional, for the web UI)
+- Node.js 24+ and pnpm (optional, for the web UI)
 
 ### 1. Clone and install
 
@@ -346,7 +346,7 @@ API available at **http://localhost:8000** (interactive docs at `/docs`).
 ### 5. Run the frontend (optional)
 
 ```bash
-cd web && npm install && npm run dev
+cd web && pnpm install && pnpm dev
 ```
 
 Open **http://localhost:5173** for the full workspace UI: Chat Agent, Dashboard, and Market View.

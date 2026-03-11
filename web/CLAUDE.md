@@ -9,10 +9,10 @@ The frontend for langalpha — an AI-driven financial research platform. React 1
 ## Commands
 
 ```bash
-npm run dev          # Dev server on 127.0.0.1:5173 (proxies /api → localhost:8080)
-npm run build        # Production build (Vite 7, manual chunk splitting)
-npm run lint         # ESLint 9 flat config
-npm run preview      # Preview production build
+pnpm dev          # Dev server on 127.0.0.1:5173 (proxies /api → localhost:8080)
+pnpm build        # Production build (Vite 7, manual chunk splitting)
+pnpm lint         # ESLint 9 flat config
+pnpm preview      # Preview production build
 
 npx vitest run                        # All tests (CI mode)
 npx vitest run src/path/to/test.ts    # Single test file
