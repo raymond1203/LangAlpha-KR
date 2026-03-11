@@ -4,12 +4,7 @@
  */
 
 import { normalizeAction } from './eventUtils';
-
-/** A loosely-typed message record used throughout the chat state. */
-type MessageRecord = Record<string, unknown>;
-
-/** React-style state setter for the messages array. */
-type SetMessages = (updater: (prev: MessageRecord[]) => MessageRecord[]) => void;
+import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload } from './types';
 
 /** Callback to update a subagent card by task ID. */
 type UpdateSubagentCard = (taskId: string, patch: Record<string, unknown>) => void;
@@ -36,38 +31,11 @@ interface StreamRefs {
   [key: string]: unknown;
 }
 
-/** Shape of a tool call object from the SSE event. */
-interface ToolCallRecord {
-  id?: string;
-  name?: string;
-  args?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
 /** Shape of a tool call chunk object. */
 interface ToolCallChunkRecord {
   index?: number;
   name?: string;
   args?: string;
-  [key: string]: unknown;
-}
-
-/** Shape of a tool call result from the SSE event. */
-interface ToolCallResultRecord {
-  content?: unknown;
-  content_type?: string;
-  tool_call_id?: string;
-  artifact?: unknown;
-  [key: string]: unknown;
-}
-
-/** Shape of the todo update payload. */
-interface TodoPayload {
-  todos?: unknown[];
-  total?: number;
-  completed?: number;
-  in_progress?: number;
-  pending?: number;
   [key: string]: unknown;
 }
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react';
+import type { editor } from 'monaco-editor';
 import { ArrowLeft, X, FileText, FileImage, File, RefreshCw, Download, Upload, Folder, ChevronRight, ChevronDown, ArrowUpDown, AlertTriangle, Trash2, CheckSquare, Square, HardDrive, Printer, Minus, Plus, Pencil, Save, FileDiff, Undo2, Redo2, TextSelect, FolderOpen } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
 import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
@@ -567,8 +568,7 @@ function FilePanel({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [originalContent, setOriginalContent] = useState<string | null>(null);
-  // TODO: type properly -- CodeEditor ref type depends on Monaco
-  const editorRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -1382,7 +1382,7 @@ function FilePanel({
                 </span>
               )}
               <button
-                onClick={() => editorRef.current?.trigger('toolbar', 'undo')}
+                onClick={() => editorRef.current?.trigger('toolbar', 'undo', null)}
                 className="file-panel-icon-btn"
                 title={t('filePanel.undo')}
                 disabled={!canUndo}
@@ -1390,7 +1390,7 @@ function FilePanel({
                 <Undo2 className="h-4 w-4" />
               </button>
               <button
-                onClick={() => editorRef.current?.trigger('toolbar', 'redo')}
+                onClick={() => editorRef.current?.trigger('toolbar', 'redo', null)}
                 className="file-panel-icon-btn"
                 title={t('filePanel.redo')}
                 disabled={!canRedo}

@@ -4,12 +4,7 @@
  */
 
 import { normalizeAction } from './eventUtils';
-
-/** A loosely-typed message record used throughout the chat state. */
-type MessageRecord = Record<string, unknown>;
-
-/** React-style state setter for the messages array. */
-type SetMessages = (updater: (prev: MessageRecord[]) => MessageRecord[]) => void;
+import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload } from './types';
 
 /** Per-pair mutable state tracked during history replay. */
 interface PairState {
@@ -25,33 +20,6 @@ interface HistoryEvent {
   timestamp?: string | number;
   metadata?: Record<string, unknown>;
   messages?: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-}
-
-/** Shape of a tool call object from the SSE event. */
-interface ToolCallRecord {
-  id?: string;
-  name?: string;
-  args?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-/** Shape of a tool call result from the SSE event. */
-interface ToolCallResultRecord {
-  content?: unknown;
-  content_type?: string;
-  tool_call_id?: string;
-  artifact?: unknown;
-  [key: string]: unknown;
-}
-
-/** Shape of the todo update payload. */
-interface TodoPayload {
-  todos?: unknown[];
-  total?: number;
-  completed?: number;
-  in_progress?: number;
-  pending?: number;
   [key: string]: unknown;
 }
 
@@ -731,17 +699,8 @@ export function handleHistoryTodoUpdate({ assistantMessageId, artifactType, arti
   // Create a unique segment ID that includes timestamp to ensure chronological ordering
   const segmentId = `${baseTodoListId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  console.log('[handleHistoryTodoUpdate] Processing artifact:', {
-    assistantMessageId,
-    artifactId,
-    segmentId,
-    currentCounter: pairState.contentOrderCounter,
-  });
-
   // Use backend event ID when available for consistent ordering across live/reconnect/replay
   const currentOrder = eventId != null ? eventId : ++pairState.contentOrderCounter;
-
-  console.log('[handleHistoryTodoUpdate] Creating segment with order:', currentOrder, 'for message:', assistantMessageId);
 
   setMessages((prev: MessageRecord[]) => {
     const updated = prev.map((msg: MessageRecord) => {
@@ -752,10 +711,7 @@ export function handleHistoryTodoUpdate({ assistantMessageId, artifactType, arti
 
       // Check if this segment already exists (prevent duplicates from React batching)
       const segmentExists = contentSegments.some((s: Record<string, unknown>) => s.todoListId === segmentId);
-      if (segmentExists) {
-        console.warn('[handleHistoryTodoUpdate] Segment already exists, skipping:', segmentId);
-        return msg;
-      }
+      if (segmentExists) return msg;
 
       // Add new segment at the current chronological position
       contentSegments.push({
@@ -777,26 +733,12 @@ export function handleHistoryTodoUpdate({ assistantMessageId, artifactType, arti
         baseTodoListId: baseTodoListId, // Keep reference to base ID for potential future use
       };
 
-      console.log('[handleHistoryTodoUpdate] Created segment:', {
-        segmentId,
-        order: currentOrder,
-        segmentsCount: contentSegments.length,
-        todosCount: todos?.length || 0,
-      });
-
       return {
         ...msg,
         contentSegments,
         todoListProcesses,
       };
     });
-
-    console.log('[handleHistoryTodoUpdate] Updated messages, checking segments:',
-      updated.map((m: MessageRecord) => m.id === assistantMessageId ? {
-        id: m.id,
-        segments: ((m.contentSegments as Record<string, unknown>[]) || []).map((s: Record<string, unknown>) => ({ type: s.type, order: s.order }))
-      } : null).filter(Boolean)
-    );
 
     return updated;
   });

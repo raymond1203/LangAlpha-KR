@@ -430,7 +430,7 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
     loading: filesLoading,
     error: filesError,
     refresh: refreshFiles,
-  } = useWorkspaceFiles(isFlashMode ? null! : workspaceId, { includeSystem: showSystemFiles });
+  } = useWorkspaceFiles(isFlashMode ? null : workspaceId, { includeSystem: showSystemFiles });
 
   // Navigation panel data — workspaces + threads for the overlay sidebar
   const {
