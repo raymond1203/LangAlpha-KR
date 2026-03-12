@@ -19,7 +19,9 @@ const normalizeSymbolKey = (sym: string): string => sym.replace(/^\^/, '');
  * @returns {string} Full WS URL with path
  */
 export function getMarketDataWSUrl(market: string = 'stock', interval: string = 'second'): string {
-  const wsBase = (baseURL as string).replace(/^http/, 'ws');
+  const wsBase = baseURL
+    ? (baseURL as string).replace(/^http/, 'ws')
+    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
   return `${wsBase}/ws/v1/market-data/aggregates/${market}?interval=${interval}`;
 }
 

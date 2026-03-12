@@ -27,10 +27,13 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
+      '/api/v1': {
+        target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/ws/v1': {
+        target: 'ws://localhost:8000',
+        ws: true,
       },
     },
     cors: true,

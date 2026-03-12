@@ -21,7 +21,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const _SUPABASE_AUTH_ENABLED = !!import.meta.env.VITE_SUPABASE_URL;
 const _LOCAL_DEV_USER_ID = (import.meta.env.VITE_AUTH_USER_ID as string) || 'local-dev-user';
 
-const baseURL = (import.meta.env.VITE_API_BASE_URL as string) ?? 'http://localhost:8000';
+const baseURL = (import.meta.env.VITE_API_BASE_URL as string) ?? '';
 
 /**
  * Static provider value used when Supabase auth is disabled.
