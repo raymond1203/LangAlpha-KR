@@ -39,7 +39,8 @@
     "dashboard": "仪表盘",
     "chatAgent": "智能对话",
     "marketView": "行情中心",
-    "automations": "自动化"
+    "automations": "自动化",
+    "settings": "设置"
   },
   "settings": {
     "title": "用户设置",
@@ -180,7 +181,8 @@
     "settingUp": "设置中...",
     "proceed": "继续",
     "failedOnboarding": "设置失败，请重试。",
-    "failedPrefUpdate": "启动偏好更新失败，请重试。"
+    "failedPrefUpdate": "启动偏好更新失败，请重试。",
+    "watchlist": "自选"
   },
   "workspace": {
     "workspaces": "工作区",

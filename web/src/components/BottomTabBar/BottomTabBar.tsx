@@ -1,5 +1,6 @@
 import { ChartCandlestick, LayoutDashboard, MessageSquareText, Timer, Settings } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { getChatSession } from '../../pages/ChatAgent/hooks/utils/chatSessionRestore';
 import './BottomTabBar.css';
 
@@ -12,6 +13,7 @@ const menuItems = [
 ];
 
 export default function BottomTabBar() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const handleItemClick = (path: string) => {
@@ -45,7 +47,7 @@ export default function BottomTabBar() {
               key={item.key}
               className={`bottom-tab-item ${isActive ? 'active' : ''}`}
               onClick={() => handleItemClick(item.key)}
-              aria-label={item.key.slice(1)}
+              aria-label={t(item.labelKey)}
             >
               <Icon className="bottom-tab-item-icon" />
             </button>

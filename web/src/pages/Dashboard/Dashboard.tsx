@@ -112,7 +112,7 @@ function Dashboard() {
                 }}
               >
                 <ListFilter size={13} />
-                Watchlist
+                {t('dashboard.watchlist')}
               </button>
             )}
           </div>

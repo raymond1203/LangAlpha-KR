@@ -39,7 +39,8 @@
     "dashboard": "Dashboard",
     "chatAgent": "Chat Agent",
     "marketView": "Market View",
-    "automations": "Automations"
+    "automations": "Automations",
+    "settings": "Settings"
   },
   "settings": {
     "title": "User Settings",
@@ -180,7 +181,8 @@
     "settingUp": "Setting up...",
     "proceed": "Proceed",
     "failedOnboarding": "Failed to set up onboarding. Please try again.",
-    "failedPrefUpdate": "Failed to start preference update. Please try again."
+    "failedPrefUpdate": "Failed to start preference update. Please try again.",
+    "watchlist": "Watchlist"
   },
   "workspace": {
     "workspaces": "Workspaces",
