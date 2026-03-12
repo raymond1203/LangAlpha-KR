@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bot, User, FileText, ImageIcon, Pencil, RefreshCw, RotateCcw, Copy, Check, Info, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
+
 import ThumbDownModal from './ThumbDownModal';
 import logoLight from '../../../assets/img/logo.svg';
 import logoDark from '../../../assets/img/logo-dark.svg';
@@ -277,6 +278,8 @@ interface MessageListProps {
  * - Error state styling
  */
 function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent }: MessageListProps): React.ReactElement | null {
+  const isMobile = useIsMobile();
+
   // Empty state - show when no messages exist (hidden in subagent view)
   if (messages.length === 0) {
     if (isSubagentView) return null;
@@ -337,6 +340,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compac
             isSubagentView={isSubagentView}
             readOnly={readOnly}
             allowFiles={allowFiles}
+            isMobile={isMobile}
             onOpenSubagentTask={onOpenSubagentTask}
             onOpenFile={onOpenFile}
             onOpenDir={onOpenDir}
@@ -394,6 +398,7 @@ interface MessageBubbleProps {
   onThumbDown?: (messageId: string, issueCategories: string[], comment: string | null, consentHumanReview: boolean) => Promise<FeedbackResult | null>;
   getFeedbackForMessage?: (messageId: string) => FeedbackResult | null;
   onReportWithAgent?: (instruction: string) => void;
+  isMobile?: boolean;
 }
 
 /**
@@ -402,8 +407,7 @@ interface MessageBubbleProps {
  * Renders a single message bubble with appropriate styling
  * based on role (user/assistant) and state (streaming/error)
  */
-function MessageBubble({ message, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent }: MessageBubbleProps): React.ReactElement {
-  const isMobile = useIsMobile();
+function MessageBubble({ message, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent, isMobile }: MessageBubbleProps): React.ReactElement {
   const { user } = useUser();
   const { theme } = useTheme();
   const logo = theme === 'light' ? logoDark : logoLight;
