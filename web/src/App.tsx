@@ -1,11 +1,13 @@
 import React, { useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar/Sidebar';
+import BottomTabBar from './components/BottomTabBar/BottomTabBar';
 import Main from './components/Main/Main';
 import LoginPage from './pages/Login/LoginPage';
 import SharedChatView from './pages/SharedChat/SharedChatView';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from './contexts/AuthContext';
+import { useIsMobile } from './hooks/useIsMobile';
 import './App.css';
 
 /** Handles the OAuth redirect from Supabase — shows a spinner then redirects to /dashboard. */
@@ -48,6 +50,7 @@ function RootRedirect() {
 function App() {
   const { isLoggedIn, isInitialized } = useAuth();
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
 
   if (!isInitialized) {
     return (
@@ -66,6 +69,7 @@ function App() {
         isLoggedIn ? (
           <div className="app-layout">
             <Sidebar />
+            {isMobile && <BottomTabBar />}
             <main className="app-main">
               <Main />
             </main>

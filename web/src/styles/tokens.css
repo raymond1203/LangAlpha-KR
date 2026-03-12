@@ -6,6 +6,7 @@
 /* ---------- Semantic color tokens (hex/rgba for inline use) ---------- */
 :root {
   --sidebar-width: 80px;
+  --bottom-tab-height: 78px; /* 62px pill + 8px top pad + 8px bottom pad */
 
   --color-bg-page: #000000;
   --color-bg-card: #0A0A0A;
@@ -346,4 +347,26 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
+}
+
+/* === Floating AI chat FAB (mobile) === */
+.langalpha-fab {
+  position: fixed;
+  bottom: calc(var(--bottom-tab-height, 0px) + 16px);
+  right: 16px;
+  z-index: 40;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-muted);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }

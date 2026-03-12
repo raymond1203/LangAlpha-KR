@@ -26,3 +26,14 @@
   flex-direction: column;
   box-sizing: border-box;
 }
+
+@media (max-width: 767px) {
+  .app-layout {
+    height: 100vh;
+    height: 100dvh;
+  }
+  .app-main {
+    padding-left: 0;
+    padding-bottom: var(--bottom-tab-height);
+  }
+}
