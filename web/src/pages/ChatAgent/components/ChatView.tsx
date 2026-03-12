@@ -11,6 +11,7 @@ import { updateCurrentUser } from '../../Dashboard/utils/api';
 import { softInterruptWorkflow, getWorkspace, summarizeThread, offloadThread } from '../utils/api';
 import { useChatMessages } from '../hooks/useChatMessages';
 import { saveChatSession, getChatSession, clearChatSession } from '../hooks/utils/chatSessionRestore';
+import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import { useCardState } from '../hooks/useCardState';
 import { useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
 import './FilePanel.css';
@@ -761,12 +762,10 @@ function ChatView({ workspaceId, threadId, onBack, workspaceName: initialWorkspa
   }, [activeAgent, cards, updateSubagentCard]);
 
 
-  // Clamp a desired panel width to fit the content area
-  const clampPanelWidth = useCallback((desired: number) => {
-    const cw = contentAreaWidthRef.current;
-    if (cw <= 0) return desired;
-    return Math.max(280, Math.min(desired, cw * 0.55));
-  }, []);
+  const clampPanelWidth = useCallback(
+    (desired: number) => clampPanelWidthUtil(desired, contentAreaWidthRef.current),
+    [],
+  );
 
   // Handle drag panel width
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {

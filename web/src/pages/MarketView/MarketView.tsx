@@ -17,6 +17,7 @@ import { getWorkspaces } from '../ChatAgent/utils/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, RefreshCw, List, Info } from 'lucide-react';
 import LangAlphaFab from '@/components/ui/langalpha-fab';
+import { useOnClickOutside } from '@/hooks/useOnClickOutside';
 import CompanyOverviewPanel from './components/CompanyOverviewPanel';
 import { MarketDataWSProvider, useMarketDataWSContext } from './contexts/MarketDataWSContext';
 
@@ -150,17 +151,8 @@ function MarketViewInner() {
   useEffect(() => { savePref('symbol', selectedStock); }, [selectedStock]);
   useEffect(() => { savePref('interval', selectedInterval); }, [selectedInterval]);
 
-  // Collapse chat FAB on outside click (mobile)
-  useEffect(() => {
-    if (!isMobile || !chatExpanded) return;
-    const handle = (e: MouseEvent) => {
-      if (chatExpandedRef.current && !chatExpandedRef.current.contains(e.target as Node)) {
-        setChatExpanded(false);
-      }
-    };
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [isMobile, chatExpanded]);
+  const collapseFab = useCallback(() => setChatExpanded(false), []);
+  useOnClickOutside(chatExpandedRef, collapseFab, isMobile && chatExpanded);
 
   // Auto-downgrade 1s → 1m when the current symbol doesn't support 1s
   useEffect(() => {

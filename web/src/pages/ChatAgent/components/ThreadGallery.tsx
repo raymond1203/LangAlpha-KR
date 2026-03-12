@@ -13,6 +13,7 @@ import ChatInput from '../../../components/ui/chat-input';
 import type { ChatInputHandle } from '../../../components/ui/chat-input';
 import { attachmentsToImageContexts } from '../utils/fileUpload';
 import FilePanel, { SYSTEM_DIR_PREFIXES } from './FilePanel';
+import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import SandboxSettingsPanel from './SandboxSettingsPanel';
 import { getWorkspaceThreads, deleteThread, updateThreadTitle } from '../utils/api';
 import { useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
@@ -161,12 +162,10 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
     });
   }, []);
 
-  // Clamp a desired panel width to fit the container
-  const clampPanelWidth = useCallback((desired: number) => {
-    const cw = containerWidthRef.current;
-    if (cw <= 0) return desired;
-    return Math.max(280, Math.min(desired, cw * 0.55));
-  }, []);
+  const clampPanelWidth = useCallback(
+    (desired: number) => clampPanelWidthUtil(desired, containerWidthRef.current),
+    [],
+  );
 
   // Track container width via ResizeObserver
   useEffect(() => {

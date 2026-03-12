@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatInput, { type ChatInputHandle } from '../../../components/ui/chat-input';
 import { useChatInput } from '../hooks/useChatInput';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useOnClickOutside } from '@/hooks/useOnClickOutside';
 import LangAlphaFab from '@/components/ui/langalpha-fab';
 
 const SUGGESTION_CHIPS: string[] = [
@@ -34,17 +35,8 @@ function ChatInputCard() {
   const [chatExpanded, setChatExpanded] = useState(false);
   const expandedRef = useRef<HTMLDivElement>(null);
 
-  // Collapse on outside click (mobile)
-  useEffect(() => {
-    if (!isMobile || !chatExpanded) return;
-    const handle = (e: MouseEvent) => {
-      if (expandedRef.current && !expandedRef.current.contains(e.target as Node)) {
-        setChatExpanded(false);
-      }
-    };
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
-  }, [isMobile, chatExpanded]);
+  const collapseFab = useCallback(() => setChatExpanded(false), []);
+  useOnClickOutside(expandedRef, collapseFab, isMobile && chatExpanded);
 
   const handleMobileSend = (...args: Parameters<typeof handleSend>) => {
     handleSend(...args);
