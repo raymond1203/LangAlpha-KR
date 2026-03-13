@@ -300,7 +300,7 @@ function NewsFeedCard({
         style={{ borderColor: 'var(--color-border-muted)' }}
       >
         {/* Tabs */}
-        <div className="flex items-center gap-1 p-1 rounded-lg" style={{ backgroundColor: 'var(--color-bg-tag)' }}>
+        <div className="flex items-center gap-1 p-1 rounded-lg min-w-0 overflow-x-auto" style={{ backgroundColor: 'var(--color-bg-tag)' }}>
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.key;

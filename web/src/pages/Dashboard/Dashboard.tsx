@@ -103,7 +103,7 @@ function Dashboard() {
   return (
     <div className="dashboard-container min-h-screen">
       {/* Main content area */}
-      <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+      <main className="flex-1 flex flex-col min-h-0 overflow-y-auto overflow-x-hidden">
         <DashboardHeader />
 
         <div className="mx-auto max-w-[1920px] w-full p-3 sm:p-6 pb-32">

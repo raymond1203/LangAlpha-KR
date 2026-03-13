@@ -51,6 +51,8 @@ function MobileBottomSheet({
   // touch-action: none on the content div means the browser never takes over
   // the gesture, so we can seamlessly transition from scroll → sheet drag
   // when the user reaches the top and keeps pulling down.
+  // Supports nested scrollable children: scrolls the innermost scroller first,
+  // then bubbles overflow to the outer container before transitioning to drag.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !open) return;
@@ -61,6 +63,39 @@ function MobileBottomSheet({
     let velocityY = 0;
     let mode: 'idle' | 'scroll' | 'drag' = 'idle';
     let momentumRaf = 0;
+    let nestedScroller: HTMLElement | null = null;
+
+    // Find nearest scrollable ancestor of touch target (up to but not including root)
+    const findNestedScroller = (target: EventTarget | null): HTMLElement | null => {
+      let node = target as HTMLElement | null;
+      while (node && node !== el) {
+        if (node.scrollHeight > node.clientHeight + 1) {
+          const ov = getComputedStyle(node).overflowY;
+          if (ov === 'auto' || ov === 'scroll') return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    };
+
+    // Scroll nested first, bubble remaining delta to outer container
+    // delta > 0 = scrollTop increases (content moves up)
+    const applyScroll = (delta: number) => {
+      if (nestedScroller) {
+        const maxInner = nestedScroller.scrollHeight - nestedScroller.clientHeight;
+        const prevInner = nestedScroller.scrollTop;
+        nestedScroller.scrollTop = Math.min(maxInner, Math.max(0, prevInner + delta));
+        const remaining = delta - (nestedScroller.scrollTop - prevInner);
+        if (Math.abs(remaining) > 0.5) {
+          el.scrollTop = Math.max(0, el.scrollTop + remaining);
+        }
+      } else {
+        el.scrollTop = Math.max(0, el.scrollTop + delta);
+      }
+    };
+
+    const allAtTop = (): boolean =>
+      el.scrollTop <= 0 && (!nestedScroller || nestedScroller.scrollTop <= 0);
 
     const onTouchStart = (e: TouchEvent) => {
       cancelAnimationFrame(momentumRaf);
@@ -70,6 +105,7 @@ function MobileBottomSheet({
       lastTime = performance.now();
       velocityY = 0;
       mode = 'idle';
+      nestedScroller = findNestedScroller(e.target);
     };
 
     const onTouchMove = (e: TouchEvent) => {
@@ -87,7 +123,7 @@ function MobileBottomSheet({
       if (mode === 'idle') {
         const totalDelta = y - startY;
         if (Math.abs(totalDelta) < 5) return;
-        if (el.scrollTop <= 0 && totalDelta > 0) {
+        if (allAtTop() && totalDelta > 0) {
           mode = 'drag';
           startY = y;
         } else {
@@ -101,14 +137,14 @@ function MobileBottomSheet({
           // Reversed — switch to scroll
           dragY.set(0);
           mode = 'scroll';
-          el.scrollTop = Math.max(0, el.scrollTop - dy);
+          applyScroll(-dy);
         } else {
           dragY.set(pull);
         }
       } else if (mode === 'scroll') {
-        el.scrollTop = Math.max(0, el.scrollTop - dy);
-        // Transition to drag when hitting the top and still pulling down
-        if (el.scrollTop <= 0 && dy > 0) {
+        applyScroll(-dy);
+        // Transition to drag when everything is at the top and still pulling down
+        if (allAtTop() && dy > 0) {
           mode = 'drag';
           startY = y;
         }
@@ -125,15 +161,17 @@ function MobileBottomSheet({
         }
       } else if (mode === 'scroll') {
         // Momentum coast
-        let v = -velocityY; // positive = scrollTop increasing (scrolling up in content)
-        const maxScroll = el.scrollHeight - el.clientHeight;
+        let v = -velocityY; // positive = scrollTop increasing (content moves up)
         const decel = 0.96;
 
         const coast = () => {
           v *= decel;
           if (Math.abs(v) < 30) return;
-          el.scrollTop = Math.min(maxScroll, Math.max(0, el.scrollTop + v / 60));
-          if (el.scrollTop <= 0 || el.scrollTop >= maxScroll) return;
+          const prevOuter = el.scrollTop;
+          const prevInner = nestedScroller?.scrollTop ?? 0;
+          applyScroll(v / 60);
+          // Stop when nothing moved (hit bounds)
+          if (el.scrollTop === prevOuter && (nestedScroller?.scrollTop ?? 0) === prevInner) return;
           momentumRaf = requestAnimationFrame(coast);
         };
 

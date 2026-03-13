@@ -84,7 +84,7 @@ function DetailPanel({ toolCallProcess, planData, onClose, onOpenFile, onOpenSub
   if (planData) {
     return (
       <div
-        className="h-full flex flex-col"
+        className={isMobile ? '' : 'h-full flex flex-col'}
         style={{
           backgroundColor: 'transparent',
           ...(!isMobile && { borderLeft: '1px solid var(--color-border-muted)' }),
@@ -112,8 +112,8 @@ function DetailPanel({ toolCallProcess, planData, onClose, onOpenFile, onOpenSub
           </button>
         </div>
         <div
-          className="flex-1 overflow-y-auto px-4 py-4"
-          style={{ minHeight: 0 }}
+          className={`${isMobile ? '' : 'flex-1 overflow-y-auto'} px-4 py-4`}
+          style={!isMobile ? { minHeight: 0 } : undefined}
         >
           <Markdown variant="panel" content={planData.description || t('toolArtifact.noPlanDescription')} className="text-sm" />
         </div>
@@ -138,7 +138,7 @@ function DetailPanel({ toolCallProcess, planData, onClose, onOpenFile, onOpenSub
 
   return (
     <div
-      className="h-full flex flex-col"
+      className={isMobile && artifact?.type !== 'sec_filing' ? '' : 'h-full flex flex-col'}
       style={{
         backgroundColor: 'transparent',
         ...(!isMobile && { borderLeft: '1px solid var(--color-border-muted)' }),
@@ -198,10 +198,11 @@ function DetailPanel({ toolCallProcess, planData, onClose, onOpenFile, onOpenSub
         </a>
       )}
 
-      {/* Content */}
+      {/* Content — on mobile, no overflow-y-auto so MobileBottomSheet's scroll container handles it.
+           Exception: sec_filing needs flex layout because the iframe fills available height and scrolls internally. */}
       <div
-        className={`flex-1 px-4 py-4 overflow-x-hidden ${artifact?.type === 'sec_filing' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}
-        style={{ minHeight: 0 }}
+        className={`${isMobile && artifact?.type !== 'sec_filing' ? '' : 'flex-1'} px-4 py-4 overflow-x-hidden ${artifact?.type === 'sec_filing' ? 'flex flex-col overflow-hidden' : (isMobile ? '' : 'overflow-y-auto')}`}
+        style={isMobile && artifact?.type !== 'sec_filing' ? undefined : { minHeight: 0 }}
       >
         {isTaskTool ? (
           <TaskToolContent
