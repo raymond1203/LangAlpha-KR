@@ -9,13 +9,11 @@ import type { MarketChartHandle } from './components/MarketChart';
 import ChatInput from '../../components/ui/chat-input';
 import MarketPanel from './components/MarketPanel';
 import MarketSidebarPanel from './components/MarketSidebarPanel';
-import { fetchStockQuote, fetchCompanyOverview, fetchAnalystData } from './utils/api';
-import { fetchMarketStatus } from '@/lib/marketUtils';
 import { supports1sInterval } from './utils/chartConstants';
 import { useMarketChat } from './hooks/useMarketChat';
 import { getWorkspaces } from '../ChatAgent/utils/api';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, RefreshCw, List, Info } from 'lucide-react';
+import { ArrowLeft, RefreshCw } from 'lucide-react';
 import CompanyOverviewPanel from './components/CompanyOverviewPanel';
 import { MobileBottomSheet } from '../../components/ui/mobile-bottom-sheet';
 import { MobileFabChat } from '../../components/ui/mobile-fab-chat';
@@ -107,11 +105,8 @@ function MarketViewInner() {
 
   const {
     stockInfo,
-    setStockInfo,
     realTimePrice,
-    setRealTimePrice,
     snapshotData,
-    setSnapshotData,
     overviewData,
     overviewLoading,
     overlayData,
@@ -302,7 +297,7 @@ function MarketViewInner() {
     setChartImageDesc(parts.join('\n'));
   }, [selectedStock, selectedInterval, stockInfo, selectedStockDisplay, overviewData, displayPrice]);
 
-  const handleSendMessage = useCallback(async (message: string, planMode: boolean, attachments: AttachmentItem[] = [], slashCommands: string[] = [], { model, reasoningEffort }: { model?: string; reasoningEffort?: string } = {}) => {
+  const handleSendMessage = useCallback(async (message: string, planMode: boolean, attachments: AttachmentItem[] = [], _slashCommands: string[] = [], { model, reasoningEffort }: { model?: string; reasoningEffort?: string } = {}) => {
     // Build additional_context from chart image + file attachments
     const contexts = [];
     if (chartImage) {

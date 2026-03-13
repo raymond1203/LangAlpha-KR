@@ -44,6 +44,37 @@ function SubagentStatusBar({ agent, threadId, onInstructionSent }: SubagentStatu
   const [sending, setSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const handleSend = useCallback(async (): Promise<void> => {
+    const text = inputValue.trim();
+    const tId = agent?.name?.replace('Task-', '') || null;
+    if (!text || sending || !threadId || !tId || agent?.status === 'completed') return;
+
+    // Immediately show pending message in the subagent view
+    onInstructionSent?.(text);
+
+    setSending(true);
+    setInputValue('');
+    setInputOpen(false);
+    try {
+      await sendSubagentMessage(threadId, tId, text);
+    } catch (err) {
+      console.error('[SubagentStatusBar] Failed to send message:', err);
+    } finally {
+      setSending(false);
+    }
+  }, [inputValue, sending, threadId, agent?.name, agent?.status, onInstructionSent]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+    if (e.key === 'Escape') {
+      setInputOpen(false);
+      setInputValue('');
+    }
+  }, [handleSend]);
+
   if (!agent) return null;
 
   const messages = (agent.messages || []) as AgentMessage[];
@@ -69,7 +100,7 @@ function SubagentStatusBar({ agent, threadId, onInstructionSent }: SubagentStatu
       ? 'initializing'
       : isMessageStreaming || derivedCurrentTool
         ? 'active'
-        : (lastAssistant && lastAssistant.isStreaming === false) ? 'completed' : agent.status;
+        : agent.status || 'active';
 
   const isActive = effectiveStatus === 'active';
   const isCompleted = effectiveStatus === 'completed';
@@ -108,36 +139,6 @@ function SubagentStatusBar({ agent, threadId, onInstructionSent }: SubagentStatu
     }
     return 'Initializing';
   };
-
-  const handleSend = useCallback(async (): Promise<void> => {
-    const text = inputValue.trim();
-    if (!text || !canSend || sending) return;
-
-    // Immediately show pending message in the subagent view
-    onInstructionSent?.(text);
-
-    setSending(true);
-    setInputValue('');
-    setInputOpen(false);
-    try {
-      await sendSubagentMessage(threadId, taskId!, text);
-    } catch (err) {
-      console.error('[SubagentStatusBar] Failed to send message:', err);
-    } finally {
-      setSending(false);
-    }
-  }, [inputValue, canSend, sending, threadId, taskId, onInstructionSent]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-    if (e.key === 'Escape') {
-      setInputOpen(false);
-      setInputValue('');
-    }
-  }, [handleSend]);
 
   return (
     <div className="space-y-2">

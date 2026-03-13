@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchStockQuote, fetchCompanyOverview, fetchAnalystData } from '../utils/api';
 import { fetchMarketStatus } from '@/lib/marketUtils';
@@ -36,11 +36,8 @@ interface AnalystOverlayData {
 
 export interface UseStockDataReturn {
     stockInfo: StockInfo | null;
-    setStockInfo: Dispatch<SetStateAction<StockInfo | null>>;
     realTimePrice: RealTimePrice | null;
-    setRealTimePrice: Dispatch<SetStateAction<RealTimePrice | null>>;
     snapshotData: SnapshotData | null;
-    setSnapshotData: Dispatch<SetStateAction<SnapshotData | null>>;
     overviewData: unknown;
     overviewLoading: boolean;
     overlayData: AnalystOverlayData | null;
@@ -166,11 +163,8 @@ export function useStockData({
 
     return {
         stockInfo,
-        setStockInfo,
         realTimePrice,
-        setRealTimePrice,
         snapshotData,
-        setSnapshotData,
         overviewData,
         overviewLoading,
         overlayData,

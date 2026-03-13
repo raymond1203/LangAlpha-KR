@@ -1,6 +1,5 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 import { ListFilter } from 'lucide-react';
 import { MobileBottomSheet } from '../../components/ui/mobile-bottom-sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
@@ -33,7 +32,6 @@ interface DeleteConfirmState {
 }
 
 function Dashboard() {
-  const navigate = useNavigate();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   // News modal state
