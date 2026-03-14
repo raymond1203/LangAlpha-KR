@@ -72,7 +72,7 @@ interface FormState {
   instruction: string;
   thread_strategy: string;
   max_failures: number | string;
-  delivery_methods: string[];
+  delivery_method: string;
 }
 
 const INITIAL_FORM: FormState = {
@@ -87,7 +87,7 @@ const INITIAL_FORM: FormState = {
   instruction: '',
   thread_strategy: 'new',
   max_failures: 3,
-  delivery_methods: [],
+  delivery_method: '',
 };
 
 interface WorkspaceOption {
@@ -124,7 +124,7 @@ export default function AutomationFormDialog({ open, onOpenChange, onSubmit, aut
         instruction: (automation.instruction as string) || '',
         thread_strategy: (automation.thread_strategy as string) || 'new',
         max_failures: (automation.max_failures as number) ?? 3,
-        delivery_methods: (automation.delivery_config as any)?.methods || [],
+        delivery_method: (automation.delivery_config as any)?.methods?.[0] || '',
       });
     } else {
       setForm(INITIAL_FORM);
@@ -163,10 +163,10 @@ export default function AutomationFormDialog({ open, onOpenChange, onSubmit, aut
 
     payload.max_failures = parseInt(String(payload.max_failures), 10) || 3;
 
-    payload.delivery_config = (payload.delivery_methods as string[]).length > 0
-      ? { methods: payload.delivery_methods }
+    payload.delivery_config = payload.delivery_method
+      ? { methods: [payload.delivery_method] }
       : { methods: [] };
-    delete payload.delivery_methods;
+    delete payload.delivery_method;
 
     onSubmit(payload);
   };
@@ -322,22 +322,11 @@ export default function AutomationFormDialog({ open, onOpenChange, onSubmit, aut
           {/* Delivery */}
           <div className="flex flex-col gap-1.5">
             <label className={labelClass}>{t('automation.delivery')}</label>
-            <label className="flex items-center gap-2 cursor-pointer text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-              <input
-                type="checkbox"
-                checked={form.delivery_methods.includes('slack')}
-                onChange={(e) => {
-                  setForm((f) => ({
-                    ...f,
-                    delivery_methods: e.target.checked
-                      ? [...f.delivery_methods, 'slack']
-                      : f.delivery_methods.filter((m) => m !== 'slack'),
-                  }));
-                }}
-                className="accent-[var(--color-accent-primary)]"
-              />
-              {t('automation.deliverToSlack')}
-            </label>
+            <div className={radioGroupClass}>
+              <RadioOption name="delivery_method" value="" checked={form.delivery_method === ''} onChange={set('delivery_method')} label={t('automation.deliverNone')} />
+              <RadioOption name="delivery_method" value="slack" checked={form.delivery_method === 'slack'} onChange={set('delivery_method')} label={t('automation.deliverToSlack')} />
+              <RadioOption name="delivery_method" value="discord" checked={form.delivery_method === 'discord'} onChange={set('delivery_method')} label={t('automation.deliverToDiscord')} />
+            </div>
           </div>
 
           {/* Max Failures */}

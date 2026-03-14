@@ -410,7 +410,9 @@
     "namePlaceholder": "例如：每日市场摘要",
     "descPlaceholder": "可选描述",
     "delivery": "推送",
-    "deliverToSlack": "Slack"
+    "deliverNone": "无",
+    "deliverToSlack": "Slack",
+    "deliverToDiscord": "Discord"
   },
   "toolArtifact": {
     "open": "开盘",

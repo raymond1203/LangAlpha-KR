@@ -410,7 +410,9 @@
     "namePlaceholder": "e.g. Daily market summary",
     "descPlaceholder": "Optional description",
     "delivery": "Delivery",
-    "deliverToSlack": "Slack"
+    "deliverNone": "None",
+    "deliverToSlack": "Slack",
+    "deliverToDiscord": "Discord"
   },
   "toolArtifact": {
     "open": "Open",
