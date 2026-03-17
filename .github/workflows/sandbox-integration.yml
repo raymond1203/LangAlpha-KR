@@ -168,6 +168,57 @@ jobs:
             sandbox_metrics_docker.json
 
   # -----------------------------------------------------------------------
+  # Post metrics as PR comment after all provider jobs finish
+  # -----------------------------------------------------------------------
+  metrics-comment:
+    runs-on: ubuntu-latest
+    needs: [sandbox-memory, sandbox-daytona, sandbox-docker]
+    if: >-
+      always() && github.event_name == 'pull_request' && (
+        needs.sandbox-daytona.result == 'success'
+        || needs.sandbox-docker.result == 'success'
+      )
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Daytona metrics
+        uses: actions/download-artifact@v4
+        if: needs.sandbox-daytona.result == 'success'
+        with:
+          name: sandbox-daytona-results
+          path: metrics/daytona/
+        continue-on-error: true
+
+      - name: Download Docker metrics
+        uses: actions/download-artifact@v4
+        if: needs.sandbox-docker.result == 'success'
+        with:
+          name: sandbox-docker-results
+          path: metrics/docker/
+        continue-on-error: true
+
+      - name: Generate metrics comment
+        id: comment
+        run: |
+          FILES=$(find metrics/ -name 'sandbox_metrics_*.json' 2>/dev/null || true)
+          if [ -z "$FILES" ]; then
+            echo "No metrics files found"
+            echo "has_metrics=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has_metrics=true" >> "$GITHUB_OUTPUT"
+          python scripts/ci/metrics_comment.py $FILES > comment_body.md
+
+      - name: Post or update PR comment
+        if: steps.comment.outputs.has_metrics == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: sandbox-metrics
+          path: comment_body.md
+
+  # -----------------------------------------------------------------------
   # Manual: Run with custom provider/slow selection via workflow_dispatch
   # -----------------------------------------------------------------------
   sandbox-manual:
