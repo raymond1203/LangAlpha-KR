@@ -1,0 +1,206 @@
+name: Sandbox Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/ptc_agent/core/sandbox/**
+      - src/ptc_agent/agent/backends/**
+      - src/ptc_agent/config/core.py
+      - src/ptc_agent/config/loaders.py
+      - src/server/app/workspace_files.py
+      - src/server/app/workspace_sandbox.py
+      - src/server/services/workspace_manager.py
+      - Dockerfile.sandbox
+      - docker-compose.yml
+      - tests/integration/sandbox/**
+  push:
+    branches: [main]
+    paths:
+      - src/ptc_agent/core/sandbox/**
+      - src/ptc_agent/agent/backends/**
+      - Dockerfile.sandbox
+      - tests/integration/sandbox/**
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: "Providers to test"
+        type: choice
+        options:
+          - memory
+          - memory,daytona
+          - memory,docker
+          - memory,docker,daytona
+        default: "memory,daytona"
+      include_slow:
+        description: "Include slow tests (stress, concurrency)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Detect which files changed to decide which provider tiers to run
+  # -----------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            docker:
+              - Dockerfile.sandbox
+              - src/ptc_agent/core/sandbox/providers/docker.py
+              - src/ptc_agent/core/sandbox/providers/_chart_capture.py
+              - tests/integration/sandbox/providers/**
+
+  # -----------------------------------------------------------------------
+  # Tier 1: Memory-only — always runs (~10s)
+  # -----------------------------------------------------------------------
+  sandbox-memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - run: uv sync --group dev --extra test
+      - name: Run sandbox tests (memory)
+        run: >-
+          uv run pytest tests/integration/sandbox/
+          -m "integration and not slow"
+          -v --tb=short
+          --junitxml=test-results/sandbox-memory.xml
+        env:
+          SANDBOX_TEST_PROVIDERS: memory
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-memory-results
+          path: test-results/
+
+  # -----------------------------------------------------------------------
+  # Tier 2: Daytona — production provider (~4 min)
+  # Runs whenever the workflow triggers (sandbox paths changed).
+  # -----------------------------------------------------------------------
+  sandbox-daytona:
+    runs-on: ubuntu-latest
+    needs: sandbox-memory
+    environment: integration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - run: uv sync --group dev --extra test
+      - name: Run sandbox tests (daytona)
+        run: >-
+          uv run pytest tests/integration/sandbox/
+          -m "integration and not slow"
+          -v --tb=short
+          --sandbox-metrics
+          --sandbox-metrics-file sandbox_metrics_daytona.json
+          --junitxml=test-results/sandbox-daytona.xml
+        env:
+          SANDBOX_TEST_PROVIDERS: daytona
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          DAYTONA_BASE_URL: ${{ secrets.DAYTONA_BASE_URL }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-daytona-results
+          path: |
+            test-results/
+            sandbox_metrics_daytona.json
+
+  # -----------------------------------------------------------------------
+  # Tier 3: Docker (~22 min)
+  # On PR: only when Docker-specific files change.
+  # On push/dispatch: always runs.
+  # -----------------------------------------------------------------------
+  sandbox-docker:
+    runs-on: ubuntu-latest
+    needs: [sandbox-memory, changes]
+    # !failure() && !cancelled() allows running when 'changes' was skipped (non-PR).
+    if: >-
+      !failure() && !cancelled() && (
+        github.event_name != 'pull_request'
+        || needs.changes.outputs.docker == 'true'
+      )
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - run: uv sync --group dev --extra test
+
+      - name: Build sandbox Docker image
+        run: docker build -f Dockerfile.sandbox -t langalpha-sandbox:latest .
+
+      - name: Run sandbox tests (docker)
+        run: >-
+          uv run pytest tests/integration/sandbox/
+          -m "integration and not slow"
+          -v --tb=short
+          --sandbox-metrics
+          --sandbox-metrics-file sandbox_metrics_docker.json
+          --junitxml=test-results/sandbox-docker.xml
+        env:
+          SANDBOX_TEST_PROVIDERS: docker
+          DOCKER_SANDBOX_IMAGE: langalpha-sandbox:latest
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-docker-results
+          path: |
+            test-results/
+            sandbox_metrics_docker.json
+
+  # -----------------------------------------------------------------------
+  # Manual: Run with custom provider/slow selection via workflow_dispatch
+  # -----------------------------------------------------------------------
+  sandbox-manual:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: integration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - run: uv sync --group dev --extra test
+
+      - name: Build sandbox Docker image
+        if: contains(inputs.providers, 'docker')
+        run: docker build -f Dockerfile.sandbox -t langalpha-sandbox:latest .
+
+      - name: Run sandbox tests
+        run: >-
+          uv run pytest tests/integration/sandbox/
+          -m "integration${{ inputs.include_slow == false && ' and not slow' || '' }}"
+          -v --tb=short
+          --sandbox-metrics
+          --sandbox-metrics-file sandbox_metrics_manual.json
+          --junitxml=test-results/sandbox-manual.xml
+        env:
+          SANDBOX_TEST_PROVIDERS: ${{ inputs.providers }}
+          DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+          DAYTONA_BASE_URL: ${{ secrets.DAYTONA_BASE_URL }}
+          DOCKER_SANDBOX_IMAGE: langalpha-sandbox:latest
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-manual-results
+          path: |
+            test-results/
+            sandbox_metrics_manual.json
