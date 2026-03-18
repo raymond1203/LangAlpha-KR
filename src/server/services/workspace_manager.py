@@ -427,9 +427,15 @@ class WorkspaceManager:
 
     @staticmethod
     async def _update_workspace_config_fields(
-        workspace_id: str, fields: Dict[str, Any]
+        workspace_id: str, fields: Dict[str, Any], *, raise_on_error: bool = False
     ) -> None:
-        """Merge keys into the workspace config JSONB column (atomic, non-destructive)."""
+        """Merge keys into the workspace config JSONB column (atomic, non-destructive).
+
+        Args:
+            raise_on_error: If True, re-raise exceptions after logging so the
+                caller can retry or handle the failure.  Default False keeps
+                the original fire-and-forget behaviour for non-critical stamps.
+        """
         from psycopg.types.json import Json
 
         from src.server.database.conversation import get_db_connection
@@ -450,6 +456,8 @@ class WorkspaceManager:
             logger.warning(
                 f"Failed to update config for workspace {workspace_id}: {e}"
             )
+            if raise_on_error:
+                raise
 
     async def _maybe_migrate_sandbox(
         self,
@@ -525,7 +533,9 @@ class WorkspaceManager:
         stamp = self._sandbox_config_stamp()
         for attempt in range(2):
             try:
-                await self._update_workspace_config_fields(workspace_id, stamp)
+                await self._update_workspace_config_fields(
+                    workspace_id, stamp, raise_on_error=True
+                )
                 break
             except Exception:
                 if attempt == 0:
