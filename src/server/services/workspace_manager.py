@@ -517,9 +517,12 @@ class WorkspaceManager:
             )
             return None
 
-        # 2. Tear down old session/sandbox
-        SessionManager.remove_session(workspace_id)
+        # 2. Tear down old sandbox (delete, not just stop — we're replacing it)
         self._sessions.pop(workspace_id, None)
+        try:
+            await SessionManager.cleanup_session(workspace_id)
+        except Exception as e:
+            logger.warning(f"Old sandbox cleanup failed for {workspace_id}: {e}")
 
         # 3. Create fresh sandbox + restore files from DB
         core_config = self.config.to_core_config()
