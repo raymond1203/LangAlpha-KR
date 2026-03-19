@@ -1,32 +1,43 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { RefreshCw, ExternalLink, X, Loader2, Globe } from 'lucide-react';
+import { RefreshCw, ExternalLink, X, Loader2, Globe, AlertCircle } from 'lucide-react';
 import './PreviewViewer.css';
+import type { PreviewData } from '../../hooks/utils/types';
 
-interface PreviewViewerProps {
-  url: string;
-  port: number;
-  title?: string;
+interface PreviewViewerProps extends Pick<PreviewData, 'url' | 'port' | 'title' | 'loading' | 'error'> {
   onClose: () => void;
   onRefresh?: () => void;
   /** When true, a frosted overlay covers the iframe for smooth resizing. */
   isDragging?: boolean;
 }
 
-export default function PreviewViewer({ url, port, title, onClose, onRefresh, isDragging }: PreviewViewerProps) {
+export default function PreviewViewer({ url, port, title, loading: externalLoading, error: externalError, onClose, onRefresh, isDragging }: PreviewViewerProps) {
   const [loading, setLoading] = useState(true);
   const [iframeKey, setIframeKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  // Brief delay after drag ends so iframe repaints at new size before overlay lifts
-  const [overlayVisible, setOverlayVisible] = useState(false);
+  // Keep overlay visible briefly after drag ends so iframe repaints at new size
+  const [overlayLinger, setOverlayLinger] = useState(false);
 
   useEffect(() => {
     if (isDragging) {
-      setOverlayVisible(true);
-    } else if (overlayVisible) {
-      const t = setTimeout(() => setOverlayVisible(false), 80);
+      setOverlayLinger(true);
+    } else if (overlayLinger) {
+      const t = setTimeout(() => setOverlayLinger(false), 80);
       return () => clearTimeout(t);
     }
-  }, [isDragging, overlayVisible]);
+  }, [isDragging, overlayLinger]);
+
+  // Show overlay immediately when isDragging is true (first render), plus 80ms cooldown
+  const showDragOverlay = isDragging || overlayLinger;
+
+  // Reload iframe when url changes (e.g. after async refresh resolves)
+  const prevUrlRef = useRef(url);
+  useEffect(() => {
+    if (url && prevUrlRef.current && url !== prevUrlRef.current) {
+      setIframeKey(k => k + 1);
+      setLoading(true);
+    }
+    prevUrlRef.current = url;
+  }, [url]);
 
   const handleIframeLoad = useCallback(() => {
     setLoading(false);
@@ -36,8 +47,9 @@ export default function PreviewViewer({ url, port, title, onClose, onRefresh, is
     setLoading(true);
     if (onRefresh) {
       onRefresh();
+    } else {
+      setIframeKey((k) => k + 1);
     }
-    setIframeKey((k) => k + 1);
   }, [onRefresh]);
 
   const handleOpenExternal = useCallback(() => {
@@ -68,31 +80,62 @@ export default function PreviewViewer({ url, port, title, onClose, onRefresh, is
           </button>
         </div>
       </div>
-      {loading && !overlayVisible && (
-        <div className="preview-viewer-loading">
-          <Loader2 size={24} className="animate-spin" style={{ color: 'var(--color-text-tertiary)' }} />
-        </div>
-      )}
-      {overlayVisible && (
-        <div className="preview-viewer-resize-overlay">
-          <div className="preview-viewer-resize-card">
-            <Globe size={28} style={{ color: 'var(--color-accent-primary)' }} />
-            <div className="preview-viewer-resize-info">
-              <span className="preview-viewer-resize-title">{displayTitle}</span>
-              {hostname && <span className="preview-viewer-resize-url">{hostname}:{port}</span>}
+      {externalLoading && !url ? (
+        /* Server is starting — show frosted glass overlay with spinner */
+        <div className="preview-viewer-resize-overlay" style={{ cursor: 'default' }}>
+          <div className="preview-viewer-resize-card" style={{ flexDirection: 'column', alignItems: 'center', gap: 16, padding: '28px 36px' }}>
+            <div className="preview-viewer-spinner" />
+            <div className="preview-viewer-resize-info" style={{ alignItems: 'center' }}>
+              <span className="preview-viewer-resize-title">Starting server...</span>
+              <span className="preview-viewer-resize-url">{displayTitle} :{port}</span>
             </div>
           </div>
         </div>
+      ) : externalError ? (
+        /* Error state */
+        <div className="preview-viewer-resize-overlay" style={{ cursor: 'default' }}>
+          <div className="preview-viewer-resize-card" style={{ flexDirection: 'column', alignItems: 'center', gap: 16, padding: '28px 36px' }}>
+            <AlertCircle size={28} style={{ color: 'var(--color-text-tertiary)' }} />
+            <div className="preview-viewer-resize-info" style={{ alignItems: 'center' }}>
+              <span className="preview-viewer-resize-title">Failed to start server</span>
+              <span className="preview-viewer-resize-url">{displayTitle} :{port}</span>
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
+                Try clicking Refresh to retry
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Normal iframe view */
+        <>
+          {loading && !showDragOverlay && (
+            <div className="preview-viewer-loading">
+              <Loader2 size={24} className="animate-spin" style={{ color: 'var(--color-text-tertiary)' }} />
+            </div>
+          )}
+          {showDragOverlay && (
+            <div className="preview-viewer-resize-overlay">
+              <div className="preview-viewer-resize-card">
+                <Globe size={28} style={{ color: 'var(--color-accent-primary)' }} />
+                <div className="preview-viewer-resize-info">
+                  <span className="preview-viewer-resize-title">{displayTitle}</span>
+                  {hostname && <span className="preview-viewer-resize-url">{hostname}:{port}</span>}
+                </div>
+              </div>
+            </div>
+          )}
+          <iframe
+            ref={iframeRef}
+            key={iframeKey}
+            src={url}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+            className="preview-viewer-frame"
+            title={`Preview - port ${port}`}
+            onLoad={handleIframeLoad}
+            style={isDragging ? { pointerEvents: 'none' } : undefined}
+          />
+        </>
       )}
-      <iframe
-        ref={iframeRef}
-        key={iframeKey}
-        src={url}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-        className="preview-viewer-frame"
-        title={`Preview - port ${port}`}
-        onLoad={handleIframeLoad}
-      />
     </div>
   );
 }

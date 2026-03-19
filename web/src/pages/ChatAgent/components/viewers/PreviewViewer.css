@@ -130,3 +130,15 @@
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   color: var(--color-text-tertiary);
 }
+
+@keyframes preview-spinner {
+  to { transform: rotate(360deg); }
+}
+.preview-viewer-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2.5px solid var(--color-border-muted, #e5e7eb);
+  border-top-color: var(--color-accent-primary, #6366f1);
+  border-radius: 50%;
+  animation: preview-spinner 0.8s linear infinite;
+}

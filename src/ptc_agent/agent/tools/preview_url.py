@@ -21,15 +21,18 @@ def create_preview_url_tool(sandbox: Any) -> BaseTool:
     @tool(response_format="content_and_artifact")
     async def GetPreviewUrl(
         port: int,
+        command: str,
         title: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Get a preview URL for a service running on the given port in the sandbox.
 
-        Use this after starting a web server or frontend dev server in the background
-        to generate a URL that the user can view in the preview panel.
+        This tool starts the given command in the background AND generates a preview URL.
+        Always provide the command used to start the server — it will be persisted so the
+        server can be restarted automatically when the user reopens the preview later.
 
         Args:
             port: Port number (3000-9999) the service is listening on
+            command: The shell command to start the server (e.g. "python -m http.server 8080")
             title: Optional display title for the preview (default: "Port {port}")
 
         Returns:
@@ -43,7 +46,7 @@ def create_preview_url_tool(sandbox: Any) -> BaseTool:
             writer = None
 
         try:
-            preview_info = await sandbox.get_preview_url(port, expires_in=3600)
+            preview_info = await sandbox.start_and_get_preview_url(command, port)
             url = preview_info.url
             display_title = title or f"Port {port}"
 
@@ -59,6 +62,7 @@ def create_preview_url_tool(sandbox: Any) -> BaseTool:
                 "url": url,
                 "port": port,
                 "title": display_title,
+                "command": command,
             }
 
             # Emit SSE artifact so the frontend auto-opens the preview panel
@@ -66,11 +70,7 @@ def create_preview_url_tool(sandbox: Any) -> BaseTool:
                 writer({
                     "artifact_type": "preview_url",
                     "artifact_id": f"preview_{port}",
-                    "payload": {
-                        "url": url,
-                        "port": port,
-                        "title": display_title,
-                    },
+                    "payload": artifact,
                 })
 
             content = f"Preview URL for {display_title}: {url}"

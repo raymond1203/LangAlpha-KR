@@ -90,6 +90,11 @@ class SandboxRuntime(ABC):
         """Default working directory inside the sandbox (sync, may return cached/default)."""
         ...
 
+    @property
+    def proxy_domain(self) -> str | None:
+        """Hostname of the sandbox proxy (e.g. 'abc123.daytonaproxy1.example.com'). None if unsupported."""
+        return None
+
     async def fetch_working_dir(self) -> str:
         """Fetch and cache the working directory (async). Override if working_dir requires I/O."""
         return self.working_dir
@@ -205,7 +210,7 @@ class SandboxRuntime(ABC):
     async def delete_session(self, session_id: str) -> None:
         """Delete a session. Default is no-op for providers without session support."""
 
-    async def get_preview_url(self, port: int, expires_in: int = 3600) -> PreviewInfo:
+    async def get_preview_url(self, port: int, expires_in: int = 86400) -> PreviewInfo:
         """Get a signed preview URL for a service running on the given port.
 
         Not all providers support this; the default raises NotImplementedError.

@@ -11,6 +11,7 @@ import { updateCurrentUser } from '../../Dashboard/utils/api';
 import { softInterruptWorkflow, getWorkspace, summarizeThread, offloadThread, getPreviewUrl } from '../utils/api';
 import { useChatMessages } from '../hooks/useChatMessages';
 import { saveChatSession, getChatSession, clearChatSession } from '../hooks/utils/chatSessionRestore';
+import type { PreviewData } from '../hooks/utils/types';
 import { clampPanelWidth as clampPanelWidthUtil } from '@/lib/panelUtils';
 import { useCardState } from '../hooks/useCardState';
 import { useWorkspaceFiles } from '../hooks/useWorkspaceFiles';
@@ -283,7 +284,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Right panel management - can show 'file', 'detail', 'preview', or null (closed)
   const [rightPanelType, setRightPanelType] = useState<'file' | 'detail' | 'preview' | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(750);
-  const [previewData, setPreviewData] = useState<{ url: string; port: number; title?: string } | null>(null);
+  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const DIVIDER_WIDTH = 4; // px – matches .chat-split-divider
   // Active agent in main view (default: 'main', or from URL taskId)
   const [activeAgentId, setActiveAgentId] = useState(
@@ -490,8 +491,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   // Stable ref-based callback for opening preview URLs from SSE events.
   // Defined here so it can be passed to useChatMessages; assigned after
   // clampPanelWidth/pushPanelHistory are defined further down.
-  const openPreviewRef = useRef<(data: { url: string; port: number; title?: string }) => void>(() => {});
-  const handleOpenPreviewFromStream = useCallback((data: { url: string; port: number; title?: string }) => {
+  const openPreviewRef = useRef<(data: PreviewData) => void>(() => {});
+  const handleOpenPreviewFromStream = useCallback((data: PreviewData) => {
     openPreviewRef.current(data);
   }, []);
 
@@ -798,7 +799,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
 
   const clampPanelWidth = useCallback(
-    (desired: number) => clampPanelWidthUtil(desired, contentAreaWidthRef.current),
+    (desired: number) => clampPanelWidthUtil(desired, containerRef.current?.offsetWidth || window.innerWidth),
     [],
   );
 
@@ -810,9 +811,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     setIsDragging(true);
     const startX = e.clientX;
     const startWidth = rightPanelWidth;
-    // Snapshot container width at drag start to avoid feedback loop
-    // (ResizeObserver updates contentAreaWidthRef as panel resizes)
-    const containerW = contentAreaWidthRef.current > 0 ? contentAreaWidthRef.current : window.innerWidth;
+    // Use total container width (chat area + panel + divider), not just the
+    // chat area — contentAreaWidthRef excludes the open panel, so clamping
+    // against it would immediately shrink the panel on the first mouse move.
+    const containerW = containerRef.current?.offsetWidth || window.innerWidth;
     const maxRatio = rightPanelType === 'preview' ? PREVIEW_MAX_RATIO : undefined;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
@@ -942,10 +944,10 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   }, [clampPanelWidth]);
 
   // Open preview URL in right panel
-  const handleOpenPreview = useCallback((data: { url: string; port: number; title?: string }) => {
+  const handleOpenPreview = useCallback((data: PreviewData) => {
     setPreviewData(data);
     setRightPanelType('preview');
-    const containerW = contentAreaWidthRef.current > 0 ? contentAreaWidthRef.current : window.innerWidth;
+    const containerW = containerRef.current?.offsetWidth || window.innerWidth;
     setRightPanelWidth(clampPanelWidthUtil(850, containerW, PREVIEW_MAX_RATIO));
     pushPanelHistory();
   }, [pushPanelHistory]);
@@ -957,17 +959,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const handleToolCallDetailClick = useCallback((toolCallProcess: ToolCallProcessRecord) => {
     const artifact = toolCallProcess.toolCallResult?.artifact as Record<string, unknown> | undefined;
     if (artifact?.type === 'preview_url' && artifact.port && workspaceId) {
-      // Fetch a fresh signed URL (the stored one may be expired) and open preview panel
       const port = artifact.port as number;
       const title = artifact.title as string | undefined;
-      getPreviewUrl(workspaceId, port)
+      const command = artifact.command as string | undefined;
+      // Open panel immediately with loading state
+      handleOpenPreview({ url: '', port, title, command, loading: true });
+      // Then run restart chain in background
+      getPreviewUrl(workspaceId, port, command)
         .then((fresh) => {
-          handleOpenPreview({ url: fresh.url, port, title });
+          setPreviewData(prev => prev?.port === port ? { ...prev, url: fresh.url, loading: false } : prev);
         })
         .catch(() => {
-          // Fall back to the stored URL if refresh fails
+          // Fall back to stored URL if available
           if (artifact.url) {
-            handleOpenPreview({ url: artifact.url as string, port, title });
+            setPreviewData(prev => prev?.port === port ? { ...prev, url: artifact.url as string, loading: false } : prev);
+          } else {
+            setPreviewData(prev => prev?.port === port ? { ...prev, loading: false, error: true } : prev);
           }
         });
       return;
@@ -1007,7 +1014,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const handleRefreshPreview = useCallback(async () => {
     if (!previewData || !workspaceId) return;
     try {
-      const fresh = await getPreviewUrl(workspaceId, previewData.port);
+      const fresh = await getPreviewUrl(workspaceId, previewData.port, previewData.command);
       setPreviewData(prev => prev ? { ...prev, url: fresh.url } : null);
     } catch (e) {
       console.error('Failed to refresh preview URL:', e);
@@ -1958,6 +1965,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       url={previewData.url}
                       port={previewData.port}
                       title={previewData.title}
+                      loading={previewData.loading}
+                      error={previewData.error}
                       onClose={handleClosePreview}
                       onRefresh={handleRefreshPreview}
                       isDragging={isDragging}

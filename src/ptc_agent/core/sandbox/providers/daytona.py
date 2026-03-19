@@ -65,6 +65,15 @@ class DaytonaRuntime(SandboxRuntime):
         return self._sandbox.id
 
     @property
+    def proxy_domain(self) -> str | None:
+        from urllib.parse import urlparse
+
+        url = getattr(self._sandbox, "toolbox_proxy_url", None)
+        if not url:
+            return None
+        return urlparse(url).hostname
+
+    @property
     def working_dir(self) -> str:
         """Return cached working dir, or Daytona default if not yet fetched."""
         return self._working_dir or self._default_working_dir
@@ -251,7 +260,7 @@ class DaytonaRuntime(SandboxRuntime):
 
     # -- Preview URLs --
 
-    async def get_preview_url(self, port: int, expires_in: int = 3600) -> PreviewInfo:
+    async def get_preview_url(self, port: int, expires_in: int = 86400) -> PreviewInfo:
         """Get a signed preview URL for a service running on the given port."""
         result = await self._sandbox.create_signed_preview_url(port, expires_in)
         return PreviewInfo(url=result.url, token=result.token)

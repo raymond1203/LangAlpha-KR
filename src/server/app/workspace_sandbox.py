@@ -15,7 +15,10 @@ import json
 import logging
 import re
 import shlex
+import time
 from typing import Any
+
+import httpx
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -445,33 +448,41 @@ async def install_sandbox_packages(
         )
 
 
+class PreviewUrlRequest(BaseModel):
+    port: int = Field(..., ge=3000, le=9999)
+    command: str | None = None
+    expires_in: int = Field(default=3600, ge=60, le=86400)
+
+
 class PreviewUrlResponse(BaseModel):
     url: str
     port: int
     expires_in: int
 
 
-@router.get("/{workspace_id}/sandbox/preview-url")
+@router.post("/{workspace_id}/sandbox/preview-url")
 async def get_sandbox_preview_url(
     workspace_id: str,
     x_user_id: CurrentUserId,
-    port: int,
-    expires_in: int = 3600,
+    body: PreviewUrlRequest,
 ) -> PreviewUrlResponse:
-    """Get a signed preview URL for a service running in the workspace sandbox."""
-    if not (3000 <= port <= 9999):
-        raise HTTPException(
-            status_code=400, detail="Port must be between 3000 and 9999"
-        )
+    """Get a signed preview URL for a service running in the workspace sandbox.
 
+    If command is provided, starts the server process in background before generating the URL.
+    """
     _session, sandbox = await _get_sandbox(workspace_id, x_user_id)
 
     try:
-        preview_info = await sandbox.get_preview_url(port, expires_in=expires_in)
+        if body.command:
+            preview_info = await sandbox.start_and_get_preview_url(
+                body.command, body.port, expires_in=body.expires_in,
+            )
+        else:
+            preview_info = await sandbox.get_preview_url(body.port, expires_in=body.expires_in)
         return PreviewUrlResponse(
             url=preview_info.url,
-            port=port,
-            expires_in=expires_in,
+            port=body.port,
+            expires_in=body.expires_in,
         )
     except NotImplementedError:
         raise HTTPException(
@@ -482,8 +493,52 @@ async def get_sandbox_preview_url(
         logger.exception(
             "Failed to get preview URL for workspace %s port %d",
             workspace_id,
-            port,
+            body.port,
         )
-        raise HTTPException(
-            status_code=500, detail=f"Failed to generate preview URL: {e}"
-        ) from None
+        raise HTTPException(status_code=500, detail=str(e)) from None
+
+
+class PreviewHealthRequest(BaseModel):
+    url: str
+
+
+class PreviewHealthResponse(BaseModel):
+    reachable: bool
+    checked_at: int
+
+
+@router.post("/{workspace_id}/sandbox/preview-health")
+async def check_preview_health(
+    workspace_id: str,
+    x_user_id: CurrentUserId,
+    body: PreviewHealthRequest,
+) -> PreviewHealthResponse:
+    """Check if a preview URL is still reachable."""
+    from urllib.parse import urlparse
+
+    _session, sandbox = await _get_sandbox(workspace_id, x_user_id)
+
+    # Validate URL scheme and domain
+    parsed = urlparse(body.url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="Invalid URL scheme")
+
+    proxy_host = getattr(sandbox, "proxy_domain", None)
+    if not proxy_host or "." not in proxy_host:
+        raise HTTPException(status_code=501, detail="Preview health checks not supported")
+
+    # Extract shared domain suffix (toolbox: {sandbox_id}.{domain}, preview: {port}-{token}.{domain})
+    proxy_suffix = proxy_host.split(".", 1)[1]
+    if not parsed.hostname or not parsed.hostname.endswith(proxy_suffix):
+        raise HTTPException(status_code=400, detail="Invalid preview URL for this workspace")
+
+    checked_at = int(time.time())
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.head(body.url, follow_redirects=False)
+            return PreviewHealthResponse(
+                reachable=200 <= resp.status_code < 400,
+                checked_at=checked_at,
+            )
+    except Exception:
+        return PreviewHealthResponse(reachable=False, checked_at=checked_at)

@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Globe, ExternalLink } from 'lucide-react';
+import { useWorkspaceId } from '../../contexts/WorkspaceContext';
+import { checkPreviewHealth } from '../../utils/api';
 
 const CARD_BG = 'var(--color-bg-tool-card)';
 const CARD_BORDER = 'var(--color-border-muted)';
@@ -11,11 +13,65 @@ interface InlinePreviewCardProps {
   onClick?: () => void;
 }
 
+function formatTimeAgo(epochSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
 export function InlinePreviewCard({ artifact, onClick }: InlinePreviewCardProps): React.ReactElement | null {
+  const workspaceId = useWorkspaceId();
+  const [health, setHealth] = useState<{ reachable: boolean; checkedAt: number } | null>(null);
+  const [, setTick] = useState(0); // force re-render for "X min ago" updates
+  const checkingRef = useRef(false);
+
+  const doHealthCheck = useCallback(async () => {
+    if (!workspaceId || !artifact?.url || checkingRef.current) return;
+    checkingRef.current = true;
+    try {
+      const result = await checkPreviewHealth(workspaceId, artifact.url as string);
+      setHealth({ reachable: result.reachable, checkedAt: result.checked_at });
+    } catch {
+      setHealth({ reachable: false, checkedAt: Math.floor(Date.now() / 1000) });
+    } finally {
+      checkingRef.current = false;
+    }
+  }, [workspaceId, artifact?.url]);
+
+  // Health check on mount + every 2 minutes
+  useEffect(() => {
+    doHealthCheck();
+    const interval = setInterval(doHealthCheck, 2 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [doHealthCheck]);
+
+  // Tick every 30s to update "X min ago" display
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
   if (!artifact) return null;
 
   const port = artifact.port as number | undefined;
   const title = (artifact.title as string) || (port ? `Port ${port}` : 'Preview');
+
+  // Status indicator
+  let dotColor: string;
+  let subtitle: string;
+  if (!health) {
+    dotColor = '#9ca3af';
+    subtitle = 'Checking...';
+  } else if (health.reachable) {
+    dotColor = '#22c55e';
+    subtitle = `Live \u00b7 checked ${formatTimeAgo(health.checkedAt)}`;
+  } else {
+    dotColor = '#9ca3af';
+    subtitle = `Offline \u00b7 checked ${formatTimeAgo(health.checkedAt)}`;
+  }
 
   return (
     <div
@@ -57,9 +113,19 @@ export function InlinePreviewCard({ artifact, onClick }: InlinePreviewCardProps)
               :{port}
             </span>
           )}
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              backgroundColor: dotColor,
+              flexShrink: 0,
+              animation: !health ? 'pulse 1.5s ease-in-out infinite' : undefined,
+            }}
+          />
         </div>
         <div style={{ fontSize: 11, color: TEXT_COLOR, marginTop: 1 }}>
-          Click to open preview
+          {subtitle}
         </div>
       </div>
       <ExternalLink size={14} style={{ color: TEXT_COLOR, flexShrink: 0 }} />

@@ -487,6 +487,9 @@ class PTCSandbox:
         """
         logger.info("Reconnecting to stopped sandbox", sandbox_id=sandbox_id)
 
+        # Clear stale background session — Daytona sessions don't survive stop/start
+        self._bg_session_id = None
+
         # Get the existing sandbox via provider
         try:
             self.runtime = await self._runtime_call(
@@ -2053,6 +2056,13 @@ class PTCSandbox:
                 charts=[],
             )
 
+    @property
+    def proxy_domain(self) -> str | None:
+        """Hostname of the sandbox proxy, or None if unavailable."""
+        if self.runtime is None:
+            return None
+        return self.runtime.proxy_domain
+
     async def get_preview_url(self, port: int, expires_in: int = 3600) -> PreviewInfo:
         """Get a signed preview URL for a service running on the given port.
 
@@ -2071,6 +2081,54 @@ class PTCSandbox:
             expires_in,
             retry_policy=RetryPolicy.SAFE,
         )
+
+    async def start_preview_server(self, command: str) -> str:
+        """Start a command in background for preview URL serving.
+
+        Fire-and-forget: starts the command via the background session.
+        If the port is already in use (server already running), the command
+        fails silently in the background — existing server keeps serving.
+
+        Returns:
+            The command ID from the session.
+        """
+        session_id = await self._ensure_bg_session()
+        assert self.runtime is not None
+        result = await self._runtime_call(
+            self.runtime.session_execute,
+            session_id,
+            command,
+            run_async=True,
+            retry_policy=RetryPolicy.UNSAFE,
+            total_timeout=30,
+        )
+        logger.info(
+            "Preview server command started",
+            cmd_id=result.cmd_id,
+            session_id=session_id,
+        )
+        return result.cmd_id
+
+    async def start_and_get_preview_url(
+        self,
+        command: str,
+        port: int,
+        *,
+        expires_in: int = 3600,
+        startup_delay: float = 2.0,
+    ) -> PreviewInfo:
+        """Start a server command in background and return a signed preview URL.
+
+        Combines start_preview_server + sleep + get_preview_url into a single call.
+        If the server command fails (e.g. port already in use), the preview URL
+        is still generated — the existing server keeps serving.
+        """
+        try:
+            await self.start_preview_server(command)
+        except Exception as e:
+            logger.warning("Failed to start preview server", command=command, error=str(e))
+        await asyncio.sleep(startup_delay)
+        return await self.get_preview_url(port, expires_in=expires_in)
 
     async def _ensure_bg_session(self) -> str:
         """Lazily create a background session for long-running commands."""

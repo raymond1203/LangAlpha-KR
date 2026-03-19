@@ -22,6 +22,7 @@ export { removeStoredThreadId } from './utils/threadStorage';
 import { createUserMessage, createAssistantMessage, createNotificationMessage, appendMessage, updateMessage, type AttachmentMeta } from './utils/messageHelpers';
 import type { ChatMessage, AssistantMessage } from '@/types/chat';
 import type { ActionRequest, ToolCallData, TodoItem } from '@/types/sse';
+import type { PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import {
   handleReasoningSignal,
@@ -420,7 +421,7 @@ export function useChatMessages(
   finalizePendingTodos: (() => void) | null = null,
   onOnboardingRelatedToolComplete: (() => void) | null = null,
   onFileArtifact: ((event: SSEEvent) => void) | null = null,
-  onPreviewUrl: ((data: { url: string; port: number; title?: string }) => void) | null = null,
+  onPreviewUrl: ((data: PreviewData) => void) | null = null,
   agentMode: string = 'ptc',
   clearSubagentCards: (() => void) | null = null,
   onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null = null,
@@ -2631,6 +2632,7 @@ export function useChatMessages(
             url: payload.url as string,
             port: payload.port as number,
             title: payload.title as string | undefined,
+            command: payload.command as string | undefined,
           });
         } else if (artifactType === 'task') {
           const payload = (event.payload || {}) as Record<string, unknown>;
