@@ -364,9 +364,9 @@ def _get_analyst_ratings(symbol: str) -> list[dict[str, Any]]:
         cleaned = {k: _clean_value(v) for k, v in r.items()}
         # Derive consensus label from rating counts (FMP provides this; yfinance does not)
         weights = {"strongBuy": 5, "buy": 4, "hold": 3, "sell": 2, "strongSell": 1}
-        total = sum(cleaned.get(k, 0) for k in weights)
+        total = sum(cleaned.get(k) or 0 for k in weights)
         if total > 0:
-            score = sum(cleaned.get(k, 0) * w for k, w in weights.items()) / total
+            score = sum((cleaned.get(k) or 0) * w for k, w in weights.items()) / total
             if score >= 4.5:
                 cleaned["consensus"] = "Strong Buy"
             elif score >= 3.5:
