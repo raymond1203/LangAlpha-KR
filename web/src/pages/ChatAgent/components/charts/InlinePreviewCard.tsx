@@ -3,6 +3,20 @@ import { Globe, ExternalLink } from 'lucide-react';
 import { useWorkspaceId } from '../../contexts/WorkspaceContext';
 import { checkPreviewHealth } from '../../utils/api';
 
+// Module-level deduplication: share a single in-flight health check per (workspaceId, port)
+const inflightChecks = new Map<string, Promise<{ reachable: boolean; checked_at: number }>>();
+
+function deduplicatedHealthCheck(workspaceId: string, port: number) {
+  const key = `${workspaceId}:${port}`;
+  const existing = inflightChecks.get(key);
+  if (existing) return existing;
+  const promise = checkPreviewHealth(workspaceId, port).finally(() => {
+    inflightChecks.delete(key);
+  });
+  inflightChecks.set(key, promise);
+  return promise;
+}
+
 const CARD_BG = 'var(--color-bg-tool-card)';
 const CARD_BORDER = 'var(--color-border-muted)';
 const TEXT_COLOR = 'var(--color-text-tertiary)';
@@ -32,7 +46,7 @@ export function InlinePreviewCard({ artifact, onClick }: InlinePreviewCardProps)
     if (!workspaceId || !artifact?.port || checkingRef.current) return;
     checkingRef.current = true;
     try {
-      const result = await checkPreviewHealth(workspaceId, artifact.port as number);
+      const result = await deduplicatedHealthCheck(workspaceId, artifact.port as number);
       setHealth({ reachable: result.reachable, checkedAt: result.checked_at });
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;

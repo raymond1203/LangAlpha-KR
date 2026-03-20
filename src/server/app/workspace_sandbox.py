@@ -75,7 +75,7 @@ async def _delete_cached_signed_url(sandbox_id: str, port: int) -> None:
 async def _check_signed_url_healthy(signed_url: str) -> bool:
     """HEAD-check the actual signed URL the iframe would load."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=2.0) as client:
             resp = await client.head(signed_url, follow_redirects=True)
             return 200 <= resp.status_code < 400
     except Exception:
