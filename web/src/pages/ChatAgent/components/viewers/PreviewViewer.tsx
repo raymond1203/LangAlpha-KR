@@ -70,13 +70,13 @@ export default function PreviewViewer({ url, port, title, loading: externalLoadi
         </div>
         <div className="preview-viewer-actions">
           <button className="preview-viewer-btn" onClick={handleRefresh} title="Refresh preview">
-            <RefreshCw size={14} />
+            <RefreshCw size={18} />
           </button>
           <button className="preview-viewer-btn" onClick={handleOpenExternal} title="Open in new tab">
-            <ExternalLink size={14} />
+            <ExternalLink size={18} />
           </button>
           <button className="preview-viewer-btn" onClick={onClose} title="Close preview">
-            <X size={14} />
+            <X size={18} />
           </button>
         </div>
       </div>
@@ -97,10 +97,10 @@ export default function PreviewViewer({ url, port, title, loading: externalLoadi
           <div className="preview-viewer-resize-card" style={{ flexDirection: 'column', alignItems: 'center', gap: 16, padding: '28px 36px' }}>
             <AlertCircle size={28} style={{ color: 'var(--color-text-tertiary)' }} />
             <div className="preview-viewer-resize-info" style={{ alignItems: 'center' }}>
-              <span className="preview-viewer-resize-title">Failed to start server</span>
+              <span className="preview-viewer-resize-title">Server offline</span>
               <span className="preview-viewer-resize-url">{displayTitle} :{port}</span>
               <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
-                Try clicking Refresh to retry
+                Click Refresh to restart
               </span>
             </div>
           </div>
@@ -128,9 +128,9 @@ export default function PreviewViewer({ url, port, title, loading: externalLoadi
             ref={iframeRef}
             key={iframeKey}
             src={url}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
             className="preview-viewer-frame"
             title={`Preview - port ${port}`}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
             onLoad={handleIframeLoad}
             style={isDragging ? { pointerEvents: 'none' } : undefined}
           />

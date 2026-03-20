@@ -313,7 +313,8 @@ class PTCAgent:
         bash_output_tool = create_bash_output_tool(sandbox)
 
         # Create the preview URL tool for sandbox service previews
-        preview_url_tool = create_preview_url_tool(sandbox)
+        workspace_id = getattr(session, "conversation_id", "") if session else ""
+        preview_url_tool = create_preview_url_tool(sandbox, workspace_id=workspace_id)
 
         # Start with base tools
         tools: list[Any] = [execute_code_tool, bash_tool, bash_output_tool, preview_url_tool, TodoWrite]

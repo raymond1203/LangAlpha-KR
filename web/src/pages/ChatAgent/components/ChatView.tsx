@@ -943,6 +943,36 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     return clampPanelWidth(desired);
   }, [clampPanelWidth]);
 
+  // Resolve preview URL: get signed URL from backend, restart server on 503.
+  const resolvePreviewUrl = useCallback(async (wid: string, port: number, command?: string): Promise<string> => {
+    try {
+      const result = await getPreviewUrl(wid, port, undefined);
+      return result.url;
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 503 && command) {
+        const result = await getPreviewUrl(wid, port, command);
+        return result.url;
+      }
+      throw err;
+    }
+  }, []);
+
+  // Resolve a preview URL and update previewData state with the result
+  const resolveAndSetPreview = useCallback((wid: string, port: number, command?: string) => {
+    resolvePreviewUrl(wid, port, command)
+      .then((url: string) => {
+        setPreviewData(prev => prev?.port === port
+          ? { ...prev, url, loading: false, error: undefined }
+          : prev);
+      })
+      .catch(() => {
+        setPreviewData(prev => prev?.port === port
+          ? { ...prev, url: '', loading: false, error: true }
+          : prev);
+      });
+  }, [resolvePreviewUrl]);
+
   // Open preview URL in right panel
   const handleOpenPreview = useCallback((data: PreviewData) => {
     setPreviewData(data);
@@ -950,7 +980,11 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     const containerW = containerRef.current?.offsetWidth || window.innerWidth;
     setRightPanelWidth(clampPanelWidthUtil(850, containerW, PREVIEW_MAX_RATIO));
     pushPanelHistory();
-  }, [pushPanelHistory]);
+    // If opened with loading state (no URL yet), resolve via authenticated endpoint
+    if (data.loading && !data.url && workspaceId) {
+      resolveAndSetPreview(workspaceId, data.port, data.command);
+    }
+  }, [pushPanelHistory, workspaceId, resolveAndSetPreview]);
 
   // Keep the ref in sync so SSE events (via handleOpenPreviewFromStream) use the latest closure
   openPreviewRef.current = handleOpenPreview;
@@ -962,21 +996,15 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       const port = artifact.port as number;
       const title = artifact.title as string | undefined;
       const command = artifact.command as string | undefined;
-      // Open panel immediately with loading state
+      // Show cached URL instantly, then verify in background (handles sandbox recreation + dead server)
+      if (previewData?.port === port && previewData.url) {
+        handleOpenPreview({ ...previewData, loading: false, error: undefined });
+        resolveAndSetPreview(workspaceId, port, command);
+        return;
+      }
+      // No cache — resolve (restarts server if needed via 503 fallback)
+      // handleOpenPreview will trigger resolution since loading=true and url=''
       handleOpenPreview({ url: '', port, title, command, loading: true });
-      // Then run restart chain in background
-      getPreviewUrl(workspaceId, port, command)
-        .then((fresh) => {
-          setPreviewData(prev => prev?.port === port ? { ...prev, url: fresh.url, loading: false } : prev);
-        })
-        .catch(() => {
-          // Fall back to stored URL if available
-          if (artifact.url) {
-            setPreviewData(prev => prev?.port === port ? { ...prev, url: artifact.url as string, loading: false } : prev);
-          } else {
-            setPreviewData(prev => prev?.port === port ? { ...prev, loading: false, error: true } : prev);
-          }
-        });
       return;
     }
     setDetailToolCall(toolCallProcess);
@@ -984,7 +1012,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     setRightPanelWidth(getDetailPanelWidth(toolCallProcess));
     setRightPanelType('detail');
     pushPanelHistory();
-  }, [getDetailPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview]);
+  }, [getDetailPanelWidth, pushPanelHistory, workspaceId, handleOpenPreview, previewData, resolveAndSetPreview]);
 
   // Open plan detail in right panel
   const handlePlanDetailClick = useCallback((planData: PlanData) => {
@@ -1003,21 +1031,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     popPanelHistory();
   }, [popPanelHistory]);
 
-  // Close preview panel
+  // Close preview panel (keep previewData cached for instant reopen)
   const handleClosePreview = useCallback(() => {
     setRightPanelType(null);
-    setPreviewData(null);
     popPanelHistory();
   }, [popPanelHistory]);
 
-  // Refresh preview URL from backend
+  // Refresh preview: restart process + resolve fresh signed URL (force bypasses cache)
   const handleRefreshPreview = useCallback(async () => {
     if (!previewData || !workspaceId) return;
+    setPreviewData(prev => prev ? { ...prev, loading: true, error: undefined } : null);
     try {
-      const fresh = await getPreviewUrl(workspaceId, previewData.port, previewData.command);
-      setPreviewData(prev => prev ? { ...prev, url: fresh.url } : null);
+      const result = await getPreviewUrl(workspaceId, previewData.port, previewData.command, true);
+      setPreviewData(prev => prev ? { ...prev, url: result.url, loading: false } : null);
     } catch (e) {
-      console.error('Failed to refresh preview URL:', e);
+      console.error('Failed to refresh preview:', e);
+      setPreviewData(prev => prev ? { ...prev, loading: false, error: true } : null);
     }
   }, [previewData, workspaceId]);
 
@@ -1859,6 +1888,29 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
               onClose={handleCloseDetailPanel}
               onOpenFile={handleOpenFileFromChat}
               onOpenSubagentTask={handleOpenSubagentTask}
+            />
+          </Suspense>
+        </MobileBottomSheet>
+      )}
+
+      {/* Mobile preview bottom sheet */}
+      {isMobile && (
+        <MobileBottomSheet
+          open={rightPanelType === 'preview' && !!previewData}
+          onClose={handleClosePreview}
+          sizing="fixed"
+          height="75vh"
+          className="!px-0 !overflow-hidden"
+        >
+          <Suspense fallback={null}>
+            <PreviewViewer
+              url={previewData?.url ?? ''}
+              port={previewData?.port ?? 0}
+              title={previewData?.title}
+              loading={previewData?.loading}
+              error={previewData?.error}
+              onClose={handleClosePreview}
+              onRefresh={handleRefreshPreview}
             />
           </Suspense>
         </MobileBottomSheet>

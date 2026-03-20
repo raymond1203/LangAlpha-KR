@@ -539,16 +539,17 @@ export async function refreshWorkspace(workspaceId: string) {
   return data;
 }
 
-export async function getPreviewUrl(workspaceId: string, port: number, command?: string) {
+export async function getPreviewUrl(workspaceId: string, port: number, command?: string, force?: boolean) {
   const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/sandbox/preview-url`, {
     port,
     ...(command && { command }),
+    ...(force && { force: true }),
   });
   return data;
 }
 
-export async function checkPreviewHealth(workspaceId: string, url: string) {
-  const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/sandbox/preview-health`, { url });
+export async function checkPreviewHealth(workspaceId: string, port: number) {
+  const { data } = await api.post(`/api/v1/workspaces/${workspaceId}/sandbox/preview-health`, { port });
   return data as { reachable: boolean; checked_at: number };
 }
 

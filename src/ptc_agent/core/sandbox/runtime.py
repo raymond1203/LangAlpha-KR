@@ -40,6 +40,7 @@ class PreviewInfo:
 
     url: str
     token: str
+    auth_headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -92,7 +93,7 @@ class SandboxRuntime(ABC):
 
     @property
     def proxy_domain(self) -> str | None:
-        """Hostname of the sandbox proxy (e.g. 'abc123.daytonaproxy1.example.com'). None if unsupported."""
+        """Hostname of the sandbox proxy (e.g. 'sandbox-abc123.proxy.example.com'). None if unsupported."""
         return None
 
     async def fetch_working_dir(self) -> str:
@@ -210,12 +211,21 @@ class SandboxRuntime(ABC):
     async def delete_session(self, session_id: str) -> None:
         """Delete a session. Default is no-op for providers without session support."""
 
-    async def get_preview_url(self, port: int, expires_in: int = 86400) -> PreviewInfo:
+    async def get_preview_url(self, port: int, expires_in: int = 3600) -> PreviewInfo:
         """Get a signed preview URL for a service running on the given port.
 
         Not all providers support this; the default raises NotImplementedError.
         """
         raise NotImplementedError("Preview URLs not supported by this runtime")
+
+    async def get_preview_link(self, port: int) -> PreviewInfo:
+        """Get a standard (non-signed) preview URL for a service running on the given port.
+
+        Returns PreviewInfo with ``auth_headers`` populated for authenticated
+        requests. Unlike signed URLs, this token resets on sandbox restart.
+        Used for health checks.
+        """
+        raise NotImplementedError("Preview links not supported by this runtime")
 
     async def get_metadata(self) -> dict[str, Any]:
         """Return provider-specific metadata about the runtime."""

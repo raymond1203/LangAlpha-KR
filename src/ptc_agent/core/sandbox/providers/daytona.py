@@ -260,10 +260,29 @@ class DaytonaRuntime(SandboxRuntime):
 
     # -- Preview URLs --
 
-    async def get_preview_url(self, port: int, expires_in: int = 86400) -> PreviewInfo:
-        """Get a signed preview URL for a service running on the given port."""
+    async def get_preview_url(self, port: int, expires_in: int = 3600) -> PreviewInfo:
+        """Get a signed preview URL for a service running on the given port.
+
+        Daytona returns the base URL and token separately. For iframe use the
+        token must be embedded as a query parameter since iframes cannot set
+        custom headers.
+        """
         result = await self._sandbox.create_signed_preview_url(port, expires_in)
-        return PreviewInfo(url=result.url, token=result.token)
+        url = result.url
+        # Embed token in URL if not already present (required for iframe access)
+        if result.token and "token=" not in url:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}token={result.token}"
+        return PreviewInfo(url=url, token=result.token)
+
+    async def get_preview_link(self, port: int) -> PreviewInfo:
+        """Get a standard (non-signed) preview URL with header-based auth token."""
+        result = await self._sandbox.get_preview_link(port)
+        return PreviewInfo(
+            url=result.url,
+            token=result.token,
+            auth_headers={"X-Daytona-Preview-Token": result.token},
+        )
 
     # -- Capabilities & metadata --
 

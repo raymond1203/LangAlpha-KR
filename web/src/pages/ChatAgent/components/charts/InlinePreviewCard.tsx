@@ -24,22 +24,27 @@ function formatTimeAgo(epochSeconds: number): string {
 
 export function InlinePreviewCard({ artifact, onClick }: InlinePreviewCardProps): React.ReactElement | null {
   const workspaceId = useWorkspaceId();
-  const [health, setHealth] = useState<{ reachable: boolean; checkedAt: number } | null>(null);
+  const [health, setHealth] = useState<{ reachable: boolean; checkedAt: number; sandboxStopped?: boolean } | null>(null);
   const [, setTick] = useState(0); // force re-render for "X min ago" updates
   const checkingRef = useRef(false);
 
   const doHealthCheck = useCallback(async () => {
-    if (!workspaceId || !artifact?.url || checkingRef.current) return;
+    if (!workspaceId || !artifact?.port || checkingRef.current) return;
     checkingRef.current = true;
     try {
-      const result = await checkPreviewHealth(workspaceId, artifact.url as string);
+      const result = await checkPreviewHealth(workspaceId, artifact.port as number);
       setHealth({ reachable: result.reachable, checkedAt: result.checked_at });
-    } catch {
-      setHealth({ reachable: false, checkedAt: Math.floor(Date.now() / 1000) });
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 503) {
+        setHealth({ reachable: false, checkedAt: Math.floor(Date.now() / 1000), sandboxStopped: true });
+      } else {
+        setHealth({ reachable: false, checkedAt: Math.floor(Date.now() / 1000) });
+      }
     } finally {
       checkingRef.current = false;
     }
-  }, [workspaceId, artifact?.url]);
+  }, [workspaceId, artifact?.port]);
 
   // Health check on mount + every 2 minutes
   useEffect(() => {
@@ -68,6 +73,9 @@ export function InlinePreviewCard({ artifact, onClick }: InlinePreviewCardProps)
   } else if (health.reachable) {
     dotColor = '#22c55e';
     subtitle = `Live \u00b7 checked ${formatTimeAgo(health.checkedAt)}`;
+  } else if (health.sandboxStopped) {
+    dotColor = '#f59e0b';
+    subtitle = `Sandbox stopped \u00b7 checked ${formatTimeAgo(health.checkedAt)}`;
   } else {
     dotColor = '#9ca3af';
     subtitle = `Offline \u00b7 checked ${formatTimeAgo(health.checkedAt)}`;

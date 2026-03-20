@@ -409,6 +409,7 @@ from src.server.app.utilities import health_router
 from src.server.app.workspaces import router as workspaces_router
 from src.server.app.workspace_files import router as workspace_files_router
 from src.server.app.workspace_sandbox import router as workspace_sandbox_router
+from src.server.app.workspace_sandbox import preview_redirect_router
 from src.server.app.market_data import router as market_data_router
 from src.server.app.users import router as users_router
 from src.server.app.watchlist import router as watchlist_router
@@ -482,6 +483,9 @@ app.include_router(
 )  # /api/v1/public/* - Public shared thread access (no auth)
 app.include_router(skills_router)  # /api/v1/skills - Available agent skills
 app.include_router(health_router)  # /health - Health check
+app.include_router(
+    preview_redirect_router
+)  # /api/v1/preview/{workspace_id}/{port} - Unauthenticated preview URL redirect
 
 app.include_router(
     market_data_ws_router

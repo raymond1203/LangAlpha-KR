@@ -2629,10 +2629,11 @@ export function useChatMessages(
         } else if (artifactType === 'preview_url' && onPreviewUrl) {
           const payload = (event.payload || {}) as Record<string, unknown>;
           onPreviewUrl({
-            url: payload.url as string,
+            url: '',  // resolved by ChatView via authenticated endpoint
             port: payload.port as number,
             title: payload.title as string | undefined,
             command: payload.command as string | undefined,
+            loading: true,
           });
         } else if (artifactType === 'task') {
           const payload = (event.payload || {}) as Record<string, unknown>;

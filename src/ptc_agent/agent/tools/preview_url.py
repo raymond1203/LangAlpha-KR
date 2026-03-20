@@ -8,11 +8,12 @@ from langchain_core.tools import BaseTool, tool
 logger = structlog.get_logger(__name__)
 
 
-def create_preview_url_tool(sandbox: Any) -> BaseTool:
+def create_preview_url_tool(sandbox: Any, *, workspace_id: str = "") -> BaseTool:
     """Factory function to create GetPreviewUrl tool with injected dependencies.
 
     Args:
         sandbox: PTCSandbox instance for preview URL generation
+        workspace_id: Workspace ID for preview URL generation
 
     Returns:
         Configured GetPreviewUrl tool function
@@ -45,21 +46,39 @@ def create_preview_url_tool(sandbox: Any) -> BaseTool:
         except Exception:
             writer = None
 
+        if not workspace_id:
+            return "ERROR: No workspace ID available — cannot generate preview URL", {}
+
         try:
+            # Start the server process and wait for it to be ready
             preview_info = await sandbox.start_and_get_preview_url(command, port)
-            url = preview_info.url
             display_title = title or f"Port {port}"
+
+            # Cache the fresh signed URL in Redis so frontend resolves it instantly
+            try:
+                from src.server.app.workspace_sandbox import (
+                    _set_cached_signed_url,
+                )
+                await _set_cached_signed_url(sandbox.sandbox_id, port, preview_info.url)
+            except ImportError:
+                pass  # Server layer not available (e.g. CLI context)
+            except Exception:
+                logger.debug("Failed to cache signed URL for port %s", port, exc_info=True)
 
             logger.info(
                 "Generated preview URL",
                 port=port,
                 title=display_title,
-                url=url[:80],
+                workspace_id=workspace_id,
             )
+
+            # Stable URL: {base}/api/v1/preview/{workspace_id}/{port}
+            from src.config.env import SERVER_BASE_URL
+
+            stable_url = f"{SERVER_BASE_URL.rstrip('/')}/api/v1/preview/{workspace_id}/{port}"
 
             artifact = {
                 "type": "preview_url",
-                "url": url,
                 "port": port,
                 "title": display_title,
                 "command": command,
@@ -73,7 +92,7 @@ def create_preview_url_tool(sandbox: Any) -> BaseTool:
                     "payload": artifact,
                 })
 
-            content = f"Preview URL for {display_title}: {url}"
+            content = f"Preview URL for {display_title}: {stable_url}"
             return content, artifact
 
         except NotImplementedError:

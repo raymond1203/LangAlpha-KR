@@ -20,17 +20,66 @@ from typing import Any
 
 import httpx
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Path as PathParam, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.database.workspace import get_workspace as db_get_workspace
 from src.server.services.workspace_manager import WorkspaceManager
 from src.ptc_agent.core.sandbox import PTCSandbox
+from src.utils.cache.redis_cache import get_cache_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/workspaces", tags=["Workspace Sandbox"])
+
+_SIGNED_URL_TTL = 3000  # 50 min (signed URLs expire in 1h)
+
+
+def _preview_cache_key(sandbox_id: str, port: int) -> str:
+    """Redis key for cached signed preview URL."""
+    return f"preview:signed_url:{sandbox_id}:{port}"
+
+
+async def _get_cached_signed_url(sandbox_id: str, port: int) -> str | None:
+    """Get cached signed URL from Redis."""
+    cache = get_cache_client()
+    return await cache.get(_preview_cache_key(sandbox_id, port))
+
+
+async def _set_cached_signed_url(
+    sandbox_id: str, port: int, url: str, *, expires_in: int | None = None,
+) -> None:
+    """Cache a signed URL in Redis with TTL.
+
+    Args:
+        expires_in: Actual signed URL expiry in seconds. When provided the
+            cache TTL is set to ``expires_in - 600`` (10 min safety margin),
+            clamped to [60, _SIGNED_URL_TTL]. Falls back to _SIGNED_URL_TTL.
+    """
+    if expires_in is not None:
+        ttl = max(60, min(expires_in - 600, _SIGNED_URL_TTL))
+    else:
+        ttl = _SIGNED_URL_TTL
+    cache = get_cache_client()
+    await cache.set(_preview_cache_key(sandbox_id, port), url, ttl=ttl)
+
+
+async def _delete_cached_signed_url(sandbox_id: str, port: int) -> None:
+    """Delete a cached signed URL from Redis."""
+    cache = get_cache_client()
+    await cache.delete(_preview_cache_key(sandbox_id, port))
+
+
+async def _check_signed_url_healthy(signed_url: str) -> bool:
+    """HEAD-check the actual signed URL the iframe would load."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.head(signed_url, follow_redirects=True)
+            return 200 <= resp.status_code < 400
+    except Exception:
+        return False
 
 # Regex for validating package names (allows version specifiers)
 _PACKAGE_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+([<>=!~]+.*)?$")
@@ -451,6 +500,7 @@ async def install_sandbox_packages(
 class PreviewUrlRequest(BaseModel):
     port: int = Field(..., ge=3000, le=9999)
     command: str | None = None
+    force: bool = False
     expires_in: int = Field(default=3600, ge=60, le=86400)
 
 
@@ -477,13 +527,49 @@ async def get_sandbox_preview_url(
             preview_info = await sandbox.start_and_get_preview_url(
                 body.command, body.port, expires_in=body.expires_in,
             )
-        else:
-            preview_info = await sandbox.get_preview_url(body.port, expires_in=body.expires_in)
+            await _set_cached_signed_url(
+                sandbox.sandbox_id, body.port, preview_info.url,
+                expires_in=body.expires_in,
+            )
+            return PreviewUrlResponse(
+                url=preview_info.url,
+                port=body.port,
+                expires_in=body.expires_in,
+            )
+
+        # No command — try cache (unless force=True)
+        if body.force:
+            await _delete_cached_signed_url(sandbox.sandbox_id, body.port)
+        cached_url = None if body.force else await _get_cached_signed_url(sandbox.sandbox_id, body.port)
+        if cached_url and await _check_signed_url_healthy(cached_url):
+            return PreviewUrlResponse(
+                url=cached_url,
+                port=body.port,
+                expires_in=body.expires_in,
+            )
+
+        # Stale or missing — get a fresh signed URL from the provider
+        await _delete_cached_signed_url(sandbox.sandbox_id, body.port)
+        preview_info = await sandbox.get_preview_url(
+            body.port, expires_in=body.expires_in,
+        )
+
+        # A freshly-generated signed URL from the provider is inherently valid.
+        # Don't gate on a server-side health check here — it can produce false
+        # negatives (e.g. dev servers that reject HEAD, or network differences
+        # between backend→proxy vs browser→proxy). The frontend's polling health
+        # check handles dead-server detection and restart.
+        await _set_cached_signed_url(
+            sandbox.sandbox_id, body.port, preview_info.url,
+            expires_in=body.expires_in,
+        )
         return PreviewUrlResponse(
             url=preview_info.url,
             port=body.port,
             expires_in=body.expires_in,
         )
+    except HTTPException:
+        raise
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
@@ -499,7 +585,7 @@ async def get_sandbox_preview_url(
 
 
 class PreviewHealthRequest(BaseModel):
-    url: str
+    port: int = Field(..., ge=3000, le=9999)
 
 
 class PreviewHealthResponse(BaseModel):
@@ -513,32 +599,124 @@ async def check_preview_health(
     x_user_id: CurrentUserId,
     body: PreviewHealthRequest,
 ) -> PreviewHealthResponse:
-    """Check if a preview URL is still reachable."""
-    from urllib.parse import urlparse
+    """Check if a preview service is still reachable on the given port.
 
+    Uses the sandbox's standard preview link (cached) to avoid repeated
+    provider API calls on the 2-minute polling interval.
+    """
     _session, sandbox = await _get_sandbox(workspace_id, x_user_id)
 
-    # Validate URL scheme and domain
-    parsed = urlparse(body.url)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Invalid URL scheme")
-
-    proxy_host = getattr(sandbox, "proxy_domain", None)
-    if not proxy_host or "." not in proxy_host:
-        raise HTTPException(status_code=501, detail="Preview health checks not supported")
-
-    # Extract shared domain suffix (toolbox: {sandbox_id}.{domain}, preview: {port}-{token}.{domain})
-    proxy_suffix = proxy_host.split(".", 1)[1]
-    if not parsed.hostname or not parsed.hostname.endswith(proxy_suffix):
-        raise HTTPException(status_code=400, detail="Invalid preview URL for this workspace")
-
     checked_at = int(time.time())
+    reachable = False
     try:
+        preview_link = await sandbox.get_preview_link(body.port)
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.head(body.url, follow_redirects=False)
-            return PreviewHealthResponse(
-                reachable=200 <= resp.status_code < 400,
-                checked_at=checked_at,
+            resp = await client.head(
+                preview_link.url,
+                headers=preview_link.auth_headers,
+                follow_redirects=True,
             )
+            reachable = 200 <= resp.status_code < 400
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501, detail="Preview health checks not supported"
+        ) from None
     except Exception:
-        return PreviewHealthResponse(reachable=False, checked_at=checked_at)
+        pass
+
+    # Invalidate cached signed URL when server is down so next resolve gets a fresh one
+    if not reachable:
+        await _delete_cached_signed_url(sandbox.sandbox_id, body.port)
+
+    return PreviewHealthResponse(reachable=reachable, checked_at=checked_at)
+
+
+
+class PreviewRestartRequest(BaseModel):
+    port: int = Field(..., ge=3000, le=9999)
+    command: str
+
+
+class PreviewRestartResponse(BaseModel):
+    success: bool
+
+
+@router.post("/{workspace_id}/sandbox/preview-restart")
+async def restart_preview_server(
+    workspace_id: str,
+    x_user_id: CurrentUserId,
+    body: PreviewRestartRequest,
+) -> PreviewRestartResponse:
+    """Restart a preview server process in the workspace sandbox."""
+    _session, sandbox = await _get_sandbox(workspace_id, x_user_id)
+
+    try:
+        await sandbox.start_preview_server(body.command)
+        return PreviewRestartResponse(success=True)
+    except Exception as e:
+        logger.exception(
+            "Failed to restart preview server for workspace %s", workspace_id,
+        )
+        raise HTTPException(status_code=500, detail=str(e)) from None
+
+
+# ---------------------------------------------------------------------------
+# Unauthenticated preview redirect
+# ---------------------------------------------------------------------------
+
+preview_redirect_router = APIRouter(prefix="/api/v1", tags=["Preview Redirect"])
+
+
+async def _resolve_preview_url(sandbox_id: str, port: int) -> str:
+    """Resolve a signed preview URL for the given sandbox+port, with Redis caching."""
+    from ptc_agent.core.sandbox.providers import create_provider
+
+    cached_url = await _get_cached_signed_url(sandbox_id, port)
+    if cached_url and await _check_signed_url_healthy(cached_url):
+        return cached_url
+    if cached_url:
+        await _delete_cached_signed_url(sandbox_id, port)
+
+    manager = WorkspaceManager.get_instance()
+    provider = create_provider(manager.config.to_core_config())
+    try:
+        try:
+            runtime = await provider.get(sandbox_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Sandbox not found") from None
+
+        state = await runtime.get_state()
+        if state.value != "running":
+            raise HTTPException(
+                status_code=503,
+                detail="Sandbox not running",
+                headers={"Retry-After": "30"},
+            )
+
+        preview_info = await runtime.get_preview_url(port, expires_in=3600)
+        await _set_cached_signed_url(sandbox_id, port, preview_info.url)
+        return preview_info.url
+    finally:
+        await provider.close()
+
+
+@preview_redirect_router.get("/preview/{workspace_id}/{port}")
+async def preview_redirect_by_workspace(
+    workspace_id: str,
+    port: int = PathParam(ge=3000, le=9999),
+) -> Response:
+    """Stable preview URL — deterministic for a given workspace+port.
+
+    Resolves to a cached signed URL via 302 redirect.
+    The workspace UUID (128-bit) acts as the access credential.
+    """
+    workspace = await db_get_workspace(workspace_id)
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    sandbox_id = workspace.get("sandbox_id")
+    if not sandbox_id:
+        raise HTTPException(status_code=404, detail="No sandbox for this workspace")
+
+    signed_url = await _resolve_preview_url(sandbox_id, port)
+    return RedirectResponse(url=signed_url, status_code=302)

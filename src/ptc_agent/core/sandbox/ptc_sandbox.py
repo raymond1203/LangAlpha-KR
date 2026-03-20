@@ -157,6 +157,9 @@ class PTCSandbox:
         # Track whether disabled tool modules have been pruned (only needed once)
         self._disabled_modules_pruned = False
 
+        # Cached standard preview link info per port (avoids repeated Daytona API calls)
+        self._preview_link_cache: dict[int, PreviewInfo] = {}
+
         logger.info("Initialized PTCSandbox")
 
     @property
@@ -487,8 +490,9 @@ class PTCSandbox:
         """
         logger.info("Reconnecting to stopped sandbox", sandbox_id=sandbox_id)
 
-        # Clear stale background session — Daytona sessions don't survive stop/start
+        # Clear stale state — sessions and preview links don't survive stop/start
         self._bg_session_id = None
+        self._preview_link_cache.clear()
 
         # Get the existing sandbox via provider
         try:
@@ -2081,6 +2085,25 @@ class PTCSandbox:
             expires_in,
             retry_policy=RetryPolicy.SAFE,
         )
+
+    async def get_preview_link(self, port: int) -> PreviewInfo:
+        """Get a standard preview URL with header-based auth token.
+
+        Results are cached per-port since the standard URL doesn't change
+        while the sandbox is running. Cache is cleared on sandbox restart.
+        """
+        cached = self._preview_link_cache.get(port)
+        if cached is not None:
+            return cached
+        await self._wait_ready()
+        assert self.runtime is not None
+        result = await self._runtime_call(
+            self.runtime.get_preview_link,
+            port,
+            retry_policy=RetryPolicy.SAFE,
+        )
+        self._preview_link_cache[port] = result
+        return result
 
     async def start_preview_server(self, command: str) -> str:
         """Start a command in background for preview URL serving.
