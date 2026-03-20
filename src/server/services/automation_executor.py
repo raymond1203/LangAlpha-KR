@@ -182,11 +182,17 @@ class AutomationExecutor:
                     execution_id, "completed", delivery_result=delivery_result,
                 )
 
-            # Mark one-time automations as completed
+            # Mark one-time / one-shot automations as completed
             if automation["trigger_type"] == "once":
                 await auto_db.update_automation_next_run(
                     automation_id, next_run_at=None, status="completed"
                 )
+            elif automation["trigger_type"] == "price":
+                tc = automation.get("trigger_config") or {}
+                if tc.get("retrigger", {}).get("mode") == "one_shot":
+                    await auto_db.update_automation_next_run(
+                        automation_id, next_run_at=None, status="completed"
+                    )
 
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)[:500]}"
