@@ -66,9 +66,10 @@ interface StatCardProps {
   label: string;
   value: string;
   sub?: string | null;
+  badge?: string | null;
 }
 
-function StatCard({ label, value, sub }: StatCardProps): React.ReactElement {
+function StatCard({ label, value, sub, badge }: StatCardProps): React.ReactElement {
   return (
     <div
       style={{
@@ -82,8 +83,26 @@ function StatCard({ label, value, sub }: StatCardProps): React.ReactElement {
         {label}
       </p>
       <p style={{ fontSize: 14, color: 'var(--color-text-primary)', fontWeight: 500 }}>{value}</p>
-      {sub && (
-        <p style={{ fontSize: 11, color: TEXT_SECONDARY, marginTop: 2 }}>{sub}</p>
+      {(sub || badge) && (
+        <p style={{ fontSize: 11, color: TEXT_SECONDARY, marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+          {sub && <span>{sub}</span>}
+          {badge && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                padding: '1px 5px',
+                borderRadius: 4,
+                backgroundColor: 'var(--color-info-soft)',
+                color: BLUE,
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+              }}
+            >
+              {badge}
+            </span>
+          )}
+        </p>
       )}
     </div>
   );
@@ -101,6 +120,11 @@ function ConfigRow({ label, value }: ConfigRowProps): React.ReactElement {
       <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{value}</span>
     </div>
   );
+}
+
+function marketI18nKey(triggerConfig: PriceTriggerConfig | null | undefined): string | null {
+  if (!triggerConfig) return null;
+  return triggerConfig.market === 'index' ? 'automation.marketIndex' : null;
 }
 
 function scheduleLabel(auto: Record<string, unknown> | null | undefined): string {
@@ -263,6 +287,7 @@ function DetailPanel({ automation, executions, totalExecutions }: DetailPanelPro
             label={t('toolArtifact.trigger')}
             value={formatPriceTrigger(automation.trigger_config as PriceTriggerConfig) || '\u2014'}
             sub={(automation.trigger_config as PriceTriggerConfig)?.symbol || null}
+            badge={(() => { const k = marketI18nKey(automation.trigger_config as PriceTriggerConfig); return k ? t(k) : null; })()}
           />
           <StatCard
             label={t('toolArtifact.retrigger')}
@@ -416,7 +441,7 @@ function CreatedPanel({ data }: CreatedPanelProps): React.ReactElement {
       {/* Details */}
       {isPrice ? (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <StatCard label={t('toolArtifact.trigger')} value={formatPriceTrigger(data.trigger_config as PriceTriggerConfig) || '\u2014'} sub={(data.trigger_config as PriceTriggerConfig)?.symbol || null} />
+          <StatCard label={t('toolArtifact.trigger')} value={formatPriceTrigger(data.trigger_config as PriceTriggerConfig) || '\u2014'} sub={(data.trigger_config as PriceTriggerConfig)?.symbol || null} badge={(() => { const k = marketI18nKey(data.trigger_config as PriceTriggerConfig); return k ? t(k) : null; })()} />
           <StatCard label={t('toolArtifact.retrigger')} value={formatRetriggerMode(data.trigger_config as PriceTriggerConfig)} />
         </div>
       ) : (

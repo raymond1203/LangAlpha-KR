@@ -18,6 +18,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # =============================================================================
 
 
+class MarketType(str, Enum):
+    """Market type for price-triggered automations."""
+    STOCK = "stock"
+    INDEX = "index"
+
+
 class PriceConditionType(str, Enum):
     """Supported price condition types (extensible)."""
     PRICE_ABOVE = "price_above"
@@ -69,14 +75,42 @@ class RetriggerConfig(BaseModel):
         return self
 
 
+# Display-style aliases → canonical bare symbols
+_DISPLAY_ALIASES: dict[str, str] = {"GSPC": "SPX", "IXIC": "COMP"}
+
+# Canonical bare symbols that are indices (for auto-detection)
+_INDEX_SYMBOLS: set[str] = {"SPX", "DJI", "COMP", "NDX", "RUT", "VIX"}
+
+
 class PriceTriggerConfig(BaseModel):
     """Configuration stored in trigger_config for price-triggered automations."""
-    symbol: str = Field(..., min_length=1, max_length=10, description="Stock ticker symbol")
+    symbol: str = Field(..., min_length=1, max_length=10, description="Ticker symbol (bare, e.g. 'AAPL' or 'SPX')")
+    market: MarketType = Field(default=MarketType.STOCK, description="Market type: 'stock' or 'index'")
     conditions: List[PriceCondition] = Field(
         ..., min_length=1,
         description="Price conditions to evaluate (AND logic for multiple)",
     )
     retrigger: RetriggerConfig = Field(default_factory=RetriggerConfig)
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_bare_symbol(cls, v: str) -> str:
+        """Reject prefixed symbols and normalize display aliases."""
+        if v.startswith("I:"):
+            bare = v[2:]
+            raise ValueError(f"Use bare symbol (e.g. '{bare}', not '{v}')")
+        if v.startswith("^"):
+            bare = v[1:]
+            raise ValueError(f"Use bare symbol (e.g. '{bare}', not '{v}')")
+        upper = v.upper()
+        return _DISPLAY_ALIASES.get(upper, upper)
+
+    @model_validator(mode="after")
+    def infer_market_from_symbol(self):
+        """Auto-set market=INDEX when symbol is a known index."""
+        if self.symbol in _INDEX_SYMBOLS:
+            self.market = MarketType.INDEX
+        return self
 
 
 # =============================================================================

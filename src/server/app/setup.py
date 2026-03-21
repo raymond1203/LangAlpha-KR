@@ -211,11 +211,12 @@ async def lifespan(app: FastAPI):
 
     # Start SharedWSConnectionManager (shared upstream WS to ginlix-data)
     try:
-        from src.server.services.shared_ws_manager import SharedWSConnectionManager
+        from src.server.services.shared_ws_manager import DEFAULT_WS_FEEDS, SharedWSConnectionManager
 
-        shared_ws = SharedWSConnectionManager.get_instance()
-        await shared_ws.start()
-        logger.info("SharedWSConnectionManager started")
+        for market, interval, tier in DEFAULT_WS_FEEDS:
+            ws = SharedWSConnectionManager.get_instance(market, interval, tier)
+            await ws.start()
+        logger.info("SharedWSConnectionManager instances started")
     except Exception as e:
         logger.warning(f"Failed to start SharedWSConnectionManager: {e}")
 
@@ -286,8 +287,8 @@ async def lifespan(app: FastAPI):
     try:
         from src.server.services.shared_ws_manager import SharedWSConnectionManager
 
-        shared_ws_mgr = SharedWSConnectionManager.get_instance()
-        await shared_ws_mgr.stop()
+        for ws in SharedWSConnectionManager.all_instances():
+            await ws.stop()
     except Exception as e:
         logger.warning(f"Error shutting down SharedWSConnectionManager: {e}")
 

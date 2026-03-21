@@ -8,8 +8,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.server.models.automation import PriceConditionType, PriceTriggerConfig, RetriggerMode
-from src.server.services.price_monitor import PriceMonitorService, _seconds_until_next_market_open
+from src.server.models.automation import MarketType, PriceConditionType, PriceTriggerConfig, RetriggerMode
+from src.server.services.price_monitor import (
+    PriceMonitorService,
+    _from_display_symbol,
+    _from_ws_symbol,
+    _seconds_until_next_market_open,
+    _to_ws_symbol,
+)
 from src.server.services.shared_ws_manager import SharedWSConnectionManager
 
 ET = ZoneInfo("America/New_York")
@@ -22,6 +28,7 @@ def _make_automation(
     reference="previous_close",
     retrigger_mode="one_shot",
     cooldown_seconds=None,
+    market="stock",
     **overrides,
 ):
     """Factory for automation dicts with price trigger_config."""
@@ -36,6 +43,7 @@ def _make_automation(
         "trigger_type": "price",
         "trigger_config": {
             "symbol": symbol,
+            "market": market,
             "conditions": [
                 {"type": condition_type, "value": value, "reference": reference}
             ],
@@ -59,12 +67,59 @@ def _make_automation(
     }
 
 
+class TestSymbolNormalization:
+    """Test module-level symbol normalization utilities."""
+
+    def test_to_ws_symbol_stock(self):
+        """Stock symbols pass through uppercased."""
+        assert _to_ws_symbol("aapl", MarketType.STOCK) == "AAPL"
+        assert _to_ws_symbol("TSLA", MarketType.STOCK) == "TSLA"
+
+    def test_to_ws_symbol_index(self):
+        """Bare index symbols get I: prefix."""
+        assert _to_ws_symbol("SPX", MarketType.INDEX) == "I:SPX"
+
+    def test_to_ws_symbol_index_known(self):
+        """Known display symbols use _INDEX_SYMBOL_MAP for mapping."""
+        # GSPC is in _INDEX_SYMBOL_MAP and maps to I:SPX
+        assert _to_ws_symbol("GSPC", MarketType.INDEX) == "I:SPX"
+        # DJI maps to I:DJI
+        assert _to_ws_symbol("DJI", MarketType.INDEX) == "I:DJI"
+        # IXIC maps to I:COMP
+        assert _to_ws_symbol("IXIC", MarketType.INDEX) == "I:COMP"
+
+    def test_to_ws_symbol_index_unknown(self):
+        """Unknown index symbols get a generic I: prefix."""
+        assert _to_ws_symbol("NYFANG", MarketType.INDEX) == "I:NYFANG"
+
+    def test_from_ws_symbol_strips_prefix(self):
+        """Wire format I:SPX becomes bare SPX."""
+        assert _from_ws_symbol("I:SPX") == "SPX"
+        assert _from_ws_symbol("I:DJI") == "DJI"
+        assert _from_ws_symbol("I:COMP") == "COMP"
+
+    def test_from_ws_symbol_stock_passthrough(self):
+        """Stock symbols pass through unchanged."""
+        assert _from_ws_symbol("AAPL") == "AAPL"
+        assert _from_ws_symbol("TSLA") == "TSLA"
+
+    def test_from_display_symbol_known(self):
+        """Known display symbols are mapped to bare symbols."""
+        assert _from_display_symbol("GSPC") == "SPX"
+        assert _from_display_symbol("IXIC") == "COMP"
+
+    def test_from_display_symbol_passthrough(self):
+        """Symbols already bare pass through unchanged."""
+        assert _from_display_symbol("DJI") == "DJI"
+        assert _from_display_symbol("AAPL") == "AAPL"
+
+
 class TestOnMessage:
     """Test _on_message dispatches to _evaluate_and_trigger correctly."""
 
     def setup_method(self):
         PriceMonitorService._instance = None
-        SharedWSConnectionManager._instance = None
+        SharedWSConnectionManager._instances.clear()
 
     @pytest.mark.asyncio
     async def test_evaluates_matching_symbol(self):
@@ -94,6 +149,41 @@ class TestOnMessage:
 
         with patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval:
             await svc._on_message('{"type":"keepalive"}', None)
+            mock_eval.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normalizes_index_ws_symbol(self):
+        """_on_message normalizes I:SPX to SPX for lookup in _symbol_automations."""
+        svc = PriceMonitorService()
+        auto = _make_automation(symbol="SPX", market="index", condition_type="price_below", value=5000.0)
+        svc._symbol_automations = {"SPX": [auto]}
+
+        with patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval:
+            bar = {"symbol": "I:SPX", "close": 4900.0, "open": 5000.0, "high": 5010.0, "low": 4890.0, "volume": 0, "time": 1710000000000}
+            await svc._on_message('{"ev":"AM"}', bar)
+            mock_eval.assert_called_once_with(auto, 4900.0)
+
+    @pytest.mark.asyncio
+    async def test_stock_symbol_no_prefix_still_works(self):
+        """Stock symbols without I: prefix still match correctly."""
+        svc = PriceMonitorService()
+        auto = _make_automation(symbol="AAPL", market="stock")
+        svc._symbol_automations = {"AAPL": [auto]}
+
+        with patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval:
+            bar = {"symbol": "AAPL", "close": 149.0, "open": 150.0, "high": 150.5, "low": 148.5, "volume": 1000, "time": 1710000000000}
+            await svc._on_message('{"ev":"AM"}', bar)
+            mock_eval.assert_called_once_with(auto, 149.0)
+
+    @pytest.mark.asyncio
+    async def test_index_symbol_not_in_automations_skipped(self):
+        """An index bar for a symbol not in _symbol_automations is skipped."""
+        svc = PriceMonitorService()
+        svc._symbol_automations = {"SPX": [_make_automation(symbol="SPX", market="index")]}
+
+        with patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval:
+            bar = {"symbol": "I:DJI", "close": 40000.0, "open": 39500.0, "high": 40100.0, "low": 39400.0, "volume": 0, "time": 1710000000000}
+            await svc._on_message('{"ev":"AM"}', bar)
             mock_eval.assert_not_called()
 
 
@@ -228,23 +318,22 @@ class TestLoadAutomations:
 
     def setup_method(self):
         PriceMonitorService._instance = None
-        SharedWSConnectionManager._instance = None
+        SharedWSConnectionManager._instances.clear()
 
     @pytest.mark.asyncio
-    async def test_loads_and_subscribes(self):
+    async def test_loads_and_subscribes_stocks(self):
         svc = PriceMonitorService()
-        mock_handle = AsyncMock()
-        svc._consumer_handle = mock_handle
+        mock_stock_handle = AsyncMock()
+        mock_index_handle = AsyncMock()
+        svc._stock_handle = mock_stock_handle
+        svc._index_handle = mock_index_handle
 
         autos = [
             _make_automation(symbol="AAPL"),
             _make_automation(symbol="TSLA"),
         ]
 
-        mock_auto_db = MagicMock()
-        mock_auto_db.get_active_price_automations = AsyncMock(return_value=autos)
-
-        with patch("src.server.database.automation.get_active_price_automations", mock_auto_db.get_active_price_automations):
+        with patch("src.server.database.automation.get_active_price_automations", AsyncMock(return_value=autos)):
             with patch.object(svc._evaluator, "refresh_references", new_callable=AsyncMock):
                 await svc._load_automations()
 
@@ -252,16 +341,89 @@ class TestLoadAutomations:
         assert "TSLA" in svc._monitored_symbols
         assert len(svc._symbol_automations["AAPL"]) == 1
         assert len(svc._symbol_automations["TSLA"]) == 1
-        mock_handle.subscribe.assert_called_once()
+        mock_stock_handle.subscribe.assert_called_once()
+        mock_index_handle.subscribe.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_removes_stale_subscriptions(self):
+    async def test_loads_and_subscribes_indices(self):
         svc = PriceMonitorService()
-        mock_handle = AsyncMock()
-        svc._consumer_handle = mock_handle
-        svc._monitored_symbols = {"AAPL", "TSLA"}
-        svc._symbol_automations = {"AAPL": [_make_automation(symbol="AAPL")], "TSLA": [_make_automation(symbol="TSLA")]}
+        mock_stock_handle = AsyncMock()
+        mock_index_handle = AsyncMock()
+        svc._stock_handle = mock_stock_handle
+        svc._index_handle = mock_index_handle
 
+        autos = [
+            _make_automation(symbol="SPX", market="index"),
+            _make_automation(symbol="DJI", market="index"),
+        ]
+
+        with patch("src.server.database.automation.get_active_price_automations", AsyncMock(return_value=autos)):
+            with patch.object(svc._evaluator, "refresh_references", new_callable=AsyncMock) as mock_refresh:
+                await svc._load_automations()
+
+        assert "SPX" in svc._monitored_symbols
+        assert "DJI" in svc._monitored_symbols
+        assert svc._symbol_markets["SPX"] == MarketType.INDEX
+        assert svc._symbol_markets["DJI"] == MarketType.INDEX
+        # Index symbols subscribe on the index handle
+        mock_index_handle.subscribe.assert_called_once()
+        mock_stock_handle.subscribe.assert_not_called()
+        # WS symbols should be the wire format
+        assert "I:SPX" in svc._index_ws_symbols
+        assert "I:DJI" in svc._index_ws_symbols
+        # refresh_references called with correct symbol_markets
+        mock_refresh.assert_called_once()
+        call_args = mock_refresh.call_args
+        assert set(call_args.args[0]) == {"SPX", "DJI"}
+        assert call_args.kwargs["symbol_markets"] == {"SPX": MarketType.INDEX, "DJI": MarketType.INDEX}
+
+    @pytest.mark.asyncio
+    async def test_loads_mixed_stock_and_index(self):
+        svc = PriceMonitorService()
+        mock_stock_handle = AsyncMock()
+        mock_index_handle = AsyncMock()
+        svc._stock_handle = mock_stock_handle
+        svc._index_handle = mock_index_handle
+
+        autos = [
+            _make_automation(symbol="AAPL", market="stock"),
+            _make_automation(symbol="SPX", market="index"),
+        ]
+
+        with patch("src.server.database.automation.get_active_price_automations", AsyncMock(return_value=autos)):
+            with patch.object(svc._evaluator, "refresh_references", new_callable=AsyncMock) as mock_refresh:
+                await svc._load_automations()
+
+        assert "AAPL" in svc._monitored_symbols
+        assert "SPX" in svc._monitored_symbols
+        assert svc._symbol_markets["AAPL"] == MarketType.STOCK
+        assert svc._symbol_markets["SPX"] == MarketType.INDEX
+        mock_stock_handle.subscribe.assert_called_once()
+        mock_index_handle.subscribe.assert_called_once()
+        assert "AAPL" in svc._stock_ws_symbols
+        assert "I:SPX" in svc._index_ws_symbols
+        # refresh_references called with both markets
+        mock_refresh.assert_called_once()
+        call_args = mock_refresh.call_args
+        assert set(call_args.args[0]) == {"AAPL", "SPX"}
+        assert call_args.kwargs["symbol_markets"] == {"AAPL": MarketType.STOCK, "SPX": MarketType.INDEX}
+
+    @pytest.mark.asyncio
+    async def test_removes_stale_stock_subscriptions(self):
+        svc = PriceMonitorService()
+        mock_stock_handle = AsyncMock()
+        mock_index_handle = AsyncMock()
+        svc._stock_handle = mock_stock_handle
+        svc._index_handle = mock_index_handle
+        # Pre-populate with AAPL and TSLA as existing stock subscriptions
+        svc._stock_ws_symbols = {"AAPL", "TSLA"}
+        svc._symbol_automations = {
+            "AAPL": [_make_automation(symbol="AAPL")],
+            "TSLA": [_make_automation(symbol="TSLA")],
+        }
+        svc._symbol_markets = {"AAPL": MarketType.STOCK, "TSLA": MarketType.STOCK}
+
+        # Only AAPL remains active
         autos = [_make_automation(symbol="AAPL")]
 
         with patch("src.server.database.automation.get_active_price_automations", AsyncMock(return_value=autos)):
@@ -270,13 +432,41 @@ class TestLoadAutomations:
 
         assert "AAPL" in svc._monitored_symbols
         assert "TSLA" not in svc._monitored_symbols
-        mock_handle.unsubscribe.assert_called_once()
+        mock_stock_handle.unsubscribe.assert_called_once_with(["TSLA"])
+
+    @pytest.mark.asyncio
+    async def test_removes_stale_index_subscriptions(self):
+        svc = PriceMonitorService()
+        mock_stock_handle = AsyncMock()
+        mock_index_handle = AsyncMock()
+        svc._stock_handle = mock_stock_handle
+        svc._index_handle = mock_index_handle
+        # Pre-populate with SPX and DJI as existing index subscriptions
+        svc._index_ws_symbols = {"I:SPX", "I:DJI"}
+        svc._symbol_automations = {
+            "SPX": [_make_automation(symbol="SPX", market="index")],
+            "DJI": [_make_automation(symbol="DJI", market="index")],
+        }
+        svc._symbol_markets = {"SPX": MarketType.INDEX, "DJI": MarketType.INDEX}
+
+        # Only SPX remains active
+        autos = [_make_automation(symbol="SPX", market="index")]
+
+        with patch("src.server.database.automation.get_active_price_automations", AsyncMock(return_value=autos)):
+            with patch.object(svc._evaluator, "refresh_references", new_callable=AsyncMock):
+                await svc._load_automations()
+
+        assert "SPX" in svc._monitored_symbols
+        assert "DJI" not in svc._monitored_symbols
+        mock_index_handle.unsubscribe.assert_called_once_with(["I:DJI"])
 
     @pytest.mark.asyncio
     async def test_skips_invalid_trigger_config(self):
         svc = PriceMonitorService()
-        mock_handle = AsyncMock()
-        svc._consumer_handle = mock_handle
+        mock_stock_handle = AsyncMock()
+        mock_index_handle = AsyncMock()
+        svc._stock_handle = mock_stock_handle
+        svc._index_handle = mock_index_handle
 
         auto = _make_automation(symbol="AAPL")
         auto["trigger_config"] = {"bad": "config"}
@@ -286,6 +476,79 @@ class TestLoadAutomations:
                 await svc._load_automations()
 
         assert len(svc._monitored_symbols) == 0
+
+
+class TestPollSnapshots:
+    """Test _poll_snapshots REST fallback path."""
+
+    def setup_method(self):
+        PriceMonitorService._instance = None
+        SharedWSConnectionManager._instances.clear()
+
+    @pytest.mark.asyncio
+    async def test_stock_snapshot_evaluates(self):
+        """Stock snapshots are looked up by bare symbol and trigger evaluation."""
+        svc = PriceMonitorService()
+        auto = _make_automation(symbol="AAPL", condition_type="price_below", value=150.0)
+        svc._symbol_automations = {"AAPL": [auto]}
+        svc._symbol_markets = {"AAPL": MarketType.STOCK}
+
+        mock_provider = AsyncMock()
+        mock_provider.get_snapshots = AsyncMock(return_value=[
+            {"symbol": "AAPL", "price": 149.0, "previous_close": 151.0, "open": 150.5},
+        ])
+
+        with (
+            patch("src.data_client.get_market_data_provider", AsyncMock(return_value=mock_provider)),
+            patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval,
+        ):
+            await svc._poll_snapshots(poll_stock=True, poll_index=False)
+
+        mock_provider.get_snapshots.assert_called_once_with(["AAPL"], asset_type="stocks")
+        mock_eval.assert_called_once_with(auto, 149.0)
+
+    @pytest.mark.asyncio
+    async def test_index_snapshot_normalizes_display_to_bare(self):
+        """Index snapshots normalize display symbols (GSPC→SPX) before lookup."""
+        svc = PriceMonitorService()
+        auto = _make_automation(symbol="SPX", market="index", condition_type="price_above", value=5000.0)
+        svc._symbol_automations = {"SPX": [auto]}
+        svc._symbol_markets = {"SPX": MarketType.INDEX}
+
+        mock_provider = AsyncMock()
+        mock_provider.get_snapshots = AsyncMock(return_value=[
+            {"symbol": "GSPC", "price": 5100.0, "previous_close": 5050.0, "open": 5060.0},
+        ])
+
+        with (
+            patch("src.data_client.get_market_data_provider", AsyncMock(return_value=mock_provider)),
+            patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval,
+        ):
+            await svc._poll_snapshots(poll_stock=False, poll_index=True)
+
+        mock_provider.get_snapshots.assert_called_once_with(["SPX"], asset_type="indices")
+        mock_eval.assert_called_once_with(auto, 5100.0)
+
+    @pytest.mark.asyncio
+    async def test_skips_zero_price(self):
+        """Snapshots with price <= 0 are skipped."""
+        svc = PriceMonitorService()
+        auto = _make_automation(symbol="AAPL")
+        svc._symbol_automations = {"AAPL": [auto]}
+        svc._symbol_markets = {"AAPL": MarketType.STOCK}
+
+        mock_provider = AsyncMock()
+        mock_provider.get_snapshots = AsyncMock(return_value=[
+            {"symbol": "AAPL", "price": 0, "previous_close": 151.0},
+        ])
+
+        with (
+            patch("src.data_client.get_market_data_provider", AsyncMock(return_value=mock_provider)),
+            patch.object(svc, "_evaluate_and_trigger", new_callable=AsyncMock) as mock_eval,
+        ):
+            await svc._poll_snapshots(poll_stock=True, poll_index=False)
+
+        mock_eval.assert_not_called()
 
 
 class TestSecondsUntilNextMarketOpen:

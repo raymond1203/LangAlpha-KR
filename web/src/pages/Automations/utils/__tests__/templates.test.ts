@@ -54,7 +54,7 @@ describe('applyTemplate', () => {
 });
 
 describe('formStateToPayload', () => {
-  it('builds trigger_config for price trigger', () => {
+  it('builds trigger_config for price trigger (stock, default)', () => {
     const form = {
       ...INITIAL_FORM,
       trigger_type: 'price',
@@ -72,6 +72,35 @@ describe('formStateToPayload', () => {
     expect(payload.price_symbol).toBeUndefined();
     expect(payload.cron_expression).toBeUndefined();
     expect(payload.next_run_at).toBeUndefined();
+  });
+
+  it('auto-detects market=index for index symbols', () => {
+    const form = {
+      ...INITIAL_FORM,
+      trigger_type: 'price',
+      price_symbol: 'SPX',
+      price_condition_type: 'price_above',
+      price_value: '5000',
+      price_retrigger_mode: 'one_shot',
+    };
+    const payload = formStateToPayload(form);
+    const tc = payload.trigger_config as any;
+    expect(tc.symbol).toBe('SPX');
+    expect(tc.market).toBe('index');
+  });
+
+  it('omits market field for stock symbols', () => {
+    const form = {
+      ...INITIAL_FORM,
+      trigger_type: 'price',
+      price_symbol: 'AAPL',
+      price_condition_type: 'price_above',
+      price_value: '250',
+      price_retrigger_mode: 'one_shot',
+    };
+    const payload = formStateToPayload(form);
+    const tc = payload.trigger_config as any;
+    expect(tc.market).toBeUndefined();
   });
 
   it('includes reference for pct_change condition', () => {
@@ -211,6 +240,24 @@ describe('automationToFormState', () => {
     expect(form.price_cooldown_minutes).toBe(480);
     expect(form.delivery_method).toBe('slack');
     expect(form.max_failures).toBe(5);
+  });
+
+  it('loads index automation symbol correctly', () => {
+    const automation: Automation = {
+      id: '999',
+      automation_id: '999',
+      name: 'Index Alert',
+      status: 'active',
+      trigger_type: 'price',
+      trigger_config: {
+        symbol: 'SPX',
+        market: 'index',
+        conditions: [{ type: 'price_above', value: 5000 }],
+        retrigger: { mode: 'one_shot' },
+      },
+    };
+    const form = automationToFormState(automation);
+    expect(form.price_symbol).toBe('SPX');
   });
 
   it('handles missing trigger_config gracefully', () => {

@@ -12,6 +12,7 @@ export interface PriceCondition {
 
 export interface PriceTriggerConfig {
   symbol: string;
+  market?: 'stock' | 'index';
   conditions: PriceCondition[];
   retrigger: {
     mode: 'one_shot' | 'recurring';

@@ -261,7 +261,7 @@ async def market_data_ws_status():
 
 @router.websocket("/ws/v1/market-data/aggregates/{market}")
 async def ws_market_data_proxy(
-    websocket: WebSocket, market: str, interval: str = "minute", tier: str = "realtime",
+    websocket: WebSocket, market: str, interval: str = "second", tier: str = "realtime",
 ):
     """Proxy frontend WS via SharedWSConnectionManager."""
 
@@ -282,7 +282,7 @@ async def ws_market_data_proxy(
     await websocket.accept()
     logger.info("WS proxy opened: user=%s market=%s interval=%s tier=%s", user_id, market, interval, tier)
 
-    shared_ws = SharedWSConnectionManager.get_instance()
+    shared_ws = SharedWSConnectionManager.get_instance(market=market, interval=interval, tier=tier)
     consumer_id = f"ws_proxy_{uuid4().hex[:12]}"
     cache_interval = _WS_INTERVAL_TO_CACHE.get(interval)
     connection_keys: set[str] = set()

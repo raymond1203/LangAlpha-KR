@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Automation } from '@/types/automation';
+import { isIndexSymbol } from '../components/AutomationInlineForm';
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -246,8 +247,10 @@ export function formStateToPayload(form: FormState): Record<string, unknown> {
       }
     }
 
+    const sym = form.price_symbol.toUpperCase().trim();
     payload.trigger_config = {
-      symbol: form.price_symbol.toUpperCase().trim(),
+      symbol: sym,
+      ...(isIndexSymbol(sym) ? { market: 'index' } : {}),
       conditions: [condition],
       retrigger,
     };

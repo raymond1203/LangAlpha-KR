@@ -1,9 +1,10 @@
 """
-PriceMonitorService — Monitors stock prices via SharedWSConnectionManager
+PriceMonitorService — Monitors prices via SharedWSConnectionManager
 and triggers price-based automations when conditions are met.
 
-Uses Redis SET NX locks for multi-instance deduplication.
-Falls back to REST snapshot polling when WS is disconnected.
+Supports stock and index markets. Uses Redis SET NX locks for
+multi-instance deduplication. Falls back to REST snapshot polling
+when WS is disconnected.
 """
 
 import asyncio
@@ -13,7 +14,9 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
+from src.data_client.ginlix_data.data_source import _INDEX_SYMBOL_MAP
 from src.server.models.automation import (
+    MarketType,
     PriceConditionType,
     PriceTriggerConfig,
     RetriggerMode,
@@ -31,6 +34,36 @@ _MIN_TRADING_DAY_TTL = 300  # 5 min floor for trading-day TTL
 _ET = ZoneInfo("America/New_York")
 _MARKET_OPEN_HOUR = 9
 _MARKET_OPEN_MINUTE = 30
+
+
+# ─── Symbol normalization ───────────────────────────────────────────
+
+# Display symbol → bare symbol (for REST snapshot response → automation lookup)
+# _normalize_snapshot maps e.g. I:SPX → GSPC, I:COMP → IXIC; we map those back to bare.
+_DISPLAY_TO_BARE: Dict[str, str] = {
+    display: wire.removeprefix("I:")
+    for display, wire in _INDEX_SYMBOL_MAP.items()
+}
+
+
+def _to_ws_symbol(symbol: str, market: MarketType) -> str:
+    """Bare symbol → ginlix-data wire format (for WS subscriptions)."""
+    if market == MarketType.INDEX:
+        bare = symbol.lstrip("^").upper()
+        return _INDEX_SYMBOL_MAP.get(bare, f"I:{bare}")
+    return symbol.upper()
+
+
+def _from_ws_symbol(ws_symbol: str) -> str:
+    """Wire format → bare symbol (for WS bar → automation lookup)."""
+    if ws_symbol.startswith("I:"):
+        return ws_symbol[2:]
+    return ws_symbol
+
+
+def _from_display_symbol(symbol: str) -> str:
+    """Display symbol → bare symbol (for REST snapshot → automation lookup)."""
+    return _DISPLAY_TO_BARE.get(symbol, symbol)
 
 
 def _now_utc() -> datetime:
@@ -102,29 +135,67 @@ class ConditionEvaluator:
                 return pct_change < -value
         return False
 
-    async def refresh_references(self, symbols: List[str]) -> None:
-        """Fetch reference prices (previous_close, day_open) via REST snapshots."""
+    async def refresh_references(
+        self,
+        symbols: List[str],
+        symbol_markets: Optional[Dict[str, MarketType]] = None,
+    ) -> None:
+        """Fetch reference prices (previous_close, day_open) via REST snapshots.
+
+        Splits symbols by market type for correct asset_type routing.
+        """
         if not symbols:
             return
         try:
             from src.data_client import get_market_data_provider
 
             provider = await get_market_data_provider()
-            snapshots = await provider.get_snapshots(symbols)
-            for snap in snapshots:
-                sym = snap.get("symbol", "").upper()
-                if sym:
-                    self.set_reference(
-                        sym,
-                        previous_close=snap.get("previous_close", 0),
-                        day_open=snap.get("open", 0),
-                    )
+
+            # Split by market
+            stock_syms = []
+            index_syms = []
+            if symbol_markets:
+                for s in symbols:
+                    if symbol_markets.get(s) == MarketType.INDEX:
+                        index_syms.append(s)
+                    else:
+                        stock_syms.append(s)
+            else:
+                stock_syms = list(symbols)
+
+            # Fetch stock snapshots
+            if stock_syms:
+                snaps = await provider.get_snapshots(stock_syms, asset_type="stocks")
+                for snap in snaps:
+                    sym = snap.get("symbol", "").upper()
+                    if sym:
+                        self.set_reference(
+                            sym,
+                            previous_close=snap.get("previous_close", 0),
+                            day_open=snap.get("open", 0),
+                        )
+
+            # Fetch index snapshots (response uses display symbols)
+            if index_syms:
+                snaps = await provider.get_snapshots(index_syms, asset_type="indices")
+                for snap in snaps:
+                    raw_sym = snap.get("symbol", "").upper()
+                    bare = _from_display_symbol(raw_sym)
+                    if bare:
+                        self.set_reference(
+                            bare,
+                            previous_close=snap.get("previous_close", 0),
+                            day_open=snap.get("open", 0),
+                        )
         except Exception:
             logger.warning("Failed to refresh reference prices", exc_info=True)
 
 
 class PriceMonitorService:
-    """Monitors stock prices and triggers price-based automations."""
+    """Monitors prices and triggers price-based automations.
+
+    Supports stock and index markets with separate WS connections.
+    """
 
     _instance: Optional["PriceMonitorService"] = None
 
@@ -135,13 +206,21 @@ class PriceMonitorService:
         return cls._instance
 
     def __init__(self):
-        self._shared_ws: Optional[SharedWSConnectionManager] = None
-        self._consumer_handle = None
+        # WS instances and consumer handles per market
+        self._stock_ws: Optional[SharedWSConnectionManager] = None
+        self._index_ws: Optional[SharedWSConnectionManager] = None
+        self._stock_handle = None
+        self._index_handle = None
+
         self._evaluator = ConditionEvaluator()
 
-        # symbol → [automation dicts]
+        # bare symbol → [automation dicts]  (keyed by user-entered symbol)
         self._symbol_automations: Dict[str, List[Dict[str, Any]]] = {}
-        self._monitored_symbols: set[str] = set()
+        # bare symbol → MarketType  (for routing REST calls)
+        self._symbol_markets: Dict[str, MarketType] = {}
+        # ws_symbol sets per market (for WS subscription diffing)
+        self._stock_ws_symbols: set[str] = set()
+        self._index_ws_symbols: set[str] = set()
 
         # In-memory dedup fallback when Redis is unavailable
         # automation_id → expiry timestamp (monotonic)
@@ -154,22 +233,33 @@ class PriceMonitorService:
         self._ref_refresh_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
 
+    @property
+    def _monitored_symbols(self) -> set[str]:
+        """All bare monitored symbols (for backward compat and logging)."""
+        return set(self._symbol_automations.keys())
+
     async def start(self) -> None:
         """Start the price monitor."""
-        self._shared_ws = SharedWSConnectionManager.get_instance()
+        self._stock_ws = SharedWSConnectionManager.get_instance("stock", "second", "realtime")
+        self._index_ws = SharedWSConnectionManager.get_instance("index", "second", "delayed")
         self._shutdown_event.clear()
 
         # Initial load of price automations
         await self._load_automations()
 
-        # Register as consumer
-        self._consumer_handle = self._shared_ws.register_consumer(
-            "price_monitor", self._on_message
+        # Register as consumers on both WS instances
+        self._stock_handle = self._stock_ws.register_consumer(
+            "price_monitor_stock", self._on_message
+        )
+        self._index_handle = self._index_ws.register_consumer(
+            "price_monitor_index", self._on_message
         )
 
-        # Subscribe to all monitored symbols
-        if self._monitored_symbols:
-            await self._consumer_handle.subscribe(list(self._monitored_symbols))
+        # Subscribe per market
+        if self._stock_ws_symbols:
+            await self._stock_handle.subscribe(list(self._stock_ws_symbols))
+        if self._index_ws_symbols:
+            await self._index_handle.subscribe(list(self._index_ws_symbols))
 
         # Start background loops
         self._refresh_task = asyncio.create_task(
@@ -183,8 +273,9 @@ class PriceMonitorService:
         )
 
         logger.info(
-            "[PriceMonitor] Started — monitoring %d symbols from %d automations",
+            "[PriceMonitor] Started — monitoring %d symbols (%d stock, %d index) from %d automations",
             len(self._monitored_symbols),
+            len(self._stock_ws_symbols), len(self._index_ws_symbols),
             sum(len(v) for v in self._symbol_automations.values()),
         )
 
@@ -201,9 +292,11 @@ class PriceMonitorService:
                 except asyncio.CancelledError:
                     pass
 
-        if self._consumer_handle:
-            await self._consumer_handle.close()
-            self._consumer_handle = None
+        for handle in (self._stock_handle, self._index_handle):
+            if handle:
+                await handle.close()
+        self._stock_handle = None
+        self._index_handle = None
 
         logger.info("[PriceMonitor] Stopped")
 
@@ -214,10 +307,11 @@ class PriceMonitorService:
         if not bar:
             return
 
-        symbol = bar["symbol"]
+        # Normalize wire symbol to bare (e.g. I:SPX → SPX)
+        bare_symbol = _from_ws_symbol(bar["symbol"])
         current_price = bar["close"]
 
-        automations = self._symbol_automations.get(symbol, [])
+        automations = self._symbol_automations.get(bare_symbol, [])
         for automation in automations:
             try:
                 await self._evaluate_and_trigger(automation, current_price)
@@ -380,7 +474,9 @@ class PriceMonitorService:
         automations = await auto_db.get_active_price_automations()
 
         new_symbol_map: Dict[str, List[Dict[str, Any]]] = {}
-        new_symbols: set[str] = set()
+        new_symbol_markets: Dict[str, MarketType] = {}
+        new_stock_ws: set[str] = set()
+        new_index_ws: set[str] = set()
 
         for auto in automations:
             trigger_config = auto.get("trigger_config", {})
@@ -393,30 +489,57 @@ class PriceMonitorService:
                 )
                 continue
 
-            symbol = config.symbol.upper()
-            new_symbols.add(symbol)
+            bare = config.symbol.upper()
+            market = config.market
+            ws_sym = _to_ws_symbol(bare, market)
+
+            new_symbol_markets[bare] = market
+            if market == MarketType.INDEX:
+                new_index_ws.add(ws_sym)
+            else:
+                new_stock_ws.add(ws_sym)
+
             auto["_parsed_config"] = config
-            new_symbol_map.setdefault(symbol, []).append(auto)
+            new_symbol_map.setdefault(bare, []).append(auto)
 
-        # Diff subscriptions
-        added = new_symbols - self._monitored_symbols
-        removed = self._monitored_symbols - new_symbols
+        # Diff stock subscriptions
+        stock_added = new_stock_ws - self._stock_ws_symbols
+        stock_removed = self._stock_ws_symbols - new_stock_ws
+        if self._stock_handle:
+            if stock_removed:
+                await self._stock_handle.unsubscribe(list(stock_removed))
+            if stock_added:
+                await self._stock_handle.subscribe(list(stock_added))
 
-        if self._consumer_handle:
-            if removed:
-                await self._consumer_handle.unsubscribe(list(removed))
-            if added:
-                await self._consumer_handle.subscribe(list(added))
-                # Fetch reference prices for new symbols
-                await self._evaluator.refresh_references(list(added))
+        # Diff index subscriptions
+        index_added = new_index_ws - self._index_ws_symbols
+        index_removed = self._index_ws_symbols - new_index_ws
+        if self._index_handle:
+            if index_removed:
+                await self._index_handle.unsubscribe(list(index_removed))
+            if index_added:
+                await self._index_handle.subscribe(list(index_added))
+
+        # Refresh reference prices for newly added bare symbols
+        old_bare = set(self._symbol_automations.keys())
+        new_bare = set(new_symbol_map.keys())
+        added_bare = new_bare - old_bare
+        if added_bare:
+            await self._evaluator.refresh_references(
+                list(added_bare), symbol_markets=new_symbol_markets
+            )
 
         self._symbol_automations = new_symbol_map
-        self._monitored_symbols = new_symbols
+        self._symbol_markets = new_symbol_markets
+        self._stock_ws_symbols = new_stock_ws
+        self._index_ws_symbols = new_index_ws
 
-        if added or removed:
+        total_added = len(stock_added) + len(index_added)
+        total_removed = len(stock_removed) + len(index_removed)
+        if total_added or total_removed:
             logger.info(
                 "[PriceMonitor] Subscriptions updated: +%d -%d (total %d symbols, %d automations)",
-                len(added), len(removed), len(new_symbols),
+                total_added, total_removed, len(new_bare),
                 sum(len(v) for v in new_symbol_map.values()),
             )
 
@@ -431,36 +554,68 @@ class PriceMonitorService:
             except asyncio.TimeoutError:
                 pass
 
-            # Only poll if WS is disconnected
-            if self._shared_ws and self._shared_ws.is_connected:
-                continue
-
             if not self._monitored_symbols:
                 continue
 
+            # Poll markets where WS is disconnected
+            stock_disconnected = self._stock_ws and not self._stock_ws.is_connected
+            index_disconnected = self._index_ws and not self._index_ws.is_connected
+
+            if not stock_disconnected and not index_disconnected:
+                continue
+
             try:
-                await self._poll_snapshots()
+                await self._poll_snapshots(
+                    poll_stock=stock_disconnected,
+                    poll_index=index_disconnected,
+                )
             except Exception:
                 logger.error("[PriceMonitor] REST poll failed", exc_info=True)
 
-    async def _poll_snapshots(self) -> None:
+    async def _poll_snapshots(
+        self, poll_stock: bool = True, poll_index: bool = True
+    ) -> None:
         """Fetch current prices via REST and evaluate conditions."""
         from src.data_client import get_market_data_provider
 
         provider = await get_market_data_provider()
-        symbols = list(self._monitored_symbols)
 
-        try:
-            snapshots = await provider.get_snapshots(symbols)
-        except Exception:
-            logger.debug("[PriceMonitor] Batch snapshot fetch failed")
-            return
+        # Split bare symbols by market
+        stock_syms = []
+        index_syms = []
+        for bare, market in self._symbol_markets.items():
+            if market == MarketType.INDEX and poll_index:
+                index_syms.append(bare)
+            elif market == MarketType.STOCK and poll_stock:
+                stock_syms.append(bare)
 
-        for snapshot in snapshots:
-            symbol = snapshot.get("symbol", "").upper()
-            if not symbol:
-                continue
+        all_snapshots: list[tuple[str, dict]] = []  # (bare_symbol, snapshot)
 
+        # Fetch stock snapshots
+        if stock_syms:
+            try:
+                snaps = await provider.get_snapshots(stock_syms, asset_type="stocks")
+                for snap in snaps:
+                    sym = snap.get("symbol", "").upper()
+                    if sym:
+                        all_snapshots.append((sym, snap))
+            except Exception:
+                logger.debug("[PriceMonitor] Stock snapshot fetch failed")
+
+        # Fetch index snapshots (normalize display → bare)
+        if index_syms:
+            try:
+                snaps = await provider.get_snapshots(index_syms, asset_type="indices")
+                for snap in snaps:
+                    raw_sym = snap.get("symbol", "").upper()
+                    bare = _from_display_symbol(raw_sym)
+                    if bare:
+                        all_snapshots.append((bare, snap))
+            except Exception:
+                logger.debug("[PriceMonitor] Index snapshot fetch failed")
+
+        # Evaluate
+        for bare_symbol, snapshot in all_snapshots:
             current_price = snapshot.get("price", 0)
             if current_price <= 0:
                 continue
@@ -468,13 +623,12 @@ class PriceMonitorService:
             # Update reference prices
             if snapshot.get("previous_close"):
                 self._evaluator.set_reference(
-                    symbol,
+                    bare_symbol,
                     previous_close=snapshot["previous_close"],
                     day_open=snapshot.get("open", 0),
                 )
 
-            # Evaluate automations for this symbol
-            for automation in self._symbol_automations.get(symbol, []):
+            for automation in self._symbol_automations.get(bare_symbol, []):
                 try:
                     await self._evaluate_and_trigger(automation, current_price)
                 except Exception:
@@ -498,7 +652,8 @@ class PriceMonitorService:
             if self._monitored_symbols:
                 try:
                     await self._evaluator.refresh_references(
-                        list(self._monitored_symbols)
+                        list(self._monitored_symbols),
+                        symbol_markets=self._symbol_markets,
                     )
                 except Exception:
                     logger.debug("[PriceMonitor] Reference refresh failed", exc_info=True)

@@ -25,6 +25,12 @@ _INTERNAL_SERVICE_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "")
 _INITIAL_BACKOFF = 1.0  # seconds
 _MAX_BACKOFF = 30.0
 
+# Default WS feed configurations: (market, interval, tier)
+DEFAULT_WS_FEEDS: list[tuple[str, str, str]] = [
+    ("stock", "second", "realtime"),
+    ("index", "second", "delayed"),
+]
+
 # Type alias for consumer callbacks
 OnMessage = Callable[[str, Optional[dict]], Coroutine[Any, Any, None]]
 """async def callback(raw_msg: str, parsed_bar: dict | None) -> None"""
@@ -122,17 +128,31 @@ class WSConsumerHandle:
 
 
 class SharedWSConnectionManager:
-    """Manages a single upstream WS connection to ginlix-data with ref-counted subscriptions."""
+    """Manages an upstream WS connection to ginlix-data with ref-counted subscriptions.
 
-    _instance: Optional["SharedWSConnectionManager"] = None
+    Instances are keyed by (market, interval, tier) — one upstream connection per combo.
+    """
+
+    _instances: dict[tuple[str, str, str], "SharedWSConnectionManager"] = {}
 
     @classmethod
-    def get_instance(cls) -> "SharedWSConnectionManager":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+    def get_instance(
+        cls,
+        market: str = "stock",
+        interval: str = "second",
+        tier: str = "realtime",
+    ) -> "SharedWSConnectionManager":
+        key = (market, interval, tier)
+        if key not in cls._instances:
+            cls._instances[key] = cls(market=market, interval=interval, tier=tier)
+        return cls._instances[key]
 
-    def __init__(self):
+    @classmethod
+    def all_instances(cls) -> list["SharedWSConnectionManager"]:
+        """Return all created instances (for lifecycle management)."""
+        return list(cls._instances.values())
+
+    def __init__(self, *, market: str = "stock", interval: str = "second", tier: str = "realtime"):
         # Consumer tracking
         self._consumers: dict[str, OnMessage] = {}  # consumer_id → callback
         self._consumer_symbols: dict[str, set[str]] = {}  # consumer_id → {symbols}
@@ -148,9 +168,9 @@ class SharedWSConnectionManager:
         self._connection_task: Optional[asyncio.Task] = None
 
         # Configuration
-        self._market = "stock"
-        self._interval = "second"
-        self._tier = "realtime"
+        self._market = market
+        self._interval = interval
+        self._tier = tier
 
     @property
     def is_connected(self) -> bool:
@@ -163,10 +183,10 @@ class SharedWSConnectionManager:
         if not GINLIX_DATA_WS_URL:
             logger.warning("[SharedWS] GINLIX_DATA_WS_URL not set — WS disabled")
             return
-        logger.info("[SharedWS] Starting SharedWSConnectionManager")
+        logger.info("[SharedWS] Starting SharedWSConnectionManager (%s/%s/%s)", self._market, self._interval, self._tier)
         self._shutdown_event.clear()
         self._connection_task = asyncio.create_task(
-            self._connection_loop(), name="shared_ws_connection"
+            self._connection_loop(), name=f"shared_ws_{self._market}_{self._interval}"
         )
 
     async def stop(self) -> None:

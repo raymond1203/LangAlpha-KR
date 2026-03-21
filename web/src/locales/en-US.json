@@ -414,6 +414,8 @@
     "deliverToSlack": "Slack",
     "deliverToDiscord": "Discord",
     "priceAlert": "Price Alert",
+    "marketStock": "Stock",
+    "marketIndex": "Index",
     "priceSymbol": "Symbol",
     "priceCondition": "Condition",
     "priceValue": "Value",

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.server.models.automation import (
+    MarketType,
     PriceCondition,
     PriceConditionType,
     PriceTriggerConfig,
@@ -165,3 +166,50 @@ class TestPriceTriggerConfig:
         )
         assert cfg.retrigger.mode == RetriggerMode.RECURRING
         assert cfg.retrigger.cooldown_seconds == 14400
+
+    # -- Symbol validation (validate_bare_symbol) --
+
+    def test_rejects_i_prefix(self):
+        with pytest.raises(ValidationError, match="bare symbol"):
+            PriceTriggerConfig(symbol="I:SPX", conditions=[self._condition()])
+
+    def test_rejects_caret_prefix(self):
+        with pytest.raises(ValidationError, match="bare symbol"):
+            PriceTriggerConfig(symbol="^SPX", conditions=[self._condition()])
+
+    def test_normalizes_gspc_to_spx(self):
+        cfg = PriceTriggerConfig(symbol="GSPC", conditions=[self._condition()])
+        assert cfg.symbol == "SPX"
+
+    def test_normalizes_ixic_to_comp(self):
+        cfg = PriceTriggerConfig(symbol="IXIC", conditions=[self._condition()])
+        assert cfg.symbol == "COMP"
+
+    def test_uppercases_symbol(self):
+        cfg = PriceTriggerConfig(symbol="aapl", conditions=[self._condition()])
+        assert cfg.symbol == "AAPL"
+
+    # -- Market auto-detection (infer_market_from_symbol) --
+
+    def test_auto_detects_index_market_for_spx(self):
+        cfg = PriceTriggerConfig(symbol="SPX", conditions=[self._condition()])
+        assert cfg.market == MarketType.INDEX
+
+    def test_auto_detects_index_market_from_gspc_alias(self):
+        cfg = PriceTriggerConfig(symbol="GSPC", conditions=[self._condition()])
+        assert cfg.symbol == "SPX"
+        assert cfg.market == MarketType.INDEX
+
+    def test_auto_detects_index_for_all_known(self):
+        for sym in ("SPX", "DJI", "COMP", "NDX", "RUT", "VIX"):
+            cfg = PriceTriggerConfig(symbol=sym, conditions=[self._condition()])
+            assert cfg.market == MarketType.INDEX, f"{sym} should auto-detect as index"
+
+    def test_stock_market_default_for_unknown(self):
+        cfg = PriceTriggerConfig(symbol="AAPL", conditions=[self._condition()])
+        assert cfg.market == MarketType.STOCK
+
+    def test_explicit_market_overridden_by_auto_detection(self):
+        """Even if market=stock is passed, known index symbols get corrected."""
+        cfg = PriceTriggerConfig(symbol="SPX", market="stock", conditions=[self._condition()])
+        assert cfg.market == MarketType.INDEX

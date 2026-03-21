@@ -136,7 +136,7 @@ class IntradayCacheKeyBuilder:
         to_date: Optional[str] = None,
         source: Optional[str] = None,
     ) -> str:
-        normalized = symbol.lstrip("^").upper()
+        normalized = symbol.removeprefix("I:").lstrip("^").upper()
         src = f"{source}:" if source else ""
         if cls._is_live(to_date):
             return f"{cls.PREFIX}:{src}index:{normalized}:{interval}"
@@ -372,7 +372,7 @@ class IntradayCacheService:
         to_date: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> IntradayFetchResult:
-        normalized = symbol.lstrip("^").upper()
+        normalized = symbol.removeprefix("I:").lstrip("^").upper()
 
         base_ttl = self._ttl_for(interval)
         cache = get_cache_client()

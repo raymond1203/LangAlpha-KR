@@ -238,8 +238,9 @@ async def create_automation(
     trigger_config: Annotated[
         dict | None,
         "Price trigger config (required when trigger_type='price'). "
-        "Schema: {symbol: 'AAPL', conditions: [{type: 'price_below', value: 150}], "
+        "Schema: {symbol: 'AAPL', market: 'stock', conditions: [{type: 'price_below', value: 150}], "
         "retrigger: {mode: 'one_shot'}}. "
+        "market: 'stock' (default) or 'index'. For index, use bare symbol (e.g. 'SPX', 'DJI', 'VIX'). "
         "Condition types: price_above, price_below, pct_change_above, pct_change_below. "
         "Retrigger modes: one_shot (fire once, default), "
         "recurring (re-arm after cooldown; omit cooldown_seconds for once-per-trading-day default, "

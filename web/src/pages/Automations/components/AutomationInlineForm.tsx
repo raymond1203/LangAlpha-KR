@@ -57,15 +57,33 @@ function RadioOption({ name, value, checked, onChange, label }: RadioOptionProps
 
 // ── TickerAutocomplete ─────────────────────────────────────
 
+const INDEX_SYMBOLS: Array<{ symbol: string; name: string }> = [
+  { symbol: 'SPX', name: 'S&P 500' },
+  { symbol: 'DJI', name: 'Dow Jones Industrial Average' },
+  { symbol: 'COMP', name: 'Nasdaq Composite' },
+  { symbol: 'NDX', name: 'Nasdaq 100' },
+  { symbol: 'RUT', name: 'Russell 2000' },
+  { symbol: 'VIX', name: 'CBOE Volatility Index' },
+];
+
+const INDEX_SYMBOL_SET = new Set(INDEX_SYMBOLS.map((i) => i.symbol));
+
+export function isIndexSymbol(symbol: string): boolean {
+  return INDEX_SYMBOL_SET.has(symbol.toUpperCase());
+}
+
+interface SearchResult { symbol: string; name?: string; exchangeShortName?: string; isIndex?: boolean }
+
 interface TickerAutocompleteProps {
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
 }
 
-function TickerAutocomplete({ value, onChange }: TickerAutocompleteProps) {
+function TickerAutocomplete({ value, onChange, placeholder = 'AAPL, SPX...' }: TickerAutocompleteProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState(value);
-  const [results, setResults] = useState<Array<{ symbol: string; name?: string; exchangeShortName?: string }>>([]);
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -74,16 +92,32 @@ function TickerAutocomplete({ value, onChange }: TickerAutocompleteProps) {
     setQuery(value);
   }, [value]);
 
-  // Debounced search
+  // Debounced search — merge index matches + stock API results
   useEffect(() => {
     if (!query || query.length < 1) {
       setResults([]);
       return;
     }
+    const q = query.toUpperCase();
+
+    // Instant: filter static index list
+    const indexMatches: SearchResult[] = INDEX_SYMBOLS
+      .filter((idx) => idx.symbol.includes(q) || idx.name.toUpperCase().includes(q))
+      .map((idx) => ({ symbol: idx.symbol, name: idx.name, exchangeShortName: 'INDEX', isIndex: true }));
+
+    // Show index matches immediately
+    if (indexMatches.length > 0) {
+      setResults(indexMatches);
+      setShowDropdown(true);
+    }
+
+    // Debounced: fetch stock results and merge
     const timer = setTimeout(async () => {
       const data = await searchStocks(query, 20);
-      setResults(data.results as Array<{ symbol: string; name?: string; exchangeShortName?: string }>);
-      if (data.results.length > 0) setShowDropdown(true);
+      const stockResults: SearchResult[] = (data.results as SearchResult[]).map((r) => ({ ...r, isIndex: false }));
+      // Deduplicate: index symbols already shown won't appear in stock results (different symbols)
+      setResults([...indexMatches, ...stockResults]);
+      if (indexMatches.length > 0 || stockResults.length > 0) setShowDropdown(true);
     }, 300);
     return () => clearTimeout(timer);
   }, [query]);
@@ -110,7 +144,7 @@ function TickerAutocomplete({ value, onChange }: TickerAutocompleteProps) {
           if (val.length >= 1) setShowDropdown(true);
         }}
         onFocus={() => { if (results.length > 0) setShowDropdown(true); }}
-        placeholder="AAPL"
+        placeholder={placeholder}
         required
         className="placeholder:text-gray-500 border font-mono uppercase"
         style={inputStyle}
@@ -123,24 +157,24 @@ function TickerAutocomplete({ value, onChange }: TickerAutocompleteProps) {
             borderColor: 'var(--color-border-default)',
           }}
         >
-          {results.map((stock) => (
+          {results.map((item) => (
             <button
-              key={stock.symbol}
+              key={item.symbol}
               type="button"
               className="w-full text-left px-3 py-2 text-sm hover:bg-foreground/5 flex items-center gap-2"
               onClick={() => {
-                setQuery(stock.symbol);
-                onChange(stock.symbol);
+                setQuery(item.symbol);
+                onChange(item.symbol);
                 setShowDropdown(false);
               }}
             >
               <span className="font-mono font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                {stock.symbol}
+                {item.symbol}
               </span>
-              {stock.name && (
+              {item.name && (
                 <span className="truncate" style={{ color: 'var(--color-text-tertiary)' }}>
-                  {stock.name}
-                  {stock.exchangeShortName ? ` (${stock.exchangeShortName})` : ''}
+                  {item.name}
+                  {item.exchangeShortName ? ` (${item.exchangeShortName})` : ''}
                 </span>
               )}
             </button>
@@ -225,7 +259,7 @@ export default function AutomationInlineForm({
         {/* Trigger-specific basic fields */}
         {form.trigger_type === 'price' && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {/* Symbol with autocomplete */}
+            {/* Symbol with autocomplete (stocks + indices) */}
             <div className="flex flex-col gap-1.5">
               <label className={labelClass}>{t('automation.priceSymbol')}</label>
               <TickerAutocomplete
