@@ -49,6 +49,23 @@ async def get_workspace_secrets(workspace_id: str) -> list[dict[str, Any]]:
             ]
 
 
+async def reveal_secret(workspace_id: str, name: str) -> str | None:
+    """Return the plaintext value of a single secret, or None if not found."""
+    enc_key = _get_encryption_key()
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                """
+                SELECT pgp_sym_decrypt(value, %s) AS plaintext
+                FROM workspace_vault_secrets
+                WHERE workspace_id = %s AND name = %s
+                """,
+                (enc_key, workspace_id, name),
+            )
+            row = await cur.fetchone()
+            return row["plaintext"] if row else None
+
+
 async def get_workspace_secrets_decrypted(workspace_id: str) -> dict[str, str]:
     """Return {name: plaintext_value} for sandbox injection."""
     enc_key = _get_encryption_key()

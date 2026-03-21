@@ -7,6 +7,7 @@ Endpoints:
 - GET    /api/v1/workspaces/{workspace_id}/vault/secrets
 - POST   /api/v1/workspaces/{workspace_id}/vault/secrets
 - PUT    /api/v1/workspaces/{workspace_id}/vault/secrets/{name}
+- GET    /api/v1/workspaces/{workspace_id}/vault/secrets/{name}/reveal
 - DELETE /api/v1/workspaces/{workspace_id}/vault/secrets/{name}
 """
 
@@ -22,6 +23,7 @@ from src.server.database.vault_secrets import (
     create_secret as create_secret_db,
     delete_secret,
     get_workspace_secrets,
+    reveal_secret as reveal_secret_db,
     update_secret,
 )
 from src.server.database.workspace import get_workspace as db_get_workspace
@@ -122,6 +124,20 @@ async def update_secret_endpoint(
 
     await _push_to_sandbox(workspace_id)
     return {"name": name}
+
+
+@router.get("/{workspace_id}/vault/secrets/{name}/reveal")
+@handle_api_exceptions("reveal vault secret", logger)
+async def reveal_secret_endpoint(
+    workspace_id: str, name: str, user_id: CurrentUserId,
+):
+    workspace = await db_get_workspace(workspace_id)
+    require_workspace_owner(workspace, user_id=user_id)
+
+    value = await reveal_secret_db(workspace_id, name)
+    if value is None:
+        raise HTTPException(status_code=404, detail="Secret not found")
+    return {"value": value}
 
 
 @router.delete("/{workspace_id}/vault/secrets/{name}")

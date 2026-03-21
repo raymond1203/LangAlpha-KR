@@ -3,9 +3,9 @@ import {
   X, Cpu, MemoryStick, HardDrive, MonitorCog, Play, Square,
   Package, Search, RefreshCw, ChevronDown, ChevronRight,
   Server, Loader2, BookOpen, Archive, KeyRound,
-  Plus, Trash2, Pencil,
+  Plus, Trash2, Pencil, Eye, EyeOff,
 } from 'lucide-react';
-import { getSandboxStats, installSandboxPackages, refreshWorkspace, getVaultSecrets, createVaultSecret, updateVaultSecret, deleteVaultSecret } from '../utils/api';
+import { getSandboxStats, installSandboxPackages, refreshWorkspace, getVaultSecrets, createVaultSecret, updateVaultSecret, deleteVaultSecret, revealVaultSecret } from '../utils/api';
 import { api } from '@/api/client';
 
 interface SandboxSettingsPanelProps {
@@ -70,11 +70,9 @@ interface RefreshResult {
 }
 
 /**
- * SandboxSettingsPanel -- full-screen overlay showing sandbox details.
- *
- * Tabs: Overview | Storage | Packages | Tools & Skills
+ * SandboxSettingsContent -- sandbox settings tabs and content, usable inline or in a modal.
  */
-export default function SandboxSettingsPanel({ onClose, workspaceId }: SandboxSettingsPanelProps) {
+export function SandboxSettingsContent({ workspaceId }: { workspaceId: string }) {
   const [activeTab, setActiveTab] = useState('overview');
   const [stats, setStats] = useState<SandboxStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -183,14 +181,104 @@ export default function SandboxSettingsPanel({ onClose, workspaceId }: SandboxSe
 
   const tabs = [
     { key: 'overview', label: 'Overview' },
+    { key: 'vault', label: 'Vault' },
     { key: 'storage', label: 'Storage' },
     { key: 'packages', label: 'Packages' },
     { key: 'tools', label: 'Tools & Skills' },
-    { key: 'secrets', label: 'Secrets' },
   ];
 
   const isRunning = stats?.state === 'started';
 
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Tabs */}
+      <div className="flex flex-wrap gap-1 mb-4 border-b" style={{ borderColor: 'var(--color-border-muted)' }}>
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setActiveTab(t.key)}
+            className="px-3 py-2 text-sm font-medium"
+            style={{
+              color: activeTab === t.key ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+              borderBottom: activeTab === t.key ? '2px solid var(--color-accent-primary)' : '2px solid transparent',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      {loading ? (
+        <LoadingSkeleton />
+      ) : error ? (
+        <ErrorState message={error} onRetry={loadStats} />
+      ) : (
+        <>
+          {activeTab === 'overview' && (
+            <OverviewTab
+              stats={stats!}
+              isRunning={isRunning!}
+              actionLoading={actionLoading}
+              onStartStop={handleStartStop}
+            />
+          )}
+          {activeTab === 'vault' && (
+            <SecretsTab workspaceId={workspaceId} />
+          )}
+          {activeTab === 'storage' && (
+            isRunning ? (
+              <StorageTab
+                stats={stats!}
+                showDirBreakdown={showDirBreakdown}
+                onToggleBreakdown={() => setShowDirBreakdown(!showDirBreakdown)}
+              />
+            ) : (
+              <OfflineTabPlaceholder tabName="storage" />
+            )
+          )}
+          {activeTab === 'packages' && (
+            isRunning ? (
+              <PackagesTab
+                filteredPackages={filteredPackages}
+                defaultPkgSet={defaultPkgSet}
+                pkgSearch={pkgSearch}
+                onSearchChange={setPkgSearch}
+                installInput={installInput}
+                onInstallInputChange={setInstallInput}
+                installing={installing}
+                installResult={installResult}
+                onInstall={handleInstall}
+              />
+            ) : (
+              <OfflineTabPlaceholder tabName="packages" />
+            )
+          )}
+          {activeTab === 'tools' && (
+            isRunning ? (
+              <ToolsTab
+                stats={stats!}
+                refreshing={refreshing}
+                refreshResult={refreshResult}
+                onRefresh={handleRefresh}
+              />
+            ) : (
+              <OfflineTabPlaceholder tabName="tools & skills" />
+            )
+          )}
+        </>
+      )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * SandboxSettingsPanel -- full-screen overlay showing sandbox details.
+ */
+export default function SandboxSettingsPanel({ onClose, workspaceId }: SandboxSettingsPanelProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
@@ -223,86 +311,7 @@ export default function SandboxSettingsPanel({ onClose, workspaceId }: SandboxSe
           Sandbox Settings
         </h2>
 
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6 border-b" style={{ borderColor: 'var(--color-border-muted)' }}>
-          {tabs.map(t => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setActiveTab(t.key)}
-              className="px-4 py-2 text-sm font-medium"
-              style={{
-                color: activeTab === t.key ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
-                borderBottom: activeTab === t.key ? '2px solid var(--color-accent-primary)' : '2px solid transparent',
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Content */}
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        {loading ? (
-          <LoadingSkeleton />
-        ) : error ? (
-          <ErrorState message={error} onRetry={loadStats} />
-        ) : (
-          <>
-            {activeTab === 'overview' && (
-              <OverviewTab
-                stats={stats!}
-                isRunning={isRunning!}
-                actionLoading={actionLoading}
-                onStartStop={handleStartStop}
-              />
-            )}
-            {activeTab === 'storage' && (
-              isRunning ? (
-                <StorageTab
-                  stats={stats!}
-                  showDirBreakdown={showDirBreakdown}
-                  onToggleBreakdown={() => setShowDirBreakdown(!showDirBreakdown)}
-                />
-              ) : (
-                <OfflineTabPlaceholder tabName="storage" />
-              )
-            )}
-            {activeTab === 'packages' && (
-              isRunning ? (
-                <PackagesTab
-                  filteredPackages={filteredPackages}
-                  defaultPkgSet={defaultPkgSet}
-                  pkgSearch={pkgSearch}
-                  onSearchChange={setPkgSearch}
-                  installInput={installInput}
-                  onInstallInputChange={setInstallInput}
-                  installing={installing}
-                  installResult={installResult}
-                  onInstall={handleInstall}
-                />
-              ) : (
-                <OfflineTabPlaceholder tabName="packages" />
-              )
-            )}
-            {activeTab === 'tools' && (
-              isRunning ? (
-                <ToolsTab
-                  stats={stats!}
-                  refreshing={refreshing}
-                  refreshResult={refreshResult}
-                  onRefresh={handleRefresh}
-                />
-              ) : (
-                <OfflineTabPlaceholder tabName="tools & skills" />
-              )
-            )}
-            {activeTab === 'secrets' && (
-              <SecretsTab workspaceId={workspaceId} />
-            )}
-          </>
-        )}
-        </div>
+        <SandboxSettingsContent workspaceId={workspaceId} />
       </div>
     </div>
   );
@@ -843,6 +852,12 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
   // Delete confirmation
   const [deletingName, setDeletingName] = useState<string | null>(null);
 
+  // Visibility toggles
+  const [showNewValue, setShowNewValue] = useState(false);
+  const [showEditValue, setShowEditValue] = useState(false);
+  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({});
+  const [revealingName, setRevealingName] = useState<string | null>(null);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -875,6 +890,7 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
       setNewName('');
       setNewValue('');
       setNewDesc('');
+      setShowNewValue(false);
       setShowAdd(false);
       await load();
     } catch (err: any) {
@@ -895,6 +911,12 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
       setEditingName(null);
       setEditValue('');
       setEditDesc('');
+      setShowEditValue(false);
+      setRevealedSecrets(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.detail || err.message || 'Failed to update secret');
@@ -919,6 +941,26 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
     }
   }
 
+  async function handleRevealToggle(name: string) {
+    if (revealedSecrets[name] !== undefined) {
+      setRevealedSecrets(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      return;
+    }
+    setRevealingName(name);
+    try {
+      const value = await revealVaultSecret(workspaceId, name);
+      setRevealedSecrets(prev => ({ ...prev, [name]: value }));
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || err.message || 'Failed to reveal secret');
+    } finally {
+      setRevealingName(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
@@ -936,7 +978,7 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
         <div className="flex items-center gap-2">
           <KeyRound className="h-4 w-4" style={{ color: 'var(--color-accent-primary)' }} />
           <span className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
-            Vault Secrets
+            Vault
           </span>
           <span className="text-xs px-1.5 py-0.5 rounded" style={{ color: 'var(--color-text-tertiary)', backgroundColor: 'var(--color-bg-card)' }}>
             {secrets.length} / {MAX_SECRETS}
@@ -978,15 +1020,26 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
             style={{ color: 'var(--color-text-primary)', border: '1px solid var(--color-border-muted)' }}
             maxLength={64}
           />
-          <input
-            type="password"
-            value={newValue}
-            onChange={e => setNewValue(e.target.value)}
-            placeholder="Secret value"
-            className="w-full px-3 py-2 text-sm rounded-md bg-transparent outline-none"
-            style={{ color: 'var(--color-text-primary)', border: '1px solid var(--color-border-muted)' }}
-            maxLength={4096}
-          />
+          <div className="relative">
+            <input
+              type={showNewValue ? 'text' : 'password'}
+              value={newValue}
+              onChange={e => setNewValue(e.target.value)}
+              placeholder="Secret value"
+              className="w-full px-3 py-2 pr-9 text-sm rounded-md bg-transparent outline-none"
+              style={{ color: 'var(--color-text-primary)', border: '1px solid var(--color-border-muted)' }}
+              maxLength={4096}
+            />
+            <button
+              type="button"
+              onClick={() => setShowNewValue(!showNewValue)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded transition-colors hover:bg-foreground/10"
+              style={{ color: 'var(--color-text-tertiary)' }}
+              tabIndex={-1}
+            >
+              {showNewValue ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
+          </div>
           <input
             type="text"
             value={newDesc}
@@ -998,7 +1051,7 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
           />
           <div className="flex justify-end gap-2 mt-1">
             <button
-              onClick={() => { setShowAdd(false); setNewName(''); setNewValue(''); setNewDesc(''); }}
+              onClick={() => { setShowAdd(false); setNewName(''); setNewValue(''); setNewDesc(''); setShowNewValue(false); }}
               className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10"
               style={{ color: 'var(--color-text-tertiary)' }}
             >
@@ -1035,15 +1088,26 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
                   <div className="text-sm font-mono font-medium" style={{ color: 'var(--color-text-primary)' }}>
                     {secret.name}
                   </div>
-                  <input
-                    type="password"
-                    value={editValue}
-                    onChange={e => setEditValue(e.target.value)}
-                    placeholder="New value (leave empty to keep current)"
-                    className="w-full px-3 py-2 text-sm rounded-md bg-transparent outline-none"
-                    style={{ color: 'var(--color-text-primary)', border: '1px solid var(--color-border-muted)' }}
-                    maxLength={4096}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showEditValue ? 'text' : 'password'}
+                      value={editValue}
+                      onChange={e => setEditValue(e.target.value)}
+                      placeholder="New value (leave empty to keep current)"
+                      className="w-full px-3 py-2 pr-9 text-sm rounded-md bg-transparent outline-none"
+                      style={{ color: 'var(--color-text-primary)', border: '1px solid var(--color-border-muted)' }}
+                      maxLength={4096}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowEditValue(!showEditValue)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded transition-colors hover:bg-foreground/10"
+                      style={{ color: 'var(--color-text-tertiary)' }}
+                      tabIndex={-1}
+                    >
+                      {showEditValue ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                   <input
                     type="text"
                     value={editDesc}
@@ -1055,7 +1119,7 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
                   />
                   <div className="flex justify-end gap-2 mt-1">
                     <button
-                      onClick={() => { setEditingName(null); setEditValue(''); setEditDesc(''); }}
+                      onClick={() => { setEditingName(null); setEditValue(''); setEditDesc(''); setShowEditValue(false); }}
                       className="px-3 py-1.5 text-xs rounded-md transition-colors hover:bg-foreground/10"
                       style={{ color: 'var(--color-text-tertiary)' }}
                     >
@@ -1084,7 +1148,7 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
                         {secret.name}
                       </span>
                       <span className="text-xs font-mono" style={{ color: 'var(--color-text-tertiary)' }}>
-                        {secret.masked_value}
+                        {revealedSecrets[secret.name] !== undefined ? revealedSecrets[secret.name] : secret.masked_value}
                       </span>
                     </div>
                     {secret.description && (
@@ -1094,6 +1158,21 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
                     )}
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                    <button
+                      onClick={() => handleRevealToggle(secret.name)}
+                      disabled={revealingName === secret.name}
+                      className="p-1.5 rounded transition-colors hover:bg-foreground/10 disabled:opacity-50"
+                      style={{ color: 'var(--color-text-tertiary)' }}
+                      title={revealedSecrets[secret.name] !== undefined ? 'Hide value' : 'Reveal value'}
+                    >
+                      {revealingName === secret.name ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : revealedSecrets[secret.name] !== undefined ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                    </button>
                     <button
                       onClick={() => {
                         setEditingName(secret.name);
@@ -1143,12 +1222,29 @@ function SecretsTab({ workspaceId }: { workspaceId: string }) {
         </div>
       )}
 
-      {/* Usage hint */}
+      {/* Usage & Security info */}
       <div
-        className="text-xs p-3 rounded-lg mt-1"
+        className="flex flex-col gap-2.5 text-xs p-3 rounded-lg mt-1"
         style={{ backgroundColor: 'var(--color-bg-card)', color: 'var(--color-text-tertiary)' }}
       >
-        Access in code: <code className="font-mono" style={{ color: 'var(--color-text-secondary)' }}>from vault import get; key = get("SECRET_NAME")</code>
+        <div>
+          <span className="font-medium" style={{ color: 'var(--color-text-secondary)' }}>Usage</span>
+          <div className="mt-1">
+            Access in code: <code className="font-mono" style={{ color: 'var(--color-text-secondary)' }}>{'from vault import get; key = get("SECRET_NAME")'}</code>
+          </div>
+        </div>
+        <div
+          className="pt-2 flex flex-col gap-1.5"
+          style={{ borderTop: '1px solid var(--color-border-muted)' }}
+        >
+          <span className="font-medium" style={{ color: 'var(--color-text-secondary)' }}>Security</span>
+          <ul className="flex flex-col gap-1 pl-3" style={{ listStyleType: 'disc' }}>
+            <li>Secrets are encrypted at rest with AES (pgcrypto) and never stored in plaintext on our servers.</li>
+            <li>The AI agent cannot read secret values directly &mdash; it can only call <code className="font-mono" style={{ color: 'var(--color-text-secondary)' }}>vault.get()</code> inside sandboxed code.</li>
+            <li>All agent output is scanned by leak detection. Any secret value found in tool results is automatically redacted before reaching the model.</li>
+            <li>Direct file access to the internal secret store is blocked by code validation &mdash; only the <code className="font-mono" style={{ color: 'var(--color-text-secondary)' }}>vault</code> API is allowed.</li>
+          </ul>
+        </div>
       </div>
     </div>
   );

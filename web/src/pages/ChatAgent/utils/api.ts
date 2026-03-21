@@ -693,6 +693,11 @@ export async function updateVaultSecret(workspaceId: string, name: string, body:
   return data;
 }
 
+export async function revealVaultSecret(workspaceId: string, name: string) {
+  const { data } = await api.get(`/api/v1/workspaces/${workspaceId}/vault/secrets/${name}/reveal`);
+  return data.value as string;
+}
+
 export async function deleteVaultSecret(workspaceId: string, name: string) {
   const { data } = await api.delete(`/api/v1/workspaces/${workspaceId}/vault/secrets/${name}`);
   return data;
