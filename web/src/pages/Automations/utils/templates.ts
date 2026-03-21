@@ -47,6 +47,16 @@ export function isPctCondition(type: string): boolean {
   return type === 'pct_change_above' || type === 'pct_change_below';
 }
 
+function detectTimezone(): string {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) return tz;
+  } catch {
+    // Intl not available
+  }
+  return 'America/New_York';
+}
+
 // ── Form State ─────────────────────────────────────────────
 
 export interface FormState {
@@ -75,7 +85,7 @@ export const INITIAL_FORM: FormState = {
   description: '',
   trigger_type: 'cron',
   cron_expression: '',
-  timezone: 'UTC',
+  timezone: detectTimezone(),
   next_run_at: '',
   agent_mode: 'flash',
   workspace_id: '',
@@ -185,7 +195,7 @@ export function automationToFormState(automation: Automation): FormState {
     description: (automation.description as string) || '',
     trigger_type: (automation.trigger_type as string) || 'cron',
     cron_expression: (automation.cron_expression as string) || '',
-    timezone: (automation.timezone as string) || 'UTC',
+    timezone: (automation.timezone as string) || detectTimezone(),
     next_run_at: automation.next_run_at ? (automation.next_run_at as string).slice(0, 16) : '',
     agent_mode: (automation.agent_mode as string) || 'flash',
     workspace_id: (automation.workspace_id as string) || '',

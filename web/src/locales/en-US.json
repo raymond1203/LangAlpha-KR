@@ -388,6 +388,7 @@
     "flash": "Flash",
     "ptcSandbox": "PTC (Sandbox)",
     "selectWorkspace": "Select workspace...",
+    "workspaceRequired": "PTC mode requires a workspace. Please select one.",
     "instruction": "Instruction",
     "instructionPlaceholder": "What should the agent do?",
     "threadStrategy": "Thread Strategy",

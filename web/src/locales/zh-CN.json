@@ -388,6 +388,7 @@
     "flash": "快速",
     "ptcSandbox": "PTC（沙箱）",
     "selectWorkspace": "选择工作区...",
+    "workspaceRequired": "PTC 模式需要选择工作区。",
     "instruction": "指令",
     "instructionPlaceholder": "智能体应该做什么？",
     "threadStrategy": "对话策略",

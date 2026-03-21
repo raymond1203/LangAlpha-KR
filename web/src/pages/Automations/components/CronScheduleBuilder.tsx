@@ -137,7 +137,7 @@ export default function CronScheduleBuilder({ value, onChange }: CronScheduleBui
       <div className="flex flex-wrap items-end gap-3">
         {/* Frequency */}
         <Select
-          className="w-full sm:w-52"
+          className="w-40"
           value={state.frequency}
           onChange={(e) => update({ frequency: e.target.value as Frequency })}
         >

@@ -2,11 +2,20 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
+import { AnimatedTabs } from '@/components/ui/animated-tabs';
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/aria-select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { searchStocks } from '@/lib/marketUtils';
+import { toast } from '@/components/ui/use-toast';
 import CronScheduleBuilder from './CronScheduleBuilder';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import {
@@ -27,33 +36,6 @@ const inputStyle = {
 };
 
 const labelClass = 'form-label';
-const radioGroupClass = 'flex flex-wrap gap-x-3 gap-y-2';
-
-// ── RadioOption ────────────────────────────────────────────
-
-interface RadioOptionProps {
-  name: string;
-  value: string;
-  checked: boolean;
-  onChange: (value: string) => void;
-  label: string;
-}
-
-function RadioOption({ name, value, checked, onChange, label }: RadioOptionProps) {
-  return (
-    <label className="flex items-center gap-2 cursor-pointer text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-      <input
-        type="radio"
-        name={name}
-        value={value}
-        checked={checked}
-        onChange={() => onChange(value)}
-        className="accent-[var(--color-accent-primary)]"
-      />
-      {label}
-    </label>
-  );
-}
 
 // ── TickerAutocomplete ─────────────────────────────────────
 
@@ -212,6 +194,15 @@ export default function AutomationInlineForm({
   const { t } = useTranslation();
   const [form, setForm] = useState<FormState>(initialValues);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const outerRef = useRef<HTMLDivElement>(null);
+  const advancedRef = useRef<HTMLDivElement>(null);
+
+  // Release overflow:hidden after expand animation so box-shadows (card shadow, focus rings) aren't clipped.
+  // Re-apply overflow:hidden when any animation starts (collapse needs clipping).
+  const releaseOverflow = (ref: React.RefObject<HTMLDivElement | null>) => ({
+    onAnimationStart: () => { if (ref.current) ref.current.style.overflow = 'hidden'; },
+    onAnimationComplete: () => { if (ref.current && ref.current.offsetHeight > 0) ref.current.style.overflow = 'visible'; },
+  });
 
   const { data: wsData } = useWorkspaces({ limit: 100 });
   const workspaces = (wsData as { workspaces?: WorkspaceOption[] })?.workspaces ?? [];
@@ -219,18 +210,28 @@ export default function AutomationInlineForm({
   const set = (key: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement> | string) =>
     setForm((f) => ({ ...f, [key]: typeof e === 'string' ? e : e.target.value }));
 
+  const setSelection = (key: keyof FormState) => (k: React.Key) =>
+    setForm((f) => ({ ...f, [key]: String(k) }));
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (form.agent_mode === 'ptc' && !form.workspace_id) {
+      setAdvancedOpen(true);
+      toast({ variant: 'destructive', description: t('automation.workspaceRequired') });
+      return;
+    }
     onSubmit(formStateToPayload(form));
   };
 
   return (
     <motion.div
+      ref={outerRef}
       initial={{ opacity: 0, height: 0 }}
       animate={{ opacity: 1, height: 'auto' }}
       exit={{ opacity: 0, height: 0 }}
       transition={{ duration: 0.25, ease: 'easeInOut' }}
       style={{ overflow: 'hidden' }}
+      {...releaseOverflow(outerRef)}
     >
       <form
         onSubmit={handleSubmit}
@@ -256,6 +257,21 @@ export default function AutomationInlineForm({
           />
         </div>
 
+        {/* Trigger Type */}
+        <div className="flex flex-col gap-1.5">
+          <label className={labelClass}>{t('automation.triggerType')}</label>
+          <AnimatedTabs
+            layoutId="trigger_type"
+            tabs={[
+              { id: 'cron', label: t('automation.cronRecurring') },
+              { id: 'once', label: t('automation.once') },
+              { id: 'price', label: t('automation.priceAlert') },
+            ]}
+            value={form.trigger_type}
+            onChange={set('trigger_type')}
+          />
+        </div>
+
         {/* Trigger-specific basic fields */}
         {form.trigger_type === 'price' && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -271,13 +287,15 @@ export default function AutomationInlineForm({
             {/* Condition Type */}
             <div className="flex flex-col gap-1.5">
               <label className={labelClass}>{t('automation.priceCondition')}</label>
-              <Select
-                value={form.price_condition_type}
-                onChange={set('price_condition_type')}
-              >
-                {PRICE_CONDITION_TYPES.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
-                ))}
+              <Select aria-label={t('automation.priceCondition')} selectedKey={form.price_condition_type} onSelectionChange={setSelection('price_condition_type')}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectPopover>
+                  <SelectListBox>
+                    {PRICE_CONDITION_TYPES.map((opt) => (
+                      <SelectItem key={opt.value} id={opt.value}>{t(opt.labelKey)}</SelectItem>
+                    ))}
+                  </SelectListBox>
+                </SelectPopover>
               </Select>
             </div>
 
@@ -303,13 +321,15 @@ export default function AutomationInlineForm({
             {isPctCondition(form.price_condition_type) && (
               <div className="flex flex-col gap-1.5">
                 <label className={labelClass}>{t('automation.priceReference')}</label>
-                <Select
-                  value={form.price_reference}
-                  onChange={set('price_reference')}
-                >
-                  {PRICE_REFERENCE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{t(opt.labelKey)}</option>
-                  ))}
+                <Select aria-label={t('automation.priceReference')} selectedKey={form.price_reference} onSelectionChange={setSelection('price_reference')}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectPopover>
+                    <SelectListBox>
+                      {PRICE_REFERENCE_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} id={opt.value}>{t(opt.labelKey)}</SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
                 </Select>
               </div>
             )}
@@ -376,30 +396,27 @@ export default function AutomationInlineForm({
           <AnimatePresence>
             {advancedOpen && (
             <motion.div
+              ref={advancedRef}
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.2 }}
               style={{ overflow: 'hidden' }}
+              {...releaseOverflow(advancedRef)}
               className="flex flex-col gap-4 mt-3"
             >
-              {/* Trigger Type */}
-              <div className="flex flex-col gap-1.5">
-                <label className={labelClass}>{t('automation.triggerType')}</label>
-                <div className={radioGroupClass}>
-                  <RadioOption name="trigger_type" value="cron" checked={form.trigger_type === 'cron'} onChange={set('trigger_type')} label={t('automation.cronRecurring')} />
-                  <RadioOption name="trigger_type" value="once" checked={form.trigger_type === 'once'} onChange={set('trigger_type')} label={t('automation.once')} />
-                  <RadioOption name="trigger_type" value="price" checked={form.trigger_type === 'price'} onChange={set('trigger_type')} label={t('automation.priceAlert')} />
-                </div>
-              </div>
-
               {/* Agent Mode */}
               <div className="flex flex-col gap-1.5">
                 <label className={labelClass}>{t('automation.agentMode')}</label>
-                <div className={radioGroupClass}>
-                  <RadioOption name="agent_mode" value="flash" checked={form.agent_mode === 'flash'} onChange={set('agent_mode')} label={t('automation.flash')} />
-                  <RadioOption name="agent_mode" value="ptc" checked={form.agent_mode === 'ptc'} onChange={set('agent_mode')} label={t('automation.ptcSandbox')} />
-                </div>
+                <AnimatedTabs
+                  layoutId="agent_mode"
+                  tabs={[
+                    { id: 'flash', label: t('automation.flash') },
+                    { id: 'ptc', label: t('automation.ptcSandbox') },
+                  ]}
+                  value={form.agent_mode}
+                  onChange={set('agent_mode')}
+                />
               </div>
 
               {/* Workspace */}
@@ -407,16 +424,21 @@ export default function AutomationInlineForm({
                 <div className="flex flex-col gap-1.5">
                   <label className={labelClass}>{t('thread.workspace')}</label>
                   <Select
-                    value={form.workspace_id}
-                    onChange={set('workspace_id')}
-                    required
+                    aria-label={t('thread.workspace')}
+                    selectedKey={form.workspace_id || null}
+                    onSelectionChange={setSelection('workspace_id')}
+                    placeholder={t('automation.selectWorkspace')}
                   >
-                    <option value="">{t('automation.selectWorkspace')}</option>
-                    {workspaces.map((ws) => (
-                      <option key={ws.workspace_id} value={ws.workspace_id}>
-                        {ws.name}
-                      </option>
-                    ))}
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectPopover>
+                      <SelectListBox>
+                        {workspaces.map((ws) => (
+                          <SelectItem key={ws.workspace_id} id={ws.workspace_id}>
+                            {ws.name}
+                          </SelectItem>
+                        ))}
+                      </SelectListBox>
+                    </SelectPopover>
                   </Select>
                 </div>
               )}
@@ -425,13 +447,15 @@ export default function AutomationInlineForm({
               {form.trigger_type !== 'price' && (
                 <div className="flex flex-col gap-1.5">
                   <label className={labelClass}>{t('settings.timezone')}</label>
-                  <Select
-                    value={form.timezone}
-                    onChange={set('timezone')}
-                  >
-                    {COMMON_TIMEZONES.map((tz) => (
-                      <option key={tz} value={tz}>{tz}</option>
-                    ))}
+                  <Select aria-label={t('settings.timezone')} selectedKey={form.timezone} onSelectionChange={setSelection('timezone')}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectPopover>
+                      <SelectListBox>
+                        {COMMON_TIMEZONES.map((tz) => (
+                          <SelectItem key={tz} id={tz}>{tz}</SelectItem>
+                        ))}
+                      </SelectListBox>
+                    </SelectPopover>
                   </Select>
                 </div>
               )}
@@ -439,20 +463,30 @@ export default function AutomationInlineForm({
               {/* Thread Strategy */}
               <div className="flex flex-col gap-1.5">
                 <label className={labelClass}>{t('automation.threadStrategy')}</label>
-                <div className={radioGroupClass}>
-                  <RadioOption name="thread_strategy" value="new" checked={form.thread_strategy === 'new'} onChange={set('thread_strategy')} label={t('automation.newThreadEachRun')} />
-                  <RadioOption name="thread_strategy" value="continue" checked={form.thread_strategy === 'continue'} onChange={set('thread_strategy')} label={t('automation.continueExisting')} />
-                </div>
+                <AnimatedTabs
+                  layoutId="thread_strategy"
+                  tabs={[
+                    { id: 'new', label: t('automation.newThreadEachRun') },
+                    { id: 'continue', label: t('automation.continueExisting') },
+                  ]}
+                  value={form.thread_strategy}
+                  onChange={set('thread_strategy')}
+                />
               </div>
 
               {/* Delivery */}
               <div className="flex flex-col gap-1.5">
                 <label className={labelClass}>{t('automation.delivery')}</label>
-                <div className={radioGroupClass}>
-                  <RadioOption name="delivery_method" value="" checked={form.delivery_method === ''} onChange={set('delivery_method')} label={t('automation.deliverNone')} />
-                  <RadioOption name="delivery_method" value="slack" checked={form.delivery_method === 'slack'} onChange={set('delivery_method')} label={t('automation.deliverToSlack')} />
-                  <RadioOption name="delivery_method" value="discord" checked={form.delivery_method === 'discord'} onChange={set('delivery_method')} label={t('automation.deliverToDiscord')} />
-                </div>
+                <AnimatedTabs
+                  layoutId="delivery_method"
+                  tabs={[
+                    { id: '', label: t('automation.deliverNone') },
+                    { id: 'slack', label: t('automation.deliverToSlack') },
+                    { id: 'discord', label: t('automation.deliverToDiscord') },
+                  ]}
+                  value={form.delivery_method}
+                  onChange={set('delivery_method')}
+                />
               </div>
 
               {/* Retrigger Mode (price only) */}
@@ -460,18 +494,12 @@ export default function AutomationInlineForm({
                 <>
                   <div className="flex flex-col gap-1.5">
                     <label className={labelClass}>{t('automation.priceRetrigger')}</label>
-                    <div className={radioGroupClass}>
-                      {RETRIGGER_MODES.map((opt) => (
-                        <RadioOption
-                          key={opt.value}
-                          name="price_retrigger_mode"
-                          value={opt.value}
-                          checked={form.price_retrigger_mode === opt.value}
-                          onChange={set('price_retrigger_mode')}
-                          label={t(opt.labelKey)}
-                        />
-                      ))}
-                    </div>
+                    <AnimatedTabs
+                      layoutId="price_retrigger"
+                      tabs={RETRIGGER_MODES.map((opt) => ({ id: opt.value, label: t(opt.labelKey) }))}
+                      value={form.price_retrigger_mode}
+                      onChange={set('price_retrigger_mode')}
+                    />
                   </div>
 
                   {form.price_retrigger_mode === 'recurring' && (
