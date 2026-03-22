@@ -79,7 +79,7 @@ interface FeedbackResult {
  * code fences, horizontal rules, or table rows) and should keep its newline.
  */
 const MD_STRUCTURAL_RE =
-  /^(?:#|[*\-+] |\d+[.)] |>|```|---+|___+|\*\*\*+|\|)/;
+  /^(?:#|[*\-+] |\d+[.)] |>|```|---+|___+|\*\*\*+|\||\[)/;
 
 function isStructuralLine(line: string): boolean {
   return MD_STRUCTURAL_RE.test(line.trimStart());
