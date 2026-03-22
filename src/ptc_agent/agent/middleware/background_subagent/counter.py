@@ -277,18 +277,21 @@ class ToolCallCounterMiddleware(AgentMiddleware):
                         if isinstance(result.content, str)
                         else str(result.content)
                     )
+                    event_data: dict = {
+                        "agent": agent_id,
+                        "id": getattr(result, "id", ""),
+                        "role": "assistant",
+                        "tool_call_id": result.tool_call_id,
+                        "content": content,
+                        "content_type": "text",
+                    }
+                    if hasattr(result, 'artifact') and result.artifact is not None:
+                        event_data["artifact"] = result.artifact
                     await self.registry.append_captured_event(
                         tool_call_id,
                         {
                             "event": "tool_call_result",
-                            "data": {
-                                "agent": agent_id,
-                                "id": getattr(result, "id", ""),
-                                "role": "assistant",
-                                "tool_call_id": result.tool_call_id,
-                                "content": content[:4096],
-                                "content_type": "text",
-                            },
+                            "data": event_data,
                             "ts": time.time(),
                         },
                     )
@@ -301,18 +304,21 @@ class ToolCallCounterMiddleware(AgentMiddleware):
                                 if isinstance(msg.content, str)
                                 else str(msg.content)
                             )
+                            event_data_cmd: dict = {
+                                "agent": agent_id,
+                                "id": getattr(msg, "id", ""),
+                                "role": "assistant",
+                                "tool_call_id": msg.tool_call_id,
+                                "content": content,
+                                "content_type": "text",
+                            }
+                            if hasattr(msg, 'artifact') and msg.artifact is not None:
+                                event_data_cmd["artifact"] = msg.artifact
                             await self.registry.append_captured_event(
                                 tool_call_id,
                                 {
                                     "event": "tool_call_result",
-                                    "data": {
-                                        "agent": agent_id,
-                                        "id": getattr(msg, "id", ""),
-                                        "role": "assistant",
-                                        "tool_call_id": msg.tool_call_id,
-                                        "content": content[:4096],
-                                        "content_type": "text",
-                                    },
+                                    "data": event_data_cmd,
                                     "ts": time.time(),
                                 },
                             )
