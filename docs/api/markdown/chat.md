@@ -312,6 +312,11 @@ Get information about active PTC sessions.
 - `pending`: Count of pending todos
 - `error`: Error message (failed status only)
 
+**For `html_widget` payload:**
+- `html`: Raw HTML fragment to render in a sandboxed iframe
+- `title`: Optional widget title metadata
+- `data_files`: Optional dict of filename to content (text as strings, binary as data URLs) for files loaded from the sandbox via the `data_files` parameter
+
 ## SSE Event Data Schemas
 
 ### message_chunk
