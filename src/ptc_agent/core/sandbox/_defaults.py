@@ -39,6 +39,8 @@ DEFAULT_DEPENDENCIES = [
     "pdfplumber",
     "reportlab",
     "markitdown[pptx]",
+    # Browser automation
+    "playwright",
     # Utilities
     "tqdm",
     "tabulate",

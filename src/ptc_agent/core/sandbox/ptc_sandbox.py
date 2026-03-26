@@ -282,7 +282,11 @@ class PTCSandbox:
         """
         import os
 
-        env_vars: dict[str, str] = {}
+        env_vars: dict[str, str] = {
+            # Playwright browsers are installed to /usr/local/ms-playwright
+            # in the snapshot image; tell the Python package where to find them.
+            "PLAYWRIGHT_BROWSERS_PATH": "/usr/local/ms-playwright",
+        }
 
         # MCP server env vars (resolve ${VAR} placeholders from host)
         for server in self.config.mcp.servers:
@@ -2197,7 +2201,25 @@ class PTCSandbox:
             )
         except Exception as e:
             if "already exists" in str(e).lower():
-                logger.debug("Preview session already exists", session_id=session_id)
+                # Stale session from a previous server process — delete and
+                # recreate to avoid inheriting a running command from the old
+                # session (same pattern as _create_bg_session).
+                try:
+                    await self._runtime_call(
+                        self.runtime.delete_session,
+                        session_id,
+                        retry_policy=RetryPolicy.SAFE,
+                    )
+                    await self._runtime_call(
+                        self.runtime.create_session,
+                        session_id,
+                        retry_policy=RetryPolicy.SAFE,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Stale preview session cleanup failed, reusing",
+                        session_id=session_id,
+                    )
             else:
                 raise
 
@@ -2312,14 +2334,55 @@ class PTCSandbox:
 
         return await self.get_preview_url(port, expires_in=expires_in)
 
+    _MAX_BG_SESSIONS = 20
+
+    async def _evict_finished_bg_sessions(self) -> None:
+        """Evict finished background sessions to stay under the cap."""
+        assert self.runtime is not None
+        # Collect finished sessions (skip sentinel keys)
+        finished: list[str] = []
+        for cmd_id, sid in list(self._bg_sessions.items()):
+            if cmd_id.startswith("_pending:"):
+                continue
+            try:
+                result = await self._runtime_call(
+                    self.runtime.session_command_logs,
+                    sid, cmd_id,
+                    retry_policy=RetryPolicy.SAFE,
+                )
+                if result.exit_code is not None:
+                    finished.append(cmd_id)
+            except Exception:
+                # Can't check status (e.g. sandbox restarted) — treat as
+                # finished to avoid zombie entries that permanently block the cap.
+                finished.append(cmd_id)
+        # Delete finished sessions
+        for cmd_id in finished:
+            sid = self._bg_sessions.pop(cmd_id, None)
+            if sid:
+                try:
+                    await self._runtime_call(
+                        self.runtime.delete_session, sid,
+                        retry_policy=RetryPolicy.SAFE,
+                    )
+                except Exception:
+                    logger.debug("Evict bg session failed", session_id=sid)
+
     async def _create_bg_session(self, label: str) -> str:
         """Create a dedicated session for a background command.
 
         Each background command gets its own Daytona session so blocking
         commands don't prevent subsequent ones from executing.
+        Evicts finished sessions when the cap is reached.
         """
         await self._wait_ready()
         assert self.runtime is not None
+
+        # Evict finished sessions if at or above the cap
+        active_count = sum(1 for k in self._bg_sessions if not k.startswith("_pending:"))
+        if active_count >= self._MAX_BG_SESSIONS:
+            await self._evict_finished_bg_sessions()
+
         session_id = f"bg-{label}"
         try:
             await self._runtime_call(
@@ -2582,14 +2645,32 @@ class PTCSandbox:
             if background:
                 session_id = await self._create_bg_session(bash_id)
                 assert self.runtime is not None
-                result = await self._runtime_call(
-                    self.runtime.session_execute,
-                    session_id,
-                    full_command,
-                    run_async=True,
-                    retry_policy=RetryPolicy.UNSAFE,
-                    total_timeout=30,
-                )
+                # Track immediately so cleanup() can find it if execute fails
+                sentinel_key = f"_pending:{session_id}"
+                self._bg_sessions[sentinel_key] = session_id
+                try:
+                    result = await self._runtime_call(
+                        self.runtime.session_execute,
+                        session_id,
+                        full_command,
+                        run_async=True,
+                        retry_policy=RetryPolicy.UNSAFE,
+                        total_timeout=30,
+                    )
+                except Exception:
+                    # Clean up the session to avoid leaking on the Daytona side
+                    try:
+                        await self._runtime_call(
+                            self.runtime.delete_session,
+                            session_id,
+                            retry_policy=RetryPolicy.SAFE,
+                        )
+                    except Exception:
+                        logger.debug("Failed to clean up bg session after execute failure", session_id=session_id)
+                    self._bg_sessions.pop(sentinel_key, None)
+                    raise
+                # Replace sentinel with real cmd_id key
+                self._bg_sessions.pop(sentinel_key, None)
                 self._bg_sessions[result.cmd_id] = session_id
                 logger.info(
                     "Background command started",

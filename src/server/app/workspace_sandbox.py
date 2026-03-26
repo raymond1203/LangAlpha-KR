@@ -28,7 +28,6 @@ from src.server.utils.api import CurrentUserId, require_workspace_owner
 from src.server.database.workspace import (
     get_preview_command,
     get_workspace as db_get_workspace,
-    save_preview_command,
 )
 from src.server.services.workspace_manager import WorkspaceManager
 from src.ptc_agent.core.sandbox import PTCSandbox
@@ -539,10 +538,6 @@ async def _resolve_preview(
         cmd = await get_preview_command(workspace_id, port)
 
     if cmd:
-        # Persist the command so future redirect requests can replay it
-        if command:
-            await save_preview_command(workspace_id, port, command)
-
         preview_info = await sandbox.start_and_get_preview_url(
             cmd, port, expires_in=expires_in,
         )
@@ -685,49 +680,66 @@ preview_redirect_router = APIRouter(prefix="/api/v1", tags=["Preview Redirect"])
 async def _preview_redirect(workspace_id: str, port: int, path: str = "") -> Response:
     """Shared logic for preview redirect with optional path suffix.
 
-    Uses the same ``_resolve_preview`` helper as the authenticated POST
-    endpoint — sandbox is auto-started via WorkspaceManager if stopped,
-    and the preview server is health-checked / restarted via
-    ``start_and_get_preview_url`` using the command stored in the DB.
+    Performs a lightweight DB check first — only proceeds if the workspace
+    is already running.  Unlike the authenticated POST endpoint, the
+    unauthenticated redirect does NOT start stopped sandboxes (to prevent
+    denial-of-wallet via cheap GET requests).
     """
-    manager = WorkspaceManager.get_instance()
+    # Lightweight DB check — don't start stopped sandboxes from this
+    # unauthenticated endpoint (workspace UUID is the only credential).
+    # Return uniform 404 for both missing and non-running workspaces to
+    # avoid leaking workspace existence via status-code differences.
     try:
-        session = await manager.get_session_for_workspace(workspace_id)
+        workspace = await db_get_workspace(workspace_id)
     except Exception:
-        raise HTTPException(status_code=503, detail="Sandbox not ready") from None
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from None
+    if not workspace or workspace.get("status") != "running":
+        raise HTTPException(status_code=404, detail="Preview not available")
 
-    sandbox = getattr(session, "sandbox", None)
-    if sandbox is None:
-        raise HTTPException(status_code=503, detail="Sandbox not available")
+    async def _resolve() -> Response:
+        manager = WorkspaceManager.get_instance()
+        try:
+            session = await manager.get_session_for_workspace(workspace_id)
+        except Exception:
+            raise HTTPException(status_code=503, detail="Sandbox not ready") from None
+
+        sandbox = getattr(session, "sandbox", None)
+        if sandbox is None:
+            raise HTTPException(status_code=503, detail="Sandbox not available")
+
+        try:
+            signed_url = await _resolve_preview(sandbox, workspace_id, port)
+        except NotImplementedError:
+            raise HTTPException(
+                status_code=501,
+                detail="Preview URLs are not supported by the current sandbox provider",
+            ) from None
+        except Exception:
+            logger.exception("Failed to get preview URL for workspace %s port %d", workspace_id, port)
+            raise HTTPException(status_code=500, detail="Failed to get preview URL") from None
+
+        if path:
+            import posixpath
+            from urllib.parse import urlsplit, urlunsplit
+
+            if ".." in path.split("/"):
+                raise HTTPException(status_code=400, detail="Invalid path")
+            normalized = posixpath.normpath("/" + path)
+
+            parts = urlsplit(signed_url)
+            new_path = parts.path.rstrip("/") + normalized
+            signed_url = urlunsplit(parts._replace(path=new_path))
+
+        response = RedirectResponse(url=signed_url, status_code=302)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return response
 
     try:
-        signed_url = await _resolve_preview(sandbox, workspace_id, port)
-    except NotImplementedError:
+        return await asyncio.wait_for(_resolve(), timeout=20)
+    except asyncio.TimeoutError:
         raise HTTPException(
-            status_code=501,
-            detail="Preview URLs are not supported by the current sandbox provider",
+            status_code=504, detail="Preview URL resolution timed out"
         ) from None
-    except Exception:
-        logger.exception("Failed to get preview URL for workspace %s port %d", workspace_id, port)
-        raise HTTPException(status_code=500, detail="Failed to get preview URL") from None
-
-    if path:
-        import posixpath
-        from urllib.parse import urlsplit, urlunsplit
-
-        # Reject path-traversal attempts before normalization
-        # (normpath resolves ".." making post-normpath checks ineffective)
-        if ".." in path.split("/"):
-            raise HTTPException(status_code=400, detail="Invalid path")
-        normalized = posixpath.normpath("/" + path)
-
-        parts = urlsplit(signed_url)
-        new_path = parts.path.rstrip("/") + normalized
-        signed_url = urlunsplit(parts._replace(path=new_path))
-
-    response = RedirectResponse(url=signed_url, status_code=302)
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    return response
 
 
 @preview_redirect_router.get("/preview/{workspace_id}/{port}")

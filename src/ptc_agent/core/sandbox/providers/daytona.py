@@ -483,7 +483,8 @@ class DaytonaProvider(SandboxProvider):
                 " && mv /tmp/polymarket /usr/local/bin/polymarket"
                 " && rm -rf /tmp/polymarket.tar.gz",
                 "npm install -g playwright"
-                " && npx playwright install --with-deps chromium",
+                " && PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright"
+                " npx playwright install --with-deps chromium",
                 # -- Docker Engine (for interactive-dashboard complex tier) --
                 "install -m 0755 -d /etc/apt/keyrings"
                 " && curl -fsSL https://download.docker.com/linux/ubuntu/gpg"

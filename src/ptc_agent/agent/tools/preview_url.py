@@ -74,6 +74,13 @@ def create_preview_url_tool(
                 except Exception:
                     logger.debug("Failed to cache signed URL for port %s", port, exc_info=True)
 
+            # Persist command to DB so the preview can auto-restart on workspace reopen
+            try:
+                from src.server.database.workspace import save_preview_command
+                await save_preview_command(workspace_id, port, command)
+            except Exception:
+                logger.debug("Failed to persist preview command for port %s", port, exc_info=True)
+
             logger.info(
                 "Generated preview URL",
                 port=port,
@@ -87,10 +94,11 @@ def create_preview_url_tool(
             normalized_path = ""
             if path:
                 # Reject traversal attempts at the tool layer (defense in depth)
-                clean = path.lstrip("/")
-                if ".." in clean.split("/"):
-                    clean = clean.replace("..", "")
-                normalized_path = "/" + clean
+                from urllib.parse import unquote
+                clean = unquote(path).lstrip("/")
+                # Strip any ".." segments (server-side also independently rejects them)
+                segments = [s for s in clean.split("/") if s and s != ".."]
+                normalized_path = "/" + "/".join(segments) if segments else ""
 
             stable_url = (
                 f"{SERVER_BASE_URL.rstrip('/')}/api/v1/preview/{workspace_id}/{port}"
