@@ -252,6 +252,7 @@ flowchart TB
         T2["Filesystem<br/>read · write · edit<br/>glob · grep"]
         T3["Finance<br/>Market Data · SEC<br/>Options · Screener"]
         T4["Web<br/>Search · Fetch"]
+        T5["ShowWidget<br/>Inline HTML"]
     end
 
     T1 <--> Workspace
@@ -326,6 +327,7 @@ Vault secrets inherit every protection layer above — encrypted at rest, redact
 The web UI is more than a chat interface — it's a full research workbench:
 
 - **Inline financial charts** — tool results render as interactive sparklines, bar charts, and overview cards directly in the chat thread
+- **Inline HTML widgets** — the agent can render interactive HTML/SVG visualizations (Chart.js charts, metric cards, data tables) directly in the chat via the `ShowWidget` tool, with theme-aware styling and sandboxed iframes
 - **Multi-format file viewer** — PDF (paginated, zoomable), Excel, CSV, HTML preview, and source code (Monaco editor with diff mode) — all viewable inline without download
 - **TradingView charting** — full TradingView Advanced Chart with drawing tools, indicators, and professional candlestick styling
 - **Live market data** — real-time WebSocket price feed with 1-second tick resolution, extended hours visualization, and multiple moving average overlays

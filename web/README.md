@@ -12,6 +12,7 @@ React frontend for LangAlpha — a vibe investing agent with AI-powered research
 - **TradingView-Style Charting** — Interactive candlestick charts with AI chat sidebar for stock analysis
 - **Scheduled Automations** — Create and manage recurring agent tasks with cron scheduling and execution history
 - **Document Viewers** — Inline rendering of PDF, Excel, CSV, and HTML artifacts from agent responses
+- **Inline HTML Widgets** — Interactive HTML/SVG visualizations (charts, metric cards, data tables) rendered in sandboxed iframes directly within the chat thread
 - **Monaco Code Editor** — Syntax-highlighted code editor for code artifacts
 - **Todo Tracking** — Drawer-based task list synced with agent todo updates
 - **Dark/Light Theme** — Theme switching with CSS custom properties

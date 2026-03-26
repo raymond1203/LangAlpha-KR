@@ -1,0 +1,12 @@
+.inline-widget-container {
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.inline-widget-frame {
+  display: block;
+  width: 100%;
+  border: none;
+  overflow: hidden;
+  transition: height 0.15s ease;
+}

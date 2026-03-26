@@ -22,7 +22,7 @@ export { removeStoredThreadId } from './utils/threadStorage';
 import { createUserMessage, createAssistantMessage, createNotificationMessage, appendMessage, updateMessage, type AttachmentMeta } from './utils/messageHelpers';
 import type { ChatMessage, AssistantMessage } from '@/types/chat';
 import type { ActionRequest, ToolCallData, TodoItem } from '@/types/sse';
-import type { PreviewData } from './utils/types';
+import type { HtmlWidgetData, PreviewData } from './utils/types';
 import { createRecentlySentTracker } from './utils/recentlySentTracker';
 import {
   handleReasoningSignal,
@@ -32,6 +32,7 @@ import {
   handleToolCallResult,
   handleToolCallChunks,
   handleTodoUpdate,
+  handleHtmlWidget,
   isSubagentEvent,
   handleSubagentMessageChunk,
   handleSubagentToolCallChunks,
@@ -48,6 +49,7 @@ import {
   handleHistoryToolCalls,
   handleHistoryToolCallResult,
   handleHistoryTodoUpdate,
+  handleHistoryHtmlWidget,
   handleHistorySteeringDelivered,
   isSubagentHistoryEvent,
 } from './utils/historyEventHandlers';
@@ -987,6 +989,55 @@ export function useChatMessages(
                   artifactType: artifactType as string,
                   artifactId: event.artifact_id as string,
                   payload,
+                  pairState: targetPairState,
+                  setMessages: setMessagesForHandlers,
+                  eventId: event._eventId as number | undefined,
+                });
+              }
+            }
+          }
+          if (artifactType === 'html_widget') {
+            const payload = (event.payload || {}) as unknown as HtmlWidgetData;
+
+            if (hasPairIndex) {
+              const pairIndex = event.turn_index!;
+              currentActivePairIndex = pairIndex;
+              currentActivePairState = pairStateByPair.get(pairIndex);
+
+              const currentAssistantMessageId = assistantMessagesByPair.get(pairIndex);
+              const pairState = pairStateByPair.get(pairIndex);
+
+              if (currentAssistantMessageId && pairState) {
+                handleHistoryHtmlWidget({
+                  assistantMessageId: currentAssistantMessageId,
+                  artifactType: artifactType as string,
+                  artifactId: event.artifact_id as string,
+                  payload: payload as HtmlWidgetData | null,
+                  pairState,
+                  setMessages: setMessagesForHandlers,
+                  eventId: event._eventId as number | undefined,
+                });
+              }
+            } else {
+              let targetAssistantMessageId = null;
+              let targetPairState = null;
+
+              if (currentActivePairIndex !== null && currentActivePairState) {
+                targetAssistantMessageId = assistantMessagesByPair.get(currentActivePairIndex);
+                targetPairState = currentActivePairState;
+              } else if (assistantMessagesByPair.size > 0) {
+                const pairIndices = Array.from(assistantMessagesByPair.keys()).sort((a, b) => b - a);
+                const lastPairIndex = pairIndices[0];
+                targetAssistantMessageId = assistantMessagesByPair.get(lastPairIndex);
+                targetPairState = pairStateByPair.get(lastPairIndex);
+              }
+
+              if (targetAssistantMessageId && targetPairState) {
+                handleHistoryHtmlWidget({
+                  assistantMessageId: targetAssistantMessageId,
+                  artifactType: artifactType as string,
+                  artifactId: event.artifact_id as string,
+                  payload: payload as HtmlWidgetData | null,
                   pairState: targetPairState,
                   setMessages: setMessagesForHandlers,
                   eventId: event._eventId as number | undefined,
@@ -2654,6 +2705,16 @@ export function useChatMessages(
             eventId: event._eventId as number,
           });
           console.log('[Stream] handleTodoUpdate result:', result);
+        } else if (artifactType === 'html_widget') {
+          handleHtmlWidget({
+            assistantMessageId,
+            artifactType,
+            artifactId: event.artifact_id as string,
+            payload: (event.payload || {}) as unknown as HtmlWidgetData,
+            refs,
+            setMessages: setMessagesForHandlers,
+            eventId: event._eventId as number,
+          });
         } else if (artifactType === 'file_operation' && onFileArtifact) {
           onFileArtifact(event);
         } else if (artifactType === 'preview_url' && onPreviewUrl) {

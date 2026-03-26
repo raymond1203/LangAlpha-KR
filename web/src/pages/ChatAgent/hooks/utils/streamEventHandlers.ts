@@ -4,7 +4,7 @@
  */
 
 import { normalizeAction } from './eventUtils';
-import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload } from './types';
+import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from './types';
 
 /** Callback to update a subagent card by task ID. */
 type UpdateSubagentCard = (taskId: string, patch: Record<string, unknown>) => void;
@@ -634,6 +634,68 @@ export function handleTodoUpdate({ assistantMessageId, artifactType, artifactId,
     if (process.env.NODE_ENV === 'development') {
       console.log('[handleTodoUpdate] Final messages after update:', updated.map((m: MessageRecord) => ({ id: m.id, segmentsCount: (m.contentSegments as unknown[])?.length, todoListIds: Object.keys((m.todoListProcesses as Record<string, unknown>) || {}) })));
     }
+    return updated;
+  });
+
+  return true;
+}
+
+/**
+ * Handles artifact events with artifact_type: "html_widget" during streaming.
+ * Creates a content segment for inline rendering of interactive HTML widgets.
+ */
+export function handleHtmlWidget({ assistantMessageId, artifactType, artifactId, payload, refs, setMessages, eventId }: {
+  assistantMessageId: string;
+  artifactType: string;
+  artifactId: string;
+  payload: HtmlWidgetData | null;
+  refs: StreamRefs;
+  setMessages: SetMessages;
+  eventId?: number | null;
+}): boolean {
+  const { contentOrderCounterRef } = refs;
+
+  if (artifactType !== 'html_widget' || !payload) {
+    return false;
+  }
+
+  const { html, title } = payload;
+  const segmentId = `widget-${artifactId}`;
+
+  setMessages((prev: MessageRecord[]) => {
+    const updated = prev.map((msg: MessageRecord) => {
+      if (msg.id !== assistantMessageId) return msg;
+
+      const htmlWidgetProcesses = { ...((msg.htmlWidgetProcesses as Record<string, HtmlWidgetData>) || {}) };
+      const contentSegments = [...((msg.contentSegments as Record<string, unknown>[]) || [])];
+
+      // Prevent duplicates (e.g. on SSE reconnect replay)
+      const segmentExists = contentSegments.some((s: Record<string, unknown>) => s.widgetId === segmentId);
+      if (segmentExists) return msg;
+
+      const currentOrder = eventId != null ? eventId : ++contentOrderCounterRef.current;
+
+      contentSegments.push({
+        type: 'html_widget',
+        widgetId: segmentId,
+        order: currentOrder,
+      });
+
+      const widgetEntry: HtmlWidgetData = {
+        html: html || '',
+        title: title || '',
+      };
+      if (payload.data) {
+        widgetEntry.data = payload.data;
+      }
+      htmlWidgetProcesses[segmentId] = widgetEntry;
+
+      return {
+        ...msg,
+        contentSegments,
+        htmlWidgetProcesses,
+      };
+    });
     return updated;
   });
 

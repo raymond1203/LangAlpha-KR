@@ -35,6 +35,14 @@ export interface TodoPayload {
   [key: string]: unknown;
 }
 
+/** Data for an inline HTML widget. */
+export interface HtmlWidgetData {
+  html: string;
+  title: string;
+  /** Inline data file contents — injected as window.__WIDGET_DATA__ in the iframe. */
+  data?: Record<string, string>;
+}
+
 /** Data for a preview URL panel. */
 export interface PreviewData {
   url: string;

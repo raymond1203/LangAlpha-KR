@@ -91,7 +91,7 @@ Pages are lazy-loaded in `Main.jsx`. Each page group has its own `utils/api.js` 
 The agent does NOT use a hand-written `StateGraph`. It uses `create_agent()` from the `deepagents` library, wrapped in a deep middleware stack:
 
 **`src/ptc_agent/agent/agent.py` — `PTCAgent.create_agent()`** assembles:
-1. **Tools**: `execute_code`, `bash`, filesystem ops (read/write/edit/glob/grep), `web_search`, `web_fetch`, SEC/market tools
+1. **Tools**: `execute_code`, `bash`, filesystem ops (read/write/edit/glob/grep), `show_widget` (inline HTML visualizations), `web_search`, `web_fetch`, SEC/market tools
 2. **Middleware chain** (~23 layers): tool argument parsing → protected paths → error handling → leak detection → file/todo artifact emission → multimodal support → skills → steering → background subagents → HITL → summarization → model retry/fallback → prompt caching → workspace context injection
 3. **`BackgroundSubagentOrchestrator`** wraps the agent for parallel background task coordination
 

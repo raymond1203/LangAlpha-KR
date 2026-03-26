@@ -4,7 +4,7 @@
  */
 
 import { normalizeAction } from './eventUtils';
-import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload } from './types';
+import type { MessageRecord, SetMessages, ToolCallRecord, ToolCallResultRecord, TodoPayload, HtmlWidgetData } from './types';
 
 let _steeringIdCounter = 0;
 
@@ -742,6 +742,66 @@ export function handleHistoryTodoUpdate({ assistantMessageId, artifactType, arti
         ...msg,
         contentSegments,
         todoListProcesses,
+      };
+    });
+
+    return updated;
+  });
+
+  return true;
+}
+
+/**
+ * Handles artifact events with artifact_type: "html_widget" in history replay.
+ * Creates a content segment for inline rendering of interactive HTML widgets.
+ */
+export function handleHistoryHtmlWidget({ assistantMessageId, artifactType, artifactId, payload, pairState, setMessages, eventId }: {
+  assistantMessageId: string;
+  artifactType: string;
+  artifactId: string;
+  payload: HtmlWidgetData | null;
+  pairState: PairState;
+  setMessages: SetMessages;
+  eventId?: number | null;
+}): boolean {
+  if (artifactType !== 'html_widget' || !payload) {
+    return false;
+  }
+
+  const { html, title } = payload;
+  const segmentId = `widget-${artifactId}`;
+  const currentOrder = eventId != null ? eventId : ++pairState.contentOrderCounter;
+
+  setMessages((prev: MessageRecord[]) => {
+    const updated = prev.map((msg: MessageRecord) => {
+      if (msg.id !== assistantMessageId) return msg;
+
+      const htmlWidgetProcesses = { ...((msg.htmlWidgetProcesses as Record<string, HtmlWidgetData>) || {}) };
+      const contentSegments = [...((msg.contentSegments as Record<string, unknown>[]) || [])];
+
+      // Prevent duplicates
+      const segmentExists = contentSegments.some((s: Record<string, unknown>) => s.widgetId === segmentId);
+      if (segmentExists) return msg;
+
+      contentSegments.push({
+        type: 'html_widget',
+        widgetId: segmentId,
+        order: currentOrder,
+      });
+
+      const widgetEntry: HtmlWidgetData = {
+        html: html || '',
+        title: title || '',
+      };
+      if (payload.data) {
+        widgetEntry.data = payload.data;
+      }
+      htmlWidgetProcesses[segmentId] = widgetEntry;
+
+      return {
+        ...msg,
+        contentSegments,
+        htmlWidgetProcesses,
       };
     });
 

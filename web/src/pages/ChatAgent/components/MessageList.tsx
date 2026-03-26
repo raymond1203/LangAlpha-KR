@@ -28,6 +28,7 @@ import CreateWorkspaceCard from './CreateWorkspaceCard';
 import StartQuestionCard from './StartQuestionCard';
 import SubagentTaskMessageContent from './SubagentTaskMessageContent';
 import TextMessageContent from './TextMessageContent';
+import InlineWidget from './viewers/InlineWidget';
 import ToolCallMessageContent from './ToolCallMessageContent';
 
 import { TextShimmer } from '@/components/ui/text-shimmer';
@@ -56,6 +57,7 @@ interface ContentSegmentRecord {
   planApprovalId?: string;
   questionId?: string;
   proposalId?: string;
+  widgetId?: string;
 }
 
 /** Subagent info for opening subagent task tabs */
@@ -272,6 +274,7 @@ interface MessageListProps {
   onThumbDown?: (messageId: string, issueCategories: string[], comment: string | null, consentHumanReview: boolean) => Promise<FeedbackResult | null>;
   getFeedbackForMessage?: (messageId: string) => FeedbackResult | null;
   onReportWithAgent?: (instruction: string) => void;
+  onWidgetSendPrompt?: (text: string) => void;
 }
 
 /**
@@ -283,7 +286,7 @@ interface MessageListProps {
  * - Streaming indicators
  * - Error state styling
  */
-function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent }: MessageListProps): React.ReactElement | null {
+function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent, onWidgetSendPrompt }: MessageListProps): React.ReactElement | null {
   const isMobile = useIsMobile();
 
   // Empty state - show when no messages exist (hidden in subagent view)
@@ -367,6 +370,7 @@ function MessageList({ messages, isLoading, isLoadingHistory, hideAvatar, compac
             onThumbDown={onThumbDown}
             getFeedbackForMessage={getFeedbackForMessage}
             onReportWithAgent={onReportWithAgent}
+            onWidgetSendPrompt={onWidgetSendPrompt}
           />
         )
       )}
@@ -404,6 +408,7 @@ interface MessageBubbleProps {
   onThumbDown?: (messageId: string, issueCategories: string[], comment: string | null, consentHumanReview: boolean) => Promise<FeedbackResult | null>;
   getFeedbackForMessage?: (messageId: string) => FeedbackResult | null;
   onReportWithAgent?: (instruction: string) => void;
+  onWidgetSendPrompt?: (text: string) => void;
   isMobile?: boolean;
 }
 
@@ -416,7 +421,7 @@ interface MessageBubbleProps {
  * Wrapped with React.memo — safe because updateMessage() in messageHelpers.ts
  * returns the same object reference for unchanged messages.
  */
-const MessageBubble = memo(function MessageBubble({ message, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent, isMobile }: MessageBubbleProps): React.ReactElement {
+const MessageBubble = memo(function MessageBubble({ message, isLoading, hideAvatar, compactToolCalls, isSubagentView, readOnly, allowFiles, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onEditMessage, onRegenerate, onRetry, onThumbUp, onThumbDown, getFeedbackForMessage, onReportWithAgent, onWidgetSendPrompt, isMobile }: MessageBubbleProps): React.ReactElement {
   const { user } = useUser();
   const { theme } = useTheme();
   const logo = theme === 'light' ? logoDark : logoLight;
@@ -661,6 +666,8 @@ const MessageBubble = memo(function MessageBubble({ message, isLoading, hideAvat
               onRejectCreateWorkspace={onRejectCreateWorkspace}
               onApproveStartQuestion={onApproveStartQuestion}
               onRejectStartQuestion={onRejectStartQuestion}
+              onWidgetSendPrompt={onWidgetSendPrompt}
+              htmlWidgetProcesses={(message.htmlWidgetProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
               textOnly={true}
               readOnly={readOnly}
               allowFiles={allowFiles}
@@ -842,6 +849,8 @@ interface MessageContentSegmentsProps {
   onRejectCreateWorkspace?: (proposalData: Record<string, unknown>) => void;
   onApproveStartQuestion?: (proposalData: Record<string, unknown>) => void;
   onRejectStartQuestion?: (proposalData: Record<string, unknown>) => void;
+  onWidgetSendPrompt?: (text: string) => void;
+  htmlWidgetProcesses?: Record<string, Record<string, unknown>>;
   textOnly?: boolean;
 }
 
@@ -850,7 +859,7 @@ const MAX_IN_PROGRESS_MS = 15000; // max time a tool call can stay in-progress i
 /** Tools that should stay in the live zone for their entire duration (no MAX_IN_PROGRESS_MS cap) */
 const ALWAYS_LIVE_TOOLS = new Set(['TaskOutput']);
 /** Tool calls that are never rendered as visible activity items — they have dedicated UI or are internal */
-const HIDDEN_TOOL_CALL_NAMES = new Set(['TodoWrite', 'task', 'Task', 'SubmitPlan', 'AskUserQuestion', 'create_workspace', 'start_question']);
+const HIDDEN_TOOL_CALL_NAMES = new Set(['TodoWrite', 'task', 'Task', 'SubmitPlan', 'AskUserQuestion', 'create_workspace', 'start_question', 'ShowWidget']);
 
 /** Render block types for the textOnly activity grouping */
 interface ActivityRenderBlock {
@@ -899,6 +908,11 @@ interface NotificationRenderBlock {
   key: string;
   segment: ContentSegmentRecord;
 }
+interface HtmlWidgetRenderBlock {
+  type: 'html_widget';
+  key: string;
+  segment: ContentSegmentRecord;
+}
 
 type RenderBlock =
   | ActivityRenderBlock
@@ -909,9 +923,10 @@ type RenderBlock =
   | UserQuestionRenderBlock
   | CreateWorkspaceRenderBlock
   | StartQuestionRenderBlock
-  | NotificationRenderBlock;
+  | NotificationRenderBlock
+  | HtmlWidgetRenderBlock;
 
-const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, isAssistant = false, compactToolCalls = false, isSubagentView = false, readOnly = false, allowFiles = false, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, textOnly = false }: MessageContentSegmentsProps): React.ReactElement {
+const MessageContentSegments = memo(function MessageContentSegments({ segments, reasoningProcesses, toolCallProcesses, todoListProcesses, subagentTasks, planApprovals = EMPTY_OBJ, userQuestions = EMPTY_OBJ, workspaceProposals = EMPTY_OBJ, questionProposals = EMPTY_OBJ, pendingToolCallChunks = EMPTY_OBJ, isStreaming, hasError, isAssistant = false, compactToolCalls = false, isSubagentView = false, readOnly = false, allowFiles = false, onOpenSubagentTask, onOpenFile, onOpenDir, onToolCallDetailClick, onApprovePlan, onRejectPlan, onPlanDetailClick, onAnswerQuestion, onSkipQuestion, onApproveCreateWorkspace, onRejectCreateWorkspace, onApproveStartQuestion, onRejectStartQuestion, onWidgetSendPrompt, htmlWidgetProcesses = EMPTY_OBJ, textOnly = false }: MessageContentSegmentsProps): React.ReactElement {
   // Force re-render timer for recently-completed tool calls that need minimum exposure
   const [tick, setTick] = useState(0);
   const expiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -984,6 +999,7 @@ const MessageContentSegments = memo(function MessageContentSegments({ segments, 
         if (s.type === 'user_question') return true;
         if (s.type === 'create_workspace') return true;
         if (s.type === 'start_question') return true;
+        if (s.type === 'html_widget') return true;
         if (s.type === 'tool_call') {
           const toolName = toolCallProcesses[s.toolCallId!]?.toolName as string | undefined;
           if (HIDDEN_TOOL_CALL_NAMES.has(toolName || '')) return false;
@@ -1124,6 +1140,9 @@ const MessageContentSegments = memo(function MessageContentSegments({ segments, 
         } else if (seg.type === 'start_question') {
           flushActivity();
           blocks.push({ type: 'start_question', key: `start-question-${seg.proposalId}`, segment: seg });
+        } else if (seg.type === 'html_widget') {
+          flushActivity();
+          blocks.push({ type: 'html_widget', key: `widget-${seg.widgetId}`, segment: seg });
         } else if (seg.type === 'notification') {
           flushActivity();
           blocks.push({ type: 'notification', key: `notification-${seg.order}`, segment: seg });
@@ -1252,6 +1271,21 @@ const MessageContentSegments = memo(function MessageContentSegments({ segments, 
                 isStreaming={!!(isStreaming && blockIdx === lastTextBlockIdx && !hasAnyTrulyInProgress)}
                 hasError={!!hasError}
                 onOpenFile={onOpenFile}
+              />
+            );
+          }
+
+          if (block.type === 'html_widget') {
+            const widgetSeg = (block as HtmlWidgetRenderBlock).segment;
+            const widgetData = (htmlWidgetProcesses as Record<string, { html: string; title: string; data?: Record<string, string> }> | undefined)?.[widgetSeg.widgetId!];
+            if (!widgetData) return null;
+            return (
+              <InlineWidget
+                key={block.key}
+                html={widgetData.html}
+                title={widgetData.title}
+                onSendPrompt={onWidgetSendPrompt}
+                data={widgetData.data}
               />
             );
           }
