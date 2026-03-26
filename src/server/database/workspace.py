@@ -685,9 +685,15 @@ async def get_preview_command(
     workspace_id: str, port: int
 ) -> Optional[str]:
     """Read a preview server command from ``artifacts.preview_servers``."""
-    workspace = await get_workspace(workspace_id)
-    if not workspace:
+    try:
+        async with get_db_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT artifacts->'preview_servers'->>%s FROM workspaces WHERE workspace_id = %s",
+                    (str(port), workspace_id),
+                )
+                row = await cur.fetchone()
+                return row[0] if row else None
+    except Exception:
+        logger.debug("Failed to read preview command", exc_info=True)
         return None
-    artifacts = workspace.get("artifacts") or {}
-    servers = artifacts.get("preview_servers") or {}
-    return servers.get(str(port))

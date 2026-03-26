@@ -81,15 +81,16 @@ class DaytonaRuntime(SandboxRuntime):
     async def fetch_working_dir(self) -> str:
         """Fetch and cache the sandbox working directory (must be awaited).
 
-        Prefers the explicitly configured default_working_dir over the SDK
-        result, which may return the Daytona user's home (/home/daytona)
-        instead of our snapshot's configured WORKDIR (/home/workspace).
+        When a snapshot is in use, prefers the configured default_working_dir
+        (/home/workspace) over the SDK result, which may return the Daytona
+        user's home (/home/daytona).  Without a snapshot the SDK-reported
+        directory is authoritative.
         """
         if self._working_dir is None:
-            self._working_dir = (
-                self._default_working_dir
-                or await self._sandbox.get_work_dir()
-            )
+            if self.snapshot_name and self._default_working_dir:
+                self._working_dir = self._default_working_dir
+            else:
+                self._working_dir = await self._sandbox.get_work_dir()
         return self._working_dir
 
     # -- Lifecycle --

@@ -2272,7 +2272,7 @@ class PTCSandbox:
         port: int,
         *,
         expires_in: int = 3600,
-        startup_delay: float = 10.0,
+        startup_timeout: float = 10.0,
     ) -> PreviewInfo:
         """Start a server command in background and return a signed preview URL.
 
@@ -2280,7 +2280,7 @@ class PTCSandbox:
         If the port is already reachable through the Daytona proxy the server
         start is skipped entirely, making this method safe to call repeatedly.
 
-        Polls for up to ``startup_delay`` seconds to confirm the port is
+        Polls for up to ``startup_timeout`` seconds to confirm the port is
         actually listening before generating the URL.  If the port never
         becomes reachable the URL is still returned — the frontend
         health-check polling handles dead-server detection.
@@ -2312,23 +2312,23 @@ class PTCSandbox:
             # Poll until the port is listening.
             # Uses bash built-in /dev/tcp (no external tools like nc needed) via
             # a single lightweight runtime.exec call with an internal retry loop.
-            max_attempts = max(int(startup_delay / 0.5), 1)
+            max_attempts = max(int(startup_timeout / 0.5), 1)
             try:
                 result = await self._runtime_call(
                     self.runtime.exec,
                     f"bash -c 'for i in $(seq 1 {max_attempts}); do"
                     f" (echo > /dev/tcp/localhost/{port}) 2>/dev/null && echo READY && exit 0;"
                     f" sleep 0.5; done; echo TIMEOUT'",
-                    timeout=int(startup_delay) + 5,
+                    timeout=int(startup_timeout) + 5,
                     retry_policy=RetryPolicy.SAFE,
                 )
                 if "READY" in result.stdout:
                     logger.info("Preview server port ready", port=port)
                 else:
                     logger.warning(
-                        "Preview server port not reachable after startup delay",
+                        "Preview server port not reachable after startup timeout",
                         port=port,
-                        startup_delay=startup_delay,
+                        startup_timeout=startup_timeout,
                     )
             except Exception:
                 logger.warning(
