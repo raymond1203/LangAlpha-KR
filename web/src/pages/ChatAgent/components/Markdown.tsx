@@ -11,6 +11,7 @@ import { Copy, Check } from 'lucide-react';
 import { useTheme } from '@/contexts/ThemeContext';
 import WorkspaceImage from './WorkspaceImage';
 import { isFilePath, isImagePath, normalizeFilePath } from './FileCard';
+import CitationBubble from './CitationBubble';
 
 interface CodeBlockProps {
   language: string | null;
@@ -321,6 +322,7 @@ const CHAT_COMPONENTS = {
   code: chatCode, pre: chatPre,
   blockquote: chatBlockquote, a: chatA, hr: chatHr,
   table: chatTable, thead: chatThead, tbody: chatTbody, tr: chatTr, th: chatTh, td: chatTd,
+  'cite-bubble': CitationBubble,
 };
 
 const PANEL_COMPONENTS = {
@@ -329,6 +331,7 @@ const PANEL_COMPONENTS = {
   code: panelCode, pre: panelPre,
   a: panelA, blockquote: panelBlockquote, hr: panelHr,
   table: panelTable, thead: panelThead, tr: panelTr, th: panelTh, td: panelTd,
+  'cite-bubble': CitationBubble,
 };
 
 // Compact table components -- reuse panel styles for consistency
@@ -352,6 +355,7 @@ const COMPACT_COMPONENTS = {
   code: compactCode, pre: compactPre,
   a: panelA, blockquote: panelBlockquote, hr: panelHr,
   table: compactTable, thead: compactThead, tr: compactTr, th: compactTh, td: compactTd,
+  'cite-bubble': CitationBubble,
 };
 
 interface VariantConfig {
@@ -501,6 +505,26 @@ function normalizeLatexDelimiters(content: string): string {
   return content;
 }
 
+/**
+ * Convert inline citation patterns ([label](url)) into <cite-bubble> HTML tags.
+ * rehype-raw will parse these into the AST and the CitationBubble component renders them.
+ */
+function escapeHtmlAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function transformCitationBubbles(content: string): string {
+  if (!content || typeof content !== 'string') return content;
+  return content.replace(
+    /\(\[([^\]]+)\]\((https?:\/\/[^)]+)\)\)/g,
+    (_, label, url) => {
+      // Encode $ as %24 so escapeCurrencyDollars won't mangle URLs (e.g. ?price=$100)
+      const safeUrl = url.replace(/\$/g, '%24');
+      return `<cite-bubble label="${escapeHtmlAttr(label)}" href="${escapeHtmlAttr(safeUrl)}"></cite-bubble>`;
+    }
+  );
+}
+
 type MarkdownVariant = 'chat' | 'panel' | 'compact';
 
 interface MarkdownProps {
@@ -514,7 +538,7 @@ interface MarkdownProps {
 function Markdown({ content, variant = 'panel', className = '', style, onOpenFile }: MarkdownProps): React.ReactElement {
   const config = VARIANTS[variant];
   const processed = useMemo(
-    () => normalizeLatexDelimiters(escapeCurrencyDollars(fixMarkdownTables(stripFrontMatter(content)))),
+    () => normalizeLatexDelimiters(escapeCurrencyDollars(transformCitationBubbles(fixMarkdownTables(stripFrontMatter(content))))),
     [content]
   );
 
@@ -560,4 +584,5 @@ function Markdown({ content, variant = 'panel', className = '', style, onOpenFil
   );
 }
 
+export { transformCitationBubbles, escapeHtmlAttr };
 export default Markdown;

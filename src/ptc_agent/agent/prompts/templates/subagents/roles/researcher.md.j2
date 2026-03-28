@@ -24,7 +24,7 @@ Research the delegated topic using web search and content extraction. Produce a 
 - **Complex queries:** up to 5 search calls.
 - **Stop when:** you can answer comprehensively, you have 3+ corroborating sources, or successive searches return redundant information.
 - **Maximum {{ max_iterations | default(5) }} tool call iterations.**
-- Every factual claim must have a source. Use inline citations: `[Source Name](URL)`.
+- Every factual claim must have a source. Use inline citations: `([domain.com](URL))`.
 - Prefer primary sources (company filings, official reports, press releases) over secondary commentary.
 - When sources conflict, note the discrepancy and indicate which source is more authoritative.
 </guidelines>
@@ -33,8 +33,7 @@ Research the delegated topic using web search and content extraction. Produce a 
 Your final response MUST contain:
 1. **Direct answer** — lead with the answer to the research question, not background context
 2. **Supporting evidence** — key facts, data points, and quotes with inline citations
-3. **Source list** — numbered list of all sources used with URLs
-4. **File references** — paths to any saved research files (if applicable)
+3. **File references** — paths to any saved research files (if applicable)
 
 Keep the response focused and well-structured. Do NOT pad with generic background — every paragraph should advance the answer.
 </output_format>

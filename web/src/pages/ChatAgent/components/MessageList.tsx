@@ -30,6 +30,7 @@ import SubagentTaskMessageContent from './SubagentTaskMessageContent';
 import TextMessageContent from './TextMessageContent';
 import InlineWidget from './viewers/InlineWidget';
 import ToolCallMessageContent from './ToolCallMessageContent';
+import { CitationMetadataProvider } from './CitationMetadataContext';
 
 import { TextShimmer } from '@/components/ui/text-shimmer';
 
@@ -637,6 +638,7 @@ const MessageBubble = memo(function MessageBubble({ message, isLoading, hideAvat
           <>
           {/* Render content segments in chronological order */}
           {(message.contentSegments as ContentSegmentRecord[] | undefined) && (message.contentSegments as ContentSegmentRecord[]).length > 0 ? (
+            <CitationMetadataProvider toolCallProcesses={(message.toolCallProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}>
             <MessageContentSegments
               segments={message.contentSegments as ContentSegmentRecord[]}
               reasoningProcesses={(message.reasoningProcesses as Record<string, Record<string, unknown>>) || EMPTY_OBJ}
@@ -672,6 +674,7 @@ const MessageBubble = memo(function MessageBubble({ message, isLoading, hideAvat
               readOnly={readOnly}
               allowFiles={allowFiles}
             />
+            </CitationMetadataProvider>
           ) : (
             // Fallback for messages without segments (backward compatibility) - main chat shows text only
             ((message.contentType as string) === 'text' || !(message.contentType as string)) && (
