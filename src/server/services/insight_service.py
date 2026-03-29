@@ -475,11 +475,13 @@ class InsightService:
         seen_symbols: set[str] = set()
         lines: list[str] = []
 
-        # Watchlist items
+        # Watchlist items (concurrent fetch to avoid N+1)
         try:
             watchlists = await get_user_watchlists(user_id)
-            for wl in watchlists:
-                items = await get_watchlist_items(wl["watchlist_id"], user_id)
+            items_lists = await asyncio.gather(*[
+                get_watchlist_items(wl["watchlist_id"], user_id) for wl in watchlists
+            ])
+            for items in items_lists:
                 for item in items:
                     sym = item.get("symbol", "").upper()
                     if sym and sym not in seen_symbols and len(seen_symbols) < self._max_symbols:

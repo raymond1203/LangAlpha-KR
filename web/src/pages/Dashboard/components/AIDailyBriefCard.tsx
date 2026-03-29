@@ -128,6 +128,7 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
   const [loading, setLoading] = useState(!insightsCache);
   const [expanded, setExpanded] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -162,6 +163,7 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
     e.stopPropagation();
     if (generating) return;
     setGenerating(true);
+    setGenerateError(null);
     try {
       const row = await generatePersonalizedInsight() as unknown as Insight;
       if (!row?.market_insight_id) return;
@@ -177,12 +179,13 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
           try {
             const detail = await getInsightDetail(insightId) as unknown as Insight & { status?: string };
             if (detail.status === 'completed') {
-              // Prepend to insights list and update cache (functional update to avoid stale closure)
+              // Prepend to insights list (functional update to avoid stale closure)
               setInsights(prev => {
                 const updated = [detail, ...prev.filter((ins) => ins.market_insight_id !== insightId)];
-                insightsCache = updated;
                 return updated;
               });
+              // Update module cache outside the updater (side-effect-free updater)
+              insightsCache = null; // invalidate — next mount will refetch
               onReadFull?.(insightId);
               return;
             }
@@ -198,6 +201,16 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
       await poll();
     } catch (err: unknown) {
       console.error('[Insights] Failed to start personalized brief:', err);
+      const status = (err as Record<string, unknown>)?.response
+        ? ((err as Record<string, unknown>).response as Record<string, unknown>)?.status
+        : undefined;
+      if (status === 409) {
+        setGenerateError('Brief is already being generated. Try again in a moment.');
+      } else if (status === 429) {
+        setGenerateError('Credit limit reached. Upgrade to generate more briefs.');
+      } else {
+        setGenerateError('Failed to generate brief. Please try again.');
+      }
     } finally {
       setGenerating(false);
     }
@@ -389,6 +402,9 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
                   {generating ? 'Generating...' : 'Generate Personalized Brief'}
                 </button>
               </div>
+              {generateError && (
+                <p className="text-xs mt-1" style={{ color: 'var(--color-loss, #ef4444)' }}>{generateError}</p>
+              )}
               {older.length > 0 && (
                 <button
                   onClick={(e) => {
@@ -446,6 +462,9 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
                 <ArrowRight size={16} className="group-hover/btn:translate-x-1 transition-transform" />
               </button>
             </div>
+            {generateError && (
+              <p className="text-xs text-right" style={{ color: 'var(--color-loss, #ef4444)' }}>{generateError}</p>
+            )}
 
             {/* Stack indicator */}
             {older.length > 0 && (
