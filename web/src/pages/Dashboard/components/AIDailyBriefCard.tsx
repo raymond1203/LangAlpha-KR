@@ -190,12 +190,18 @@ function AIDailyBriefCard({ onReadFull }: AIDailyBriefCardProps) {
               return;
             }
             if (detail.status === 'failed') {
-              console.error('[Insights] Personalized brief generation failed');
+              if (mountedRef.current) {
+                setGenerateError('Brief generation failed. Please try again.');
+              }
               return;
             }
           } catch {
             // 404 means row not visible yet, keep polling
           }
+        }
+        // Poll exhausted without completion
+        if (mountedRef.current) {
+          setGenerateError('Generation timed out. Please try again later.');
         }
       };
       await poll();
