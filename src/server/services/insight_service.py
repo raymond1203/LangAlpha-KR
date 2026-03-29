@@ -127,9 +127,13 @@ def _extract_json_string(text: str) -> str | None:
         return stripped
 
     # 2. Fenced JSON block (search anywhere, not just whole-string)
-    fence_match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\s*\n?```", stripped, re.DOTALL)
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\s*\n?```", stripped, re.DOTALL)
     if fence_match:
-        return fence_match.group(1).strip()
+        block = fence_match.group(1).strip()
+        start = block.find("{")
+        end = block.rfind("}")
+        if start != -1 and end > start:
+            return block[start : end + 1]
 
     # 3. Outermost braces
     start = stripped.find("{")
@@ -703,8 +707,9 @@ class InsightService:
         insight_id = row["market_insight_id"]
 
         try:
-            raw_text = await _run_flash_agent(
-                instruction + "\n\n" + _JSON_GUIDELINES
+            raw_text = await asyncio.wait_for(
+                _run_flash_agent(instruction + "\n\n" + _JSON_GUIDELINES),
+                timeout=self._generation_timeout,
             )
             parsed = await self._extract_with_fallback(raw_text)
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -724,6 +729,20 @@ class InsightService:
                 f"id={insight_id}, time={elapsed_ms}ms"
             )
 
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            logger.error(
+                f"[MARKET_INSIGHT] {job_type} timed out: "
+                f"id={insight_id}, time={elapsed_ms}ms"
+            )
+            try:
+                await asyncio.shield(
+                    insight_db.fail_market_insight(
+                        insight_id, f"Timeout after {elapsed_ms}ms"
+                    )
+                )
+            except Exception:
+                logger.warning(f"[MARKET_INSIGHT] Failed to mark {insight_id} as failed")
         except Exception as e:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             logger.error(

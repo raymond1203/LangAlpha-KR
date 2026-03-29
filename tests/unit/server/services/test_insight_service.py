@@ -597,6 +597,47 @@ class TestCatchupIfNeeded:
 
 
 # ---------------------------------------------------------------------------
+# _generate_insight (system scheduled)
+# ---------------------------------------------------------------------------
+
+class TestGenerateInsight:
+    """Test scheduled system insight generation."""
+
+    def setup_method(self):
+        InsightService._instance = None
+
+    def teardown_method(self):
+        InsightService._instance = None
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.insight_service._run_flash_agent", new_callable=AsyncMock)
+    @patch("src.server.services.insight_service.insight_db")
+    async def test_timeout_marks_row_failed(self, mock_db, mock_agent):
+        """A hung flash agent triggers timeout and marks the DB row as failed."""
+        svc = InsightService()
+        svc._generation_timeout = 0.1  # 100ms timeout
+
+        mock_db.create_market_insight = AsyncMock(
+            return_value={"market_insight_id": "test-id", "status": "generating"}
+        )
+        mock_db.fail_market_insight = AsyncMock()
+
+        # Agent hangs forever
+        async def hang_forever(*a, **kw):
+            await asyncio.sleep(999)
+
+        mock_agent.side_effect = hang_forever
+
+        now_et = datetime(2025, 3, 15, 14, 0, tzinfo=ET)
+        await svc._generate_insight("market_update", now_et)
+
+        mock_db.fail_market_insight.assert_called_once()
+        call_args = mock_db.fail_market_insight.call_args
+        assert call_args[0][0] == "test-id"
+        assert "Timeout" in call_args[0][1]
+
+
+# ---------------------------------------------------------------------------
 # _extract_json_string (utility)
 # ---------------------------------------------------------------------------
 
@@ -625,6 +666,14 @@ class TestExtractJsonString:
         inner = '{"key": "value"}'
         text = f"Here is the result: {inner} done."
         assert _extract_json_string(text) == inner
+
+    def test_nested_json_in_fence(self):
+        """Fenced JSON with nested objects (topics, news_items) parses correctly."""
+        inner = '{"headline": "Test", "topics": [{"text": "AI", "trend": "up"}]}'
+        text = f"```json\n{inner}\n```"
+        result = _extract_json_string(text)
+        parsed = json.loads(result)
+        assert parsed["topics"][0]["text"] == "AI"
 
     def test_no_json_returns_none(self):
         assert _extract_json_string("no json here") is None
