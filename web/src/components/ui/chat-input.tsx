@@ -267,13 +267,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   const otherPref = (preferences as Record<string, Record<string, unknown>> | null)?.other_preference;
   const starredModels = (otherPref?.starred_models as string[] | undefined) || [];
   const preferredModel = (otherPref?.preferred_model as string | undefined) || null;
+  const preferredFlashModel = (otherPref?.preferred_flash_model as string | undefined) || null;
   const [message, setMessage] = useState('');
   const [attachedFiles, setAttachedFiles] = useState<FileAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [planMode, setPlanMode] = useState(false);
 
-  // Model selector state
-  const effectiveInitialModel = initialModel || preferredModel;
+  // Model selector state — use flash model preference when in flash mode
+  const modePreferredModel = mode === 'fast' ? (preferredFlashModel || preferredModel) : preferredModel;
+  const effectiveInitialModel = initialModel || modePreferredModel;
   const [selectedModel, setSelectedModel] = useState<string | null>(effectiveInitialModel);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   const [fastMode, setFastMode] = useState(false);

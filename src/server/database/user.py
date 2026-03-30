@@ -18,6 +18,17 @@ from src.server.utils.db import UpdateQueryBuilder
 
 logger = logging.getLogger(__name__)
 
+# Computed columns appended to user SELECT queries for gate logic.
+def _gate_cols(alias: str = "users") -> str:
+    """Return the has_api_key + has_oauth_token EXISTS subqueries for a given table alias."""
+    return (
+        f"EXISTS (SELECT 1 FROM user_api_keys WHERE user_api_keys.user_id = {alias}.user_id) AS has_api_key,\n"
+        f"                    EXISTS (SELECT 1 FROM user_oauth_tokens WHERE user_oauth_tokens.user_id = {alias}.user_id) AS has_oauth_token"
+    )
+
+_HAS_API_KEY = "EXISTS (SELECT 1 FROM user_api_keys WHERE user_api_keys.user_id = users.user_id) AS has_api_key"
+_HAS_OAUTH = "EXISTS (SELECT 1 FROM user_oauth_tokens WHERE user_oauth_tokens.user_id = users.user_id) AS has_oauth_token"
+
 
 # ==================== User Operations ====================
 
@@ -67,8 +78,12 @@ async def create_user(
                 VALUES (%s, %s, %s, %s, %s, %s, FALSE, NOW(), NOW())
                 RETURNING
                     user_id, email, name, avatar_url, timezone, locale,
-                    onboarding_completed, auth_provider,
-                    created_at, updated_at, last_login_at
+                    onboarding_completed,
+                    COALESCE(personalization_completed, FALSE) AS personalization_completed,
+                    auth_provider,
+                    created_at, updated_at, last_login_at,
+                    """ + _HAS_API_KEY + """,
+                    """ + _HAS_OAUTH + """
             """, (user_id, email, name, avatar_url, timezone, locale))
 
             result = await cur.fetchone()
@@ -92,8 +107,12 @@ async def find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
             await cur.execute("""
                 SELECT
                     user_id, email, name, avatar_url, timezone, locale,
-                    onboarding_completed, auth_provider,
-                    created_at, updated_at, last_login_at
+                    onboarding_completed,
+                    COALESCE(personalization_completed, FALSE) AS personalization_completed,
+                    auth_provider,
+                    created_at, updated_at, last_login_at,
+                    """ + _HAS_API_KEY + """,
+                    """ + _HAS_OAUTH + """
                 FROM users
                 WHERE email = %s
                 LIMIT 1
@@ -115,8 +134,12 @@ async def migrate_user_id(old_user_id: str, new_user_id: str) -> Optional[Dict[s
                 WHERE user_id = %s
                 RETURNING
                     user_id, email, name, avatar_url, timezone, locale,
-                    onboarding_completed, auth_provider,
-                    created_at, updated_at, last_login_at
+                    onboarding_completed,
+                    COALESCE(personalization_completed, FALSE) AS personalization_completed,
+                    auth_provider,
+                    created_at, updated_at, last_login_at,
+                    """ + _HAS_API_KEY + """,
+                    """ + _HAS_OAUTH + """
             """, (new_user_id, old_user_id))
             result = await cur.fetchone()
             if result:
@@ -160,8 +183,12 @@ async def create_user_from_auth(
                     updated_at = NOW()
                 RETURNING
                     user_id, email, name, avatar_url, timezone, locale,
-                    onboarding_completed, auth_provider,
-                    created_at, updated_at, last_login_at
+                    onboarding_completed,
+                    COALESCE(personalization_completed, FALSE) AS personalization_completed,
+                    auth_provider,
+                    created_at, updated_at, last_login_at,
+                    """ + _HAS_API_KEY + """,
+                    """ + _HAS_OAUTH + """
             """, (user_id, email, name, avatar_url, auth_provider, timezone, locale))
             result = await cur.fetchone()
 
@@ -192,8 +219,12 @@ async def get_user(user_id: str) -> Optional[Dict[str, Any]]:
             await cur.execute("""
                 SELECT
                     user_id, email, name, avatar_url, timezone, locale,
-                    onboarding_completed, auth_provider,
-                    created_at, updated_at, last_login_at
+                    onboarding_completed,
+                    COALESCE(personalization_completed, FALSE) AS personalization_completed,
+                    auth_provider,
+                    created_at, updated_at, last_login_at,
+                    """ + _HAS_API_KEY + """,
+                    """ + _HAS_OAUTH + """
                 FROM users
                 WHERE user_id = %s
             """, (user_id,))
@@ -210,6 +241,7 @@ async def update_user(
     timezone: Optional[str] = None,
     locale: Optional[str] = None,
     onboarding_completed: Optional[bool] = None,
+    personalization_completed: Optional[bool] = None,
     last_login_at: Optional[datetime] = None,
     auth_provider: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -226,6 +258,7 @@ async def update_user(
         timezone: New timezone
         locale: New locale
         onboarding_completed: New onboarding status
+        personalization_completed: New personalization status
         last_login_at: New last login timestamp
         auth_provider: Authentication provider (e.g. google, github, email)
 
@@ -239,6 +272,7 @@ async def update_user(
     builder.add_field("timezone", timezone)
     builder.add_field("locale", locale)
     builder.add_field("onboarding_completed", onboarding_completed)
+    builder.add_field("personalization_completed", personalization_completed)
     builder.add_field("last_login_at", last_login_at)
     builder.add_field("auth_provider", auth_provider)
 
@@ -247,8 +281,12 @@ async def update_user(
 
     returning_columns = [
         "user_id", "email", "name", "avatar_url", "timezone", "locale",
-        "onboarding_completed", "auth_provider",
+        "onboarding_completed",
+        "COALESCE(personalization_completed, FALSE) AS personalization_completed",
+        "auth_provider",
         "created_at", "updated_at", "last_login_at",
+        _HAS_API_KEY,
+        _HAS_OAUTH,
     ]
 
     query, params = builder.build(
@@ -310,8 +348,12 @@ async def upsert_user(
                     updated_at = NOW()
                 RETURNING
                     user_id, email, name, avatar_url, timezone, locale,
-                    onboarding_completed, auth_provider,
-                    created_at, updated_at, last_login_at
+                    onboarding_completed,
+                    COALESCE(personalization_completed, FALSE) AS personalization_completed,
+                    auth_provider,
+                    created_at, updated_at, last_login_at,
+                    """ + _HAS_API_KEY + """,
+                    """ + _HAS_OAUTH + """
             """, (user_id, email, name, avatar_url, timezone, locale))
 
             result = await cur.fetchone()
@@ -515,8 +557,11 @@ async def get_user_with_preferences(user_id: str) -> Optional[Dict[str, Any]]:
             await cur.execute("""
                 SELECT
                     u.user_id, u.email, u.name, u.avatar_url, u.timezone, u.locale,
-                    u.onboarding_completed, u.auth_provider,
+                    u.onboarding_completed,
+                    COALESCE(u.personalization_completed, FALSE) AS personalization_completed,
+                    u.auth_provider,
                     u.created_at, u.updated_at, u.last_login_at,
+                    """ + _gate_cols("u") + """,
                     p.user_preference_id, p.risk_preference, p.investment_preference,
                     p.agent_preference, p.other_preference,
                     p.created_at as pref_created_at, p.updated_at as pref_updated_at
@@ -538,6 +583,9 @@ async def get_user_with_preferences(user_id: str) -> Optional[Dict[str, Any]]:
                 'timezone': result['timezone'],
                 'locale': result['locale'],
                 'onboarding_completed': result['onboarding_completed'],
+                'personalization_completed': result['personalization_completed'],
+                'has_api_key': result['has_api_key'],
+                'has_oauth_token': result['has_oauth_token'],
                 'auth_provider': result['auth_provider'],
                 'created_at': result['created_at'],
                 'updated_at': result['updated_at'],

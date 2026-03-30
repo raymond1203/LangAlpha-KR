@@ -2,6 +2,8 @@
   "gpt-5.4": {
     "model_id": "gpt-5.4",
     "provider": "openai",
+    "display_name": "GPT-5.4",
+    "visible": true,
     "parameters": {
       "reasoning": {
         "effort": "medium",
@@ -12,6 +14,8 @@
   "gpt-5.4-mini": {
     "model_id": "gpt-5.4-mini",
     "provider": "openai",
+    "display_name": "GPT-5.4 Mini",
+    "visible": true,
     "parameters": {
       "reasoning": {
         "effort": "medium",
@@ -22,6 +26,8 @@
   "gpt-5.4-nano": {
     "model_id": "gpt-5.4-nano",
     "provider": "openai",
+    "display_name": "GPT-5.4 Nano",
+    "visible": true,
     "parameters": {
       "reasoning": {
         "effort": "medium",

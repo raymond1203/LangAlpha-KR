@@ -198,6 +198,7 @@ class AgentConfig(BaseModel):
     llm_definition: LLMDefinition | None = Field(default=None, exclude=True)
     llm_client: Any | None = Field(default=None, exclude=True)  # BaseChatModel instance
     subsidiary_llm_clients: dict[str, Any] = Field(default_factory=dict, exclude=True)
+    fallback_llm_clients: list[Any] | None = Field(default=None, exclude=True)  # Pre-resolved fallback instances
     config_file_dir: Path | None = Field(
         default=None, exclude=True
     )  # For path resolution

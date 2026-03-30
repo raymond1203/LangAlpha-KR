@@ -588,11 +588,12 @@ test.describe('Portfolio CRUD', () => {
 // Onboarding
 // ---------------------------------------------------------------------------
 
-test.describe('Onboarding', () => {
-  test('onboarding dialog appears when incomplete', async ({ page }) => {
-    // Do NOT suppress onboarding for this test -- override beforeEach
+test.describe('Personalization', () => {
+  test('personalization banner appears when onboarding incomplete', async ({ page }) => {
+    // Do NOT suppress personalization for this test -- override beforeEach
     await page.addInitScript(() => {
       localStorage.removeItem('langalpha-onboarding-ignored-at');
+      localStorage.removeItem('langalpha-personalization-snoozed-at');
     });
 
     await mockAPI(page, dashboardOverrides({
@@ -601,35 +602,28 @@ test.describe('Onboarding', () => {
         name: 'Test User',
         email: 'test@test.com',
         onboarding_completed: false,
+        has_api_key: true,
+        has_oauth_token: false,
       },
     }));
 
     await page.goto('/dashboard');
 
-    // Onboarding dialog should appear
+    // Personalization banner should appear
     await expect(
-      page.locator('text=Preference Information Incomplete'),
-    ).toBeVisible();
-    await expect(
-      page.locator(
-        'text=Your preference information is not complete',
-      ),
+      page.locator('text=Personalize your experience'),
     ).toBeVisible();
 
-    // "Ignore for 24 hours" and "Proceed" buttons present
-    await expect(
-      page.getByRole('button', { name: 'Ignore for 24 hours' }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'Proceed' }),
-    ).toBeVisible();
+    // Dismiss button present (X icon with aria-label)
+    const dismissBtn = page.getByRole('button', { name: 'Close' });
+    await expect(dismissBtn).toBeVisible();
 
-    // Click "Ignore for 24 hours" to dismiss
-    await page.getByRole('button', { name: 'Ignore for 24 hours' }).click();
+    // Click dismiss to close the banner
+    await dismissBtn.click();
 
-    // Dialog should close
+    // Banner should disappear
     await expect(
-      page.locator('text=Preference Information Incomplete'),
+      page.locator('text=Personalize your experience'),
     ).not.toBeVisible();
   });
 });

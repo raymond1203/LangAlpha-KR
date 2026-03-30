@@ -202,11 +202,12 @@ async def _llm_extract_fallback(raw_text: str) -> dict:
     return result.model_dump() if hasattr(result, "model_dump") else dict(result)
 
 
-async def _run_flash_agent(prompt: str) -> str:
+async def _run_flash_agent(prompt: str, user_id: str | None = None) -> str:
     """Run the flash agent graph and return raw text output.
 
-    The agent generates free-form text; structured extraction is done
-    separately via make_api_call with response_schema.
+    When *user_id* is provided the LLM is resolved through the normal
+    OAuth / BYOK chain so self-hosted deployments without a system API
+    key can still generate insights using the user's own credentials.
 
     Returns:
         Raw text content from the agent's last AI message.
@@ -220,7 +221,16 @@ async def _run_flash_agent(prompt: str) -> str:
     if not agent_config:
         raise RuntimeError("Agent config not initialized")
 
-    graph = build_flash_graph(config=agent_config)
+    config = agent_config
+    if user_id:
+        try:
+            from src.server.handlers.chat.llm_config import resolve_llm_config
+
+            config = await resolve_llm_config(config, user_id, request_model=None, is_byok=True, mode="flash")
+        except Exception as exc:
+            logger.warning(f"[MARKET_INSIGHT] Could not resolve user LLM, falling back to system: {exc}")
+
+    graph = build_flash_graph(config=config)
     input_state = {"messages": [HumanMessage(content=prompt)]}
     result = await graph.ainvoke(input_state)
 
@@ -421,7 +431,7 @@ class InsightService:
         start_time = time.monotonic()
         try:
             raw_text = await asyncio.wait_for(
-                _run_flash_agent(prompt + "\n\n" + _JSON_GUIDELINES),
+                _run_flash_agent(prompt + "\n\n" + _JSON_GUIDELINES, user_id=user_id),
                 timeout=self._generation_timeout,
             )
             parsed = await self._extract_with_fallback(raw_text)
@@ -699,6 +709,11 @@ class InsightService:
         logger.info(f"[MARKET_INSIGHT] Starting {job_type} (flash agent)")
         start_time = time.monotonic()
 
+        # When auth is off (local dev / self-hosted), use the local dev user's
+        # credentials so insights work without a system API key.
+        from src.config.settings import AUTH_ENABLED, LOCAL_DEV_USER_ID
+        system_user_id = None if AUTH_ENABLED else LOCAL_DEV_USER_ID
+
         row = await insight_db.create_market_insight(
             model="flash",
             type=job_type,
@@ -708,7 +723,7 @@ class InsightService:
 
         try:
             raw_text = await asyncio.wait_for(
-                _run_flash_agent(instruction + "\n\n" + _JSON_GUIDELINES),
+                _run_flash_agent(instruction + "\n\n" + _JSON_GUIDELINES, user_id=system_user_id),
                 timeout=self._generation_timeout,
             )
             parsed = await self._extract_with_fallback(raw_text)

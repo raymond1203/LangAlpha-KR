@@ -1024,7 +1024,7 @@
       "env_key": "OPENAI_API_KEY",
       "access_type": "api_key",
       "byok_eligible": true,
-      "use_response_api": false,
+      "use_response_api": true,
       "display_name": "OpenAI",
       "variants": {
         "codex-oauth": {
@@ -1213,10 +1213,8 @@
       "env_key": "lm-studio",
       "access_type": "api_key",
       "dynamic_models": true,
-      "display_name": "LM Studio",
-      "default_parameters": {
-        "temperature": 0
-      }
+      "local_only": true,
+      "display_name": "LM Studio"
     },
     "vllm": {
       "sdk": "openai",
@@ -1224,8 +1222,18 @@
       "env_key": null,
       "access_type": "api_key",
       "dynamic_models": true,
+      "local_only": true,
       "use_response_api": true,
       "display_name": "vLLM"
+    },
+    "ollama": {
+      "sdk": "anthropic",
+      "base_url": "http://{HOST_IP}:11434",
+      "env_key": null,
+      "access_type": "api_key",
+      "dynamic_models": true,
+      "local_only": true,
+      "display_name": "Ollama"
     }
   },
   "infrastructure_pricing": {

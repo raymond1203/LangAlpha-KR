@@ -10,6 +10,8 @@ export const defaultResponses = {
     name: 'Test User',
     email: 'test@test.com',
     onboarding_completed: true,
+    has_api_key: true,
+    has_oauth_token: false,
   },
   'GET /users/me/preferences': {
     theme: 'dark',

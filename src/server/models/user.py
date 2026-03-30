@@ -146,6 +146,9 @@ class UserUpdate(UserBase):
     onboarding_completed: Optional[bool] = Field(
         None, description="Whether onboarding is completed"
     )
+    personalization_completed: Optional[bool] = Field(
+        None, description="Whether personalization wizard is completed"
+    )
 
 
 class UserResponse(UserBase):
@@ -154,6 +157,18 @@ class UserResponse(UserBase):
     user_id: str = Field(description="User ID")
     onboarding_completed: bool = Field(
         default=False, description="Whether onboarding is completed"
+    )
+    personalization_completed: bool = Field(
+        default=False, description="Whether personalization wizard is completed"
+    )
+    has_api_key: bool = Field(
+        default=False, description="Whether user has at least one API key configured"
+    )
+    has_oauth_token: bool = Field(
+        default=False, description="Whether user has at least one OAuth token connected"
+    )
+    invitation_redeemed: bool = Field(
+        default=False, description="Whether user has redeemed an invitation code"
     )
     auth_provider: Optional[str] = Field(
         None, description="Authentication provider (e.g. google, github, email)"

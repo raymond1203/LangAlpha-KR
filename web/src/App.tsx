@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Sidebar from './components/Sidebar/Sidebar';
 import BottomTabBar from './components/BottomTabBar/BottomTabBar';
@@ -8,7 +8,10 @@ import SharedChatView from './pages/SharedChat/SharedChatView';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from './contexts/AuthContext';
 import { useIsMobile } from './hooks/useIsMobile';
+import { useSetupGate } from './hooks/useSetupGate';
 import './App.css';
+
+const SetupWizard = React.lazy(() => import('./pages/Setup/SetupWizard'));
 
 /** Handles the OAuth redirect from Supabase — shows a spinner then redirects to /dashboard. */
 function AuthCallback() {
@@ -47,12 +50,45 @@ function RootRedirect() {
   return <Navigate to="/dashboard" replace />;
 }
 
-function App() {
-  const { isLoggedIn, isInitialized } = useAuth();
-  const { t } = useTranslation();
+/**
+ * Authenticated app shell — sidebar + main content.
+ * Redirects to the setup wizard if the user hasn't configured API keys.
+ */
+function AuthenticatedShell() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const hideTabBar = isMobile && location.pathname.startsWith('/chat/t/');
+  const { isLoading, needsSetup } = useSetupGate();
+  const { t } = useTranslation();
+
+  // While the user profile is loading, show a neutral loading state
+  // to avoid flashing protected content before the gate check completes.
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen" style={{ backgroundColor: 'var(--color-bg-page)' }}>
+        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{t('common.loading')}</p>
+      </div>
+    );
+  }
+
+  if (needsSetup) {
+    return <Navigate to="/setup/method" replace />;
+  }
+
+  return (
+    <div className="app-layout">
+      {!isMobile && <Sidebar />}
+      {isMobile && !hideTabBar && <BottomTabBar />}
+      <main className={`app-main${hideTabBar ? ' app-main--no-tab' : ''}`}>
+        <Main />
+      </main>
+    </div>
+  );
+}
+
+function App() {
+  const { isLoggedIn, isInitialized } = useAuth();
+  const { t } = useTranslation();
 
   if (!isInitialized) {
     return (
@@ -67,18 +103,21 @@ function App() {
       <Route path="/" element={isLoggedIn ? <RootRedirect /> : <LoginPage />} />
       <Route path="/callback" element={<AuthCallback />} />
       <Route path="/s/:shareToken" element={<SharedChatView />} />
-      <Route path="/*" element={
+      <Route path="/setup/*" element={
         isLoggedIn ? (
-          <div className="app-layout">
-            {!isMobile && <Sidebar />}
-            {isMobile && !hideTabBar && <BottomTabBar />}
-            <main className={`app-main${hideTabBar ? ' app-main--no-tab' : ''}`}>
-              <Main />
-            </main>
-          </div>
+          <Suspense fallback={
+            <div className="flex items-center justify-center min-h-screen" style={{ backgroundColor: 'var(--color-bg-page)' }}>
+              <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>{t('common.loading')}</p>
+            </div>
+          }>
+            <SetupWizard />
+          </Suspense>
         ) : (
           <Navigate to="/" replace />
         )
+      } />
+      <Route path="/*" element={
+        isLoggedIn ? <AuthenticatedShell /> : <Navigate to="/" replace />
       } />
     </Routes>
   );

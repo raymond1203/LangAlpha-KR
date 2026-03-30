@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ListFilter } from 'lucide-react';
+import { ListFilter, Sparkles, X } from 'lucide-react';
 import { MobileBottomSheet } from '../../components/ui/mobile-bottom-sheet';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import DashboardHeader from './components/DashboardHeader';
@@ -21,7 +21,7 @@ import { useWatchlistData } from './hooks/useWatchlistData';
 import { usePortfolioData } from './hooks/usePortfolioData';
 import { useTickerNews } from './hooks/useTickerNews';
 import { useDashboardData } from './hooks/useDashboardData';
-import { useOnboarding, setOnboardingIgnoredFor24h } from './hooks/useOnboarding';
+import { useOnboarding, snoozePersonalization } from './hooks/useOnboarding';
 import './Dashboard.css';
 
 interface DeleteConfirmState {
@@ -57,10 +57,10 @@ function Dashboard() {
   } = useDashboardData();
 
   const {
-    showOnboardingDialog,
-    setShowOnboardingDialog,
+    showPersonalizationBanner,
+    setShowPersonalizationBanner,
     isCreatingWorkspace,
-    navigateToOnboarding,
+    navigateToPersonalization,
   } = useOnboarding();
 
   const watchlist = useWatchlistData();
@@ -133,6 +133,51 @@ function Dashboard() {
             )}
           </div>
 
+          {/* Personalize your experience — dismissible banner */}
+          {showPersonalizationBanner && (
+            <div
+              className="mb-6 rounded-lg border px-4 py-3 flex items-center gap-3"
+              style={{
+                backgroundColor: 'var(--color-bg-card)',
+                borderColor: 'var(--color-border-muted)',
+              }}
+            >
+              <Sparkles size={18} className="shrink-0" style={{ color: 'var(--color-accent-primary)' }} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                  {t('dashboard.personalizeTitle')}
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+                  {t('dashboard.personalizeDesc')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPersonalizationBanner(false);
+                  navigateToPersonalization();
+                }}
+                disabled={isCreatingWorkspace}
+                className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium transition-colors hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
+              >
+                {isCreatingWorkspace ? t('dashboard.settingUp') : t('dashboard.personalize')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  snoozePersonalization();
+                  setShowPersonalizationBanner(false);
+                }}
+                className="shrink-0 p-1 rounded transition-colors hover:bg-foreground/10"
+                style={{ color: 'var(--color-text-tertiary)' }}
+                aria-label={t('common.close')}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
           {/* Index Movement — full width */}
           <div className="mb-8">
             <IndexMovementCard indices={indices} loading={indicesLoading} />
@@ -194,44 +239,7 @@ function Dashboard() {
         onOpenChange={(open) => !open && setDeleteConfirm((p) => ({ ...p, open: false }))}
       />
 
-      {/* Onboarding Incomplete Dialog */}
-      <Dialog open={showOnboardingDialog} onOpenChange={setShowOnboardingDialog}>
-        <DialogContent className="sm:max-w-md border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
-          <DialogHeader>
-            <DialogTitle className="title-font" style={{ color: 'var(--color-text-primary)' }}>
-              {t('dashboard.prefIncomplete')}
-            </DialogTitle>
-            <DialogDescription style={{ color: 'var(--color-text-secondary)' }}>
-              {t('dashboard.prefIncompleteMsg')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 pt-4">
-            <button
-              type="button"
-              onClick={() => {
-                setOnboardingIgnoredFor24h();
-                setShowOnboardingDialog(false);
-              }}
-              className="px-4 py-2 rounded-md text-sm font-medium transition-colors"
-              style={{ color: 'var(--color-text-primary)' }}
-            >
-              {t('dashboard.ignoreFor24h')}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowOnboardingDialog(false);
-                navigateToOnboarding();
-              }}
-              disabled={isCreatingWorkspace}
-              className="px-4 py-2 rounded-md text-sm font-medium transition-colors hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
-            >
-              {isCreatingWorkspace ? t('dashboard.settingUp') : t('dashboard.proceed')}
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Personalization banner is rendered inline above the market overview */}
 
       {/* Portfolio Edit Dialog */}
       <Dialog open={!!portfolio.editRow} onOpenChange={(open) => !open && (portfolio.openEdit as (row: unknown) => void)(null)}>

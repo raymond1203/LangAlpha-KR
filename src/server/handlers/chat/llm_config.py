@@ -152,9 +152,8 @@ async def resolve_byok_llm_client(
         parent_info = mc.get_provider_info(parent)
         base_url = parent_info.get("base_url")  # None for anthropic = SDK default
 
-    logger.info(
-        f"[CHAT] Using BYOK key for parent_provider={parent} "
-        f"(model_provider={provider}) base_url={base_url or 'SDK default'}"
+    logger.debug(
+        f"[CHAT] Resolved BYOK client for model={model_name} parent={parent} base_url={base_url or 'SDK default'}"
     )
     # Always pass base_url (even None) to override the sub-provider's URL via sentinel
     return create_llm(
@@ -212,14 +211,11 @@ async def resolve_oauth_llm_client(
     # Provider-specific headers
     headers = {}
     if provider == "claude-oauth":
-        logger.info(f"[CHAT] Using Claude OAuth for provider={provider}")
+        logger.debug(f"[CHAT] Resolved Claude OAuth client for model={model_name}")
     else:
         # Codex: set ChatGPT-Account-Id header
         account_id = token_data.get("account_id", "")
-        token_type = "sk-key" if access_token.startswith("sk-") else "oauth-jwt"
-        logger.info(
-            f"[CHAT] Using Codex OAuth for provider={provider} token_type={token_type} account_id={account_id[:8]}..."
-        )
+        logger.debug(f"[CHAT] Resolved Codex OAuth client for model={model_name}")
         if account_id:
             headers["ChatGPT-Account-Id"] = account_id
 
@@ -380,18 +376,39 @@ async def resolve_llm_config(
             f"[CHAT] Applied reasoning_effort={effective_reasoning} to {effective_model}"
         )
 
-    # Resolve OAuth/BYOK for subsidiary models
-    for role, sub_model in [("summarization", config.llm.summarization), ("fetch", config.llm.fetch)]:
-        if not sub_model:
-            continue
-        sub_client = await resolve_oauth_llm_client(user_id, sub_model)
-        if not sub_client and is_byok:
-            sub_client = await resolve_byok_llm_client(
-                user_id, sub_model, is_byok, _pref_cache=model_pref,
+    # Resolve OAuth/BYOK for subsidiary + fallback models in parallel.
+    # Each model tries OAuth first, then BYOK if OAuth fails.
+    import asyncio
+
+    async def _resolve_one(model_name: str):
+        client = await resolve_oauth_llm_client(user_id, model_name)
+        if not client and is_byok:
+            client = await resolve_byok_llm_client(
+                user_id, model_name, is_byok, _pref_cache=model_pref,
             )
-        if sub_client:
+        return client
+
+    subsidiary_pairs = [(role, m) for role, m in [("summarization", config.llm.summarization), ("fetch", config.llm.fetch)] if m]
+    fallback_models = config.llm.fallback or []
+
+    all_models = [m for _, m in subsidiary_pairs] + list(fallback_models)
+    if all_models:
+        results = await asyncio.gather(*[_resolve_one(m) for m in all_models])
+
+        sub_count = len(subsidiary_pairs)
+        for i, (role, _) in enumerate(subsidiary_pairs):
+            if results[i]:
+                if config is base_config:
+                    config = config.model_copy(deep=True)
+                config.subsidiary_llm_clients[role] = results[i]
+
+        resolved_fallbacks = [r for r in results[sub_count:] if r]
+        if resolved_fallbacks:
             if config is base_config:
                 config = config.model_copy(deep=True)
-            config.subsidiary_llm_clients[role] = sub_client
+            config.fallback_llm_clients = resolved_fallbacks
+            logger.info(
+                f"[CHAT] Resolved {len(resolved_fallbacks)}/{len(fallback_models)} fallback models via OAuth/BYOK"
+            )
 
     return config

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { X, User, LogOut, Eye, EyeOff, Trash2, HelpCircle, MessageSquareText, Sun, Moon, Monitor, Link2, Unlink, ExternalLink, Shield, ClipboardCopy, Plus, Pencil, ChevronDown, Search, Pin } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { X, User, LogOut, Trash2, HelpCircle, MessageSquareText, Sun, Moon, Monitor, Link2, Unlink, ExternalLink, Shield, ClipboardCopy, Plus, Pencil, Search, Pin, Settings2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
@@ -16,18 +16,9 @@ import { useTranslation } from 'react-i18next';
 import { useToast } from '@/components/ui/use-toast';
 import { getFlashWorkspace } from '@/pages/ChatAgent/utils/api';
 import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
+import { ModelTierConfig } from '@/components/model/ModelTierConfig';
+import type { ByokProvider, CustomModelEntry, CustomModelFormState, AddProviderFormState, ProviderModelsData } from '@/components/model/types';
 import './Settings.css';
-
-interface ByokProvider {
-  provider: string;
-  display_name: string;
-  parent_provider?: string;
-  has_key: boolean;
-  masked_key: string | null;
-  base_url: string | null;
-  is_custom?: boolean;
-  use_response_api?: boolean;
-}
 
 interface CodexDeviceCode {
   user_code: string;
@@ -40,36 +31,6 @@ interface OAuthStatus {
   account_id?: string | null;
   email?: string | null;
   plan_type?: string | null;
-}
-
-interface CustomModelEntry {
-  name: string;
-  model_id: string;
-  provider: string;
-  parameters?: Record<string, unknown>;
-  extra_body?: Record<string, unknown>;
-}
-
-interface CustomModelFormState {
-  name: string;
-  model_id: string;
-  provider: string;
-  parameters: string;
-  extra_body: string;
-  _customProvider?: boolean;
-}
-
-interface AddProviderFormState {
-  name: string;
-  parent_provider: string;
-  api_key?: string;
-  base_url?: string;
-  use_response_api?: boolean;
-}
-
-interface ProviderModelsData {
-  models?: string[];
-  display_name?: string;
 }
 
 // TODO: type properly — depends on backend preferences shape
@@ -125,9 +86,8 @@ function Settings() {
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
-  const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
   const [selectedByokProvider, setSelectedByokProvider] = useState('');
-  const [deletingProvider, setDeletingProvider] = useState<string | null>(null);
+  const [_deletingProvider, setDeletingProvider] = useState<string | null>(null);
 
   // Custom (sub-)providers state
   const [showAddProviderForm, setShowAddProviderForm] = useState(false);
@@ -142,7 +102,6 @@ function Settings() {
   const [summarizationModel, setSummarizationModel] = useState('');
   const [fetchModel, setFetchModel] = useState('');
   const [fallbackModels, setFallbackModels] = useState<string[]>([]);
-  const [showOtherModels, setShowOtherModels] = useState(false);
   const [systemDefaults, setSystemDefaults] = useState<Record<string, unknown>>({});
 
   // Custom Models state
@@ -324,16 +283,23 @@ function Settings() {
           if (p.use_response_api) entry.use_response_api = true;
           return entry;
         });
+      // Clean stale references before saving
+      const cleanStarred = starredModels.filter(m => allValidModels.has(m));
+      const cleanFallback = fallbackModels.filter(m => allValidModels.has(m));
+      const activeProviderKeys = new Set(byokProviders.filter(p => p.has_key).map(p => p.provider));
+      const cleanCustomProviders = customProvidersList.filter(cp => activeProviderKeys.has(cp.name as string));
+      const cleanCustomModels = customModels.filter(cm => activeProviderKeys.has(cm.provider) || allValidModels.has(cm.name));
+
       await updatePrefsMutation.mutateAsync({
         other_preference: {
           preferred_model: preferredModel || null,
           preferred_flash_model: preferredFlashModel || null,
-          starred_models: starredModels.length > 0 ? starredModels : null,
-          custom_models: customModels.length > 0 ? customModels : null,
-          custom_providers: customProvidersList.length > 0 ? customProvidersList : null,
+          starred_models: cleanStarred.length > 0 ? cleanStarred : null,
+          custom_models: cleanCustomModels.length > 0 ? cleanCustomModels : null,
+          custom_providers: cleanCustomProviders.length > 0 ? cleanCustomProviders : null,
           summarization_model: summarizationModel || null,
           fetch_model: fetchModel || null,
-          fallback_models: fallbackModels.length > 0 ? fallbackModels : null,
+          fallback_models: cleanFallback.length > 0 ? cleanFallback : null,
         },
       });
 
@@ -423,7 +389,7 @@ function Settings() {
     setAddProviderError(null);
   };
 
-  const handleDeleteCustomProvider = (providerName: string) => {
+  const _handleDeleteCustomProvider = (providerName: string) => {
     setByokProviders(prev => prev.filter(p => p.provider !== providerName));
     // Also clean up any pending key/url inputs
     setKeyInputs(prev => { const next = { ...prev }; delete next[providerName]; return next; });
@@ -556,8 +522,21 @@ function Settings() {
     setCustomModelError(null);
   };
 
-  const handleCustomModelDelete = (idx: number) => {
-    setCustomModels(prev => prev.filter((_, i) => i !== idx));
+  const handleCustomModelDelete = async (idx: number) => {
+    const updated = customModels.filter((_, i) => i !== idx);
+    setCustomModels(updated);
+    // Persist immediately
+    try {
+      await updatePrefsMutation.mutateAsync({
+        other_preference: {
+          custom_models: updated.length > 0 ? updated : null,
+        },
+      });
+    } catch {
+      // Revert on failure
+      setCustomModels(customModels);
+      setModelTabError('Failed to remove model.');
+    }
   };
 
   const handleCustomModelCancel = () => {
@@ -782,6 +761,51 @@ function Settings() {
       e.preventDefault();
     }
   };
+
+  // Normalize availableModels to the Record<string, ProviderModelsData> shape
+  // expected by ModelTierConfig / ModelSelector (backend may return string[]).
+  // Also merges custom models so they appear in the model dropdowns.
+  const normalizedModels = useMemo<Record<string, ProviderModelsData>>(() => {
+    const out: Record<string, ProviderModelsData> = {};
+    for (const [provider, pd] of Object.entries(availableModels)) {
+      if (Array.isArray(pd)) {
+        out[provider] = { models: [...pd], display_name: provider.charAt(0).toUpperCase() + provider.slice(1) };
+      } else {
+        const typed = pd as ProviderModelsData;
+        out[provider] = { ...typed, models: [...(typed.models ?? [])] };
+      }
+    }
+    // Append custom models grouped by their provider
+    for (const cm of customModels) {
+      const key = cm.provider;
+      if (!out[key]) {
+        out[key] = { models: [], display_name: key };
+      }
+      if (!out[key].models!.includes(cm.name)) {
+        out[key].models!.push(cm.name);
+      }
+    }
+    return out;
+  }, [availableModels, customModels]);
+
+  // All valid model names for filtering stale references
+  const allValidModels = useMemo(() => {
+    const s = new Set<string>();
+    for (const group of Object.values(normalizedModels)) {
+      if (group.models) group.models.forEach((m) => s.add(m));
+    }
+    return s;
+  }, [normalizedModels]);
+
+  // Auto-clean stale starred/fallback models on load
+  useEffect(() => {
+    if (allValidModels.size === 0) return;
+    const cleanS = starredModels.filter(m => allValidModels.has(m));
+    if (cleanS.length !== starredModels.length) setStarredModels(cleanS);
+    const cleanF = fallbackModels.filter(m => allValidModels.has(m));
+    if (cleanF.length !== fallbackModels.length) setFallbackModels(cleanF);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allValidModels]);
 
   return (
     <div className="settings-page">
@@ -1141,98 +1165,74 @@ function Settings() {
             <div className="space-y-6">
               {/* Section 1: Model Preferences */}
               <div>
-                {/* Default + Flash selectors — side by side */}
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { label: t('settings.defaultModel'), desc: t('settings.defaultModelDesc'), value: preferredModel, setter: setPreferredModel, defaultKey: 'default_model' },
-                    { label: t('settings.flashModel'), desc: t('settings.flashModelDesc'), value: preferredFlashModel, setter: setPreferredFlashModel, defaultKey: 'flash_model' },
-                  ].map(({ label, desc, value, setter, defaultKey }) => {
-                    const sysDefault = systemDefaults[defaultKey] || '';
-                    return (
-                      <div key={label}>
-                        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>{label}</label>
-                        <Select
-                          value={value}
-                          onChange={(e) => setter(e.target.value)}
-                          disabled={isSubmitting}
-                        >
-                          <option value="">
-                            {sysDefault ? `${t('settings.systemDefault')} (${sysDefault})` : t('settings.systemDefault')}
-                          </option>
-                          {Object.entries(availableModels).map(([provider, providerData]) => {
-                            const models = Array.isArray(providerData) ? providerData : (providerData as ProviderModelsData)?.models || [];
-                            const displayName = (!Array.isArray(providerData) && (providerData as ProviderModelsData)?.display_name) || provider.charAt(0).toUpperCase() + provider.slice(1);
-                            return (
-                              <optgroup key={provider} label={displayName}>
-                                {models.map((m) => (
-                                  <option key={m} value={m}>{m}</option>
-                                ))}
-                              </optgroup>
-                            );
-                          })}
-                          {byokProviders.filter(p => p.is_custom && p.has_key).length > 0 && (
-                            <optgroup label={t('settings.byokProviders', 'BYOK Providers')}>
-                              {byokProviders.filter(p => p.is_custom && p.has_key).map((prov) => (
-                                <option key={`byok-${prov.provider}`} value={prov.provider}>
-                                  {prov.display_name || prov.provider} ({prov.parent_provider})
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {customModels.length > 0 && (
-                            <optgroup label={t('settings.customModels')}>
-                              {customModels.map((cm) => (
-                                <option key={`custom-${cm.name}`} value={cm.name}>{cm.name}</option>
-                              ))}
-                            </optgroup>
-                          )}
-                        </Select>
-                        <p className="text-[11px] mt-1" style={{ color: 'var(--color-text-tertiary)' }}>{desc}</p>
-                      </div>
-                    );
-                  })}
-                </div>
+                {/* Default + Flash model selectors */}
+                <ModelTierConfig
+                  models={normalizedModels}
+                  primaryModel={preferredModel}
+                  onPrimaryModelChange={setPreferredModel}
+                  flashModel={preferredFlashModel}
+                  onFlashModelChange={setPreferredFlashModel}
+                  showAdvanced
+                  advancedModels={{
+                    summarizationModel: summarizationModel,
+                    fetchModel: fetchModel,
+                    fallbackModels: fallbackModels,
+                  }}
+                  onAdvancedModelsChange={(models) => {
+                    if (models.summarizationModel !== undefined) setSummarizationModel(models.summarizationModel);
+                    if (models.fetchModel !== undefined) setFetchModel(models.fetchModel);
+                    if (models.fallbackModels !== undefined) setFallbackModels(models.fallbackModels);
+                  }}
+                  systemDefaults={{
+                    default_model: systemDefaults.default_model as string | undefined,
+                    flash_model: systemDefaults.flash_model as string | undefined,
+                    summarization_model: systemDefaults.summarization_model as string | undefined,
+                    fetch_model: systemDefaults.fetch_model as string | undefined,
+                    fallback_models: systemDefaults.fallback_models as string[] | undefined,
+                  }}
+                />
 
                 {/* Quick-access models — compact strip */}
-                <div style={{ marginTop: '16px' }}>
-                  <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
+                <div className="flex flex-col gap-1.5" style={{ marginTop: '16px' }}>
+                  <label className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
                     {t('settings.starredModels')}
                   </label>
+                  <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                    {t('settings.starredModelsDesc')}
+                  </p>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {starredModels.map((key) => (
-                      <button
+                    {starredModels.filter(m => allValidModels.has(m)).map((key) => (
+                      <span
                         key={key}
-                        type="button"
-                        onClick={() => setStarredModels(prev => prev.filter(k => k !== key))}
-                        className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs transition-colors group"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs"
                         style={{
-                          border: '1px solid var(--color-accent-primary)',
-                          background: 'var(--color-accent-soft)',
-                          color: 'var(--color-accent-light)',
+                          background: 'var(--color-bg-surface)',
+                          border: '1px solid var(--color-border-default)',
+                          color: 'var(--color-text-secondary)',
                         }}
-                        title={key}
                       >
-                        <span>{key}</span>
-                        <X className="h-3 w-3 opacity-40 group-hover:opacity-100 transition-opacity" />
-                      </button>
-                    ))}
-                    {starredModels.length === 0 && (
-                      <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
-                        {t('settings.starredModelsDesc')}
+                        {key}
+                        <button
+                          type="button"
+                          onClick={() => setStarredModels(prev => prev.filter(k => k !== key))}
+                          className="ml-0.5 hover:opacity-70"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                          aria-label={`Remove ${key}`}
+                        >
+                          &times;
+                        </button>
                       </span>
-                    )}
+                    ))}
                     <button
                       type="button"
                       onClick={() => { setShowModelPicker(v => !v); setModelPickerSearch(''); }}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs transition-colors"
+                      className="inline-flex items-center px-2 py-1 rounded text-xs font-medium"
                       style={{
-                        border: '1px dashed var(--color-border-muted)',
-                        background: showModelPicker ? 'var(--color-accent-soft)' : 'transparent',
-                        color: showModelPicker ? 'var(--color-accent-light)' : 'var(--color-text-tertiary)',
+                        border: '1px dashed var(--color-border-default)',
+                        color: 'var(--color-accent-primary)',
                       }}
                     >
-                      <Plus className="h-3 w-3" />
-                      <span>{t('settings.addModels', 'Add')}</span>
+                      + {t('settings.addModels', 'Add')}
                     </button>
                   </div>
                 </div>
@@ -1302,135 +1302,6 @@ function Settings() {
                           </div>
                         );
                       })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Other Models — collapsible */}
-              <div style={{ borderTop: '1px solid var(--color-border-muted)', paddingTop: '16px' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowOtherModels(v => !v)}
-                  className="w-full flex items-center justify-between text-sm font-medium"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  <span>{t('settings.otherModels', 'Other Models')}</span>
-                  <ChevronDown
-                    className="h-4 w-4 transition-transform"
-                    style={{
-                      color: 'var(--color-text-tertiary)',
-                      transform: showOtherModels ? 'rotate(180deg)' : 'rotate(0deg)',
-                    }}
-                  />
-                </button>
-                <p className="text-xs mt-0.5 mb-2" style={{ color: 'var(--color-text-tertiary)' }}>
-                  {t('settings.otherModelsDesc', 'Configure models used for background tasks.')}
-                </p>
-
-                {showOtherModels && (
-                  <div className="space-y-4 mt-3">
-                    {/* Summarization + Fetch — side by side */}
-                    <div className="grid grid-cols-2 gap-3">
-                      {[
-                        { label: t('settings.summarizationModel', 'Summarization'), desc: t('settings.summarizationModelDesc', 'Model for conversation summarization'), value: summarizationModel, setter: setSummarizationModel, defaultKey: 'summarization_model' },
-                        { label: t('settings.fetchModel', 'Fetch'), desc: t('settings.fetchModelDesc', 'Model for web content extraction'), value: fetchModel, setter: setFetchModel, defaultKey: 'fetch_model' },
-                      ].map(({ label, desc, value, setter, defaultKey }) => {
-                        const sysDefault = systemDefaults[defaultKey] || '';
-                        return (
-                          <div key={label}>
-                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>{label}</label>
-                            <Select
-                              value={value}
-                              onChange={(e) => setter(e.target.value)}
-                              disabled={isSubmitting}
-                            >
-                              <option value="">
-                                {sysDefault ? `${t('settings.systemDefault')} (${sysDefault})` : t('settings.systemDefault')}
-                              </option>
-                              {Object.entries(availableModels).map(([provider, providerData]) => {
-                                const models = Array.isArray(providerData) ? providerData : (providerData as ProviderModelsData)?.models || [];
-                                const displayName = (!Array.isArray(providerData) && (providerData as ProviderModelsData)?.display_name) || provider.charAt(0).toUpperCase() + provider.slice(1);
-                                return (
-                                  <optgroup key={provider} label={displayName}>
-                                    {models.map((m) => (
-                                      <option key={m} value={m}>{m}</option>
-                                    ))}
-                                  </optgroup>
-                                );
-                              })}
-                            </Select>
-                            <p className="text-[11px] mt-1" style={{ color: 'var(--color-text-tertiary)' }}>{desc}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Fallback models */}
-                    <div>
-                      <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                        {t('settings.fallbackModels', 'Fallback Models')}
-                      </label>
-                      <p className="text-[11px] mb-1.5" style={{ color: 'var(--color-text-tertiary)' }}>
-                        {t('settings.fallbackModelsDesc', 'Models to try when the primary model is unavailable, in order of priority.')}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {fallbackModels.map((key, idx) => {
-                          const isDefault = ((systemDefaults.fallback_models as string[]) || []).includes(key);
-                          return (
-                            <button
-                              key={`${key}-${idx}`}
-                              type="button"
-                              onClick={() => setFallbackModels(prev => prev.filter((_, i) => i !== idx))}
-                              className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs transition-colors group"
-                              style={{
-                                border: `1px solid ${isDefault ? 'var(--color-accent-primary)' : 'var(--color-border-muted)'}`,
-                                background: isDefault ? 'var(--color-accent-soft)' : 'var(--color-bg-card)',
-                                color: isDefault ? 'var(--color-accent-light)' : 'var(--color-text-secondary)',
-                              }}
-                              title={isDefault ? t('settings.systemDefault') : t('common.remove', 'Remove')}
-                            >
-                              <span>{key}</span>
-                              {isDefault && <span style={{ color: 'var(--color-text-tertiary)', fontSize: '10px' }}>default</span>}
-                              <X className="h-3 w-3 opacity-40 group-hover:opacity-100 transition-opacity" />
-                            </button>
-                          );
-                        })}
-                        <Select
-                          value=""
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val && !fallbackModels.includes(val)) {
-                              setFallbackModels(prev => [...prev, val]);
-                            }
-                          }}
-                          disabled={isSubmitting}
-                          style={{
-                            width: 'auto',
-                            minWidth: '100px',
-                            display: 'inline-flex',
-                            border: '1px dashed var(--color-border-muted)',
-                            background: 'transparent',
-                            color: 'var(--color-text-tertiary)',
-                            padding: '2px 8px',
-                            borderRadius: '6px',
-                          }}
-                          className="text-xs"
-                        >
-                          <option value="">{t('settings.addFallback', '+ Add')}</option>
-                          {Object.entries(availableModels).map(([provider, providerData]) => {
-                            const models = Array.isArray(providerData) ? providerData : (providerData as ProviderModelsData)?.models || [];
-                            const displayName = (!Array.isArray(providerData) && (providerData as ProviderModelsData)?.display_name) || provider.charAt(0).toUpperCase() + provider.slice(1);
-                            return (
-                              <optgroup key={provider} label={displayName}>
-                                {models.filter(m => !fallbackModels.includes(m)).map((m) => (
-                                  <option key={m} value={m}>{m}</option>
-                                ))}
-                              </optgroup>
-                            );
-                          })}
-                        </Select>
-                      </div>
                     </div>
                   </div>
                 )}
@@ -1681,480 +1552,25 @@ function Settings() {
                 </div>
               </div>
 
-              {/* Section 3: BYOK */}
-              <div style={{ borderTop: '1px solid var(--color-border-muted)', paddingTop: '16px' }}>
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <label className="block text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>{t('settings.byok')}</label>
-                      <div className="relative group">
-                        <HelpCircle className="h-3.5 w-3.5 cursor-help" style={{ color: 'var(--color-text-tertiary)' }} />
-                        <div
-                          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 rounded-lg text-xs leading-relaxed whitespace-normal hidden group-hover:block z-50"
-                          style={{
-                            width: '240px',
-                            backgroundColor: 'var(--color-bg-elevated)',
-                            border: '1px solid var(--color-border-elevated)',
-                            color: 'var(--color-text-secondary)',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                          }}
-                        >
-                          {t('settings.byokTooltip')}
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
-                      {t('settings.byokDesc')}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleByokToggle}
-                    className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-                    style={{
-                      backgroundColor: byokEnabled ? 'var(--color-accent-primary)' : 'var(--color-border-muted)',
-                    }}
-                  >
-                    <span
-                      className="inline-block h-4 w-4 rounded-full bg-white transition-transform"
-                      style={{ transform: byokEnabled ? 'translateX(22px)' : 'translateX(4px)' }}
-                    />
-                  </button>
-                </div>
-
-                {byokEnabled && (<>
-                  <div className="space-y-3 mt-4">
-                    <div className="flex items-center gap-2">
-                      <Select
-                        value={selectedByokProvider}
-                        onChange={(e) => setSelectedByokProvider(e.target.value)}
-                        className="flex-1 min-w-0"
-                      >
-                        <option value="">{t('settings.selectProvider')}</option>
-                        {byokProviders.filter(p => !p.is_custom).map((prov) => (
-                          <option key={prov.provider} value={prov.provider}>
-                            {prov.display_name || prov.provider}{prov.has_key ? ' ✓' : ''}
-                          </option>
-                        ))}
-                        {byokProviders.some(p => p.is_custom) && (
-                          <optgroup label="─────────">
-                            {byokProviders.filter(p => p.is_custom).map((prov) => (
-                              <option key={prov.provider} value={prov.provider}>
-                                {prov.display_name}{prov.has_key ? ' ✓' : ''} ({prov.parent_provider})
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                      </Select>
-                      <button
-                        type="button"
-                        onClick={() => { setShowAddProviderForm(true); setAddProviderForm({ name: '', parent_provider: '', api_key: '', base_url: '', use_response_api: false }); setAddProviderError(null); }}
-                        className="p-2 rounded-md shrink-0 transition-colors"
-                        style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
-                        title={t('settings.addProvider')}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </button>
-                    </div>
-
-                    {/* Add Provider inline form */}
-                    {showAddProviderForm && (
-                      <div
-                        className="rounded-lg p-3 space-y-3"
-                        style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}
-                      >
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                              {t('settings.addProviderName')} *
-                            </label>
-                            <input
-                              type="text"
-                              value={addProviderForm.name}
-                              onChange={(e) => setAddProviderForm(f => ({ ...f, name: e.target.value }))}
-                              placeholder={t('settings.addProviderNamePlaceholder')}
-                              className="w-full rounded-md px-2.5 py-1.5 text-sm"
-                              style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                              autoFocus
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                              {t('settings.parentProvider')} *
-                            </label>
-                            <Select
-                              value={addProviderForm.parent_provider}
-                              onChange={(e) => setAddProviderForm(f => ({ ...f, parent_provider: e.target.value }))}
-                              style={{ backgroundColor: 'var(--color-bg-elevated)' }}
-                            >
-                              <option value="">{t('settings.selectProvider')}</option>
-                              {byokProviders.filter(p => !p.is_custom).map(p => (
-                                <option key={p.provider} value={p.provider}>{p.display_name || p.provider}</option>
-                              ))}
-                            </Select>
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                            {t('settings.enterApiKey')}
-                          </label>
-                          <input
-                            type="password"
-                            value={addProviderForm.api_key || ''}
-                            onChange={(e) => setAddProviderForm(f => ({ ...f, api_key: e.target.value }))}
-                            placeholder="sk-..."
-                            className="w-full rounded-md px-2.5 py-1.5 text-sm"
-                            style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                            {t('settings.baseUrlPlaceholder')}
-                          </label>
-                          <input
-                            type="text"
-                            value={addProviderForm.base_url || ''}
-                            onChange={(e) => setAddProviderForm(f => ({ ...f, base_url: e.target.value }))}
-                            placeholder="https://api.example.com/v1"
-                            className="w-full rounded-md px-2.5 py-1.5 text-sm"
-                            style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-tertiary)' }}
-                          />
-                        </div>
-                        {addProviderForm.parent_provider === 'openai' && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>{t('settings.useResponseApi')}</span>
-                            <button
-                              type="button"
-                              onClick={() => setAddProviderForm(f => ({ ...f, use_response_api: !f.use_response_api }))}
-                              className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                              style={{ backgroundColor: addProviderForm.use_response_api ? 'var(--color-accent-primary)' : 'var(--color-border-muted)' }}
-                            >
-                              <span className="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform" style={{ transform: addProviderForm.use_response_api ? 'translateX(17px)' : 'translateX(3px)' }} />
-                            </button>
-                          </div>
-                        )}
-                        {addProviderError && (
-                          <p className="text-xs" style={{ color: 'var(--color-loss)' }}>{addProviderError}</p>
-                        )}
-                        <div className="flex items-center gap-2 justify-end">
-                          <button
-                            type="button"
-                            onClick={() => { setShowAddProviderForm(false); setAddProviderError(null); }}
-                            className="px-3 py-1.5 rounded-md text-xs font-medium"
-                            style={{ color: 'var(--color-text-primary)', backgroundColor: 'transparent' }}
-                          >
-                            {t('common.cancel')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleAddProviderSave}
-                            className="px-3 py-1.5 rounded-md text-xs font-medium"
-                            style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
-                          >
-                            {t('settings.addProvider')}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {(() => {
-                      const prov = byokProviders.find(p => p.provider === selectedByokProvider);
-                      if (!prov) return null;
-                      return (
-                        <div className="space-y-2">
-                          {prov.is_custom && (
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                                style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
-                              >
-                                {prov.parent_provider}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteCustomProvider(prov.provider)}
-                                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded transition-colors"
-                                style={{ color: 'var(--color-loss)' }}
-                              >
-                                <Trash2 className="h-3 w-3" /> Remove
-                              </button>
-                            </div>
-                          )}
-                          <div className="flex-1 relative">
-                            <input
-                              type={visibleKeys[prov.provider] ? 'text' : 'password'}
-                              value={keyInputs[prov.provider] || ''}
-                              onChange={(e) => setKeyInputs((prev) => ({ ...prev, [prov.provider]: e.target.value }))}
-                              placeholder={prov.has_key ? (prov.masked_key ?? undefined) : t('settings.enterApiKey')}
-                              className="w-full rounded-md px-3 py-1.5 pr-16 text-sm"
-                              style={{
-                                backgroundColor: 'var(--color-bg-card)',
-                                border: '1px solid var(--color-border-muted)',
-                                color: 'var(--color-text-primary)',
-                              }}
-                            />
-                            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setVisibleKeys((prev) => ({ ...prev, [prov.provider]: !prev[prov.provider] }))}
-                                className="p-0.5"
-                                style={{ color: 'var(--color-text-tertiary)' }}
-                              >
-                                {visibleKeys[prov.provider] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                              </button>
-                              {prov.has_key && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteProviderKey(prov.provider)}
-                                  disabled={deletingProvider === prov.provider}
-                                  className="p-0.5"
-                                  style={{ color: 'var(--color-loss)' }}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          {/* Base URL + options only for custom sub-providers */}
-                          {prov.is_custom && (
-                            <>
-                              <input
-                                type="text"
-                                value={baseUrlInputs[prov.provider] || ''}
-                                onChange={(e) => setBaseUrlInputs((prev) => ({ ...prev, [prov.provider]: e.target.value }))}
-                                placeholder={t('settings.baseUrlPlaceholder')}
-                                className="w-full rounded-md px-3 py-1.5 text-sm"
-                                style={{
-                                  backgroundColor: 'var(--color-bg-card)',
-                                  border: '1px solid var(--color-border-muted)',
-                                  color: 'var(--color-text-tertiary)',
-                                }}
-                              />
-                              {/* Provider options — only for openai-based */}
-                              {prov.parent_provider === 'openai' && (
-                                <div className="flex items-center justify-between pt-1">
-                                  <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>{t('settings.useResponseApi')}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setByokProviders(prev => prev.map(p =>
-                                        p.provider === prov.provider ? { ...p, use_response_api: !p.use_response_api } : p
-                                      ));
-                                    }}
-                                    className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                                    style={{ backgroundColor: prov.use_response_api ? 'var(--color-accent-primary)' : 'var(--color-border-muted)' }}
-                                  >
-                                    <span className="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform" style={{ transform: prov.use_response_api ? 'translateX(17px)' : 'translateX(3px)' }} />
-                                  </button>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Custom Models — inside BYOK */}
-                  <div className="mt-5 pt-4" style={{ borderTop: '1px solid var(--color-border-muted)' }}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <label className="block text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                          {t('settings.customModels')}
-                        </label>
-                        <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
-                          {t('settings.customModelsDesc')}
-                        </p>
-                      </div>
-                      {!showCustomModelForm && (
-                        <button
-                          type="button"
-                          onClick={() => { setShowCustomModelForm(true); setEditingCustomModelIdx(null); setCustomModelForm({ name: '', model_id: '', provider: '', parameters: '', extra_body: '' }); setCustomModelError(null); }}
-                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors"
-                          style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
-                        >
-                          <Plus className="h-3 w-3" /> {t('settings.addCustomModel')}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Existing custom models list */}
-                    {customModels.length > 0 && !showCustomModelForm && (
-                      <div className="space-y-2 mb-3">
-                        {customModels.map((cm, idx) => (
-                          <div
-                            key={cm.name}
-                            className="flex items-center justify-between rounded-md px-3 py-2"
-                            style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>{cm.name}</span>
-                              <span
-                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
-                                style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
-                              >
-                                {cm.provider}
-                              </span>
-                              <span className="text-xs truncate" style={{ color: 'var(--color-text-tertiary)' }}>{cm.model_id}</span>
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleCustomModelEdit(idx)}
-                                className="p-1 rounded transition-colors"
-                                style={{ color: 'var(--color-text-tertiary)' }}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleCustomModelDelete(idx)}
-                                className="p-1 rounded transition-colors"
-                                style={{ color: 'var(--color-loss)' }}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Inline form for add/edit */}
-                    {showCustomModelForm && (
-                      <div
-                        className="rounded-lg p-3 space-y-3 mt-2"
-                        style={{ backgroundColor: 'var(--color-bg-card)', border: '1px solid var(--color-border-muted)' }}
-                      >
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                              {t('settings.customModelName')} *
-                            </label>
-                            <input
-                              type="text"
-                              value={customModelForm.name}
-                              onChange={(e) => setCustomModelForm(f => ({ ...f, name: e.target.value }))}
-                              placeholder="my-random-model"
-                              className="w-full rounded-md px-2.5 py-1.5 text-sm"
-                              style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                              {t('settings.customModelId')} *
-                            </label>
-                            <input
-                              type="text"
-                              value={customModelForm.model_id}
-                              onChange={(e) => setCustomModelForm(f => ({ ...f, model_id: e.target.value }))}
-                              placeholder="gpt-5.2"
-                              className="w-full rounded-md px-2.5 py-1.5 text-sm"
-                              style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                            {t('settings.customModelProvider')} *
-                          </label>
-                          {(() => {
-                            const isKnown = byokProviders.some(p => p.provider === customModelForm.provider);
-                            const isCustomMode = customModelForm.provider !== '' && !isKnown;
-                            const selectValue = isKnown ? customModelForm.provider : (isCustomMode || customModelForm._customProvider ? '__custom__' : '');
-                            return (
-                              <>
-                                <Select
-                                  value={selectValue}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val === '__custom__') {
-                                      setCustomModelForm(f => ({ ...f, provider: '', _customProvider: true }));
-                                    } else {
-                                      setCustomModelForm(f => ({ ...f, provider: val, _customProvider: false }));
-                                    }
-                                  }}
-                                  style={{ backgroundColor: 'var(--color-bg-elevated)' }}
-                                >
-                                  <option value="">{t('settings.selectProvider')}</option>
-                                  {byokProviders.filter(p => !p.is_custom).map(p => (
-                                    <option key={p.provider} value={p.provider}>{p.display_name || p.provider}</option>
-                                  ))}
-                                  {byokProviders.some(p => p.is_custom) && (
-                                    <optgroup label="─────────">
-                                      {byokProviders.filter(p => p.is_custom).map(p => (
-                                        <option key={p.provider} value={p.provider}>{p.display_name} ({p.parent_provider})</option>
-                                      ))}
-                                    </optgroup>
-                                  )}
-                                  <option value="__custom__">{t('settings.customProvider')}</option>
-                                </Select>
-                                {(isCustomMode || customModelForm._customProvider) && (
-                                  <input
-                                    type="text"
-                                    value={customModelForm.provider}
-                                    onChange={(e) => setCustomModelForm(f => ({ ...f, provider: e.target.value, _customProvider: true }))}
-                                    placeholder={t('settings.customProviderPlaceholder')}
-                                    className="w-full rounded-md px-2.5 py-1.5 text-sm mt-2"
-                                    style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                                    autoFocus
-                                  />
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                            {t('settings.customModelParameters')}
-                          </label>
-                          <textarea
-                            value={customModelForm.parameters}
-                            onChange={(e) => setCustomModelForm(f => ({ ...f, parameters: e.target.value }))}
-                            placeholder='{"reasoning": {"effort": "medium", "summary": "auto"}}'
-                            rows={2}
-                            className="w-full rounded-md px-2.5 py-1.5 text-xs font-mono resize-none"
-                            style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                            {t('settings.customModelExtraBody')}
-                          </label>
-                          <textarea
-                            value={customModelForm.extra_body}
-                            onChange={(e) => setCustomModelForm(f => ({ ...f, extra_body: e.target.value }))}
-                            placeholder='{"thinking": {"type": "enabled"}}'
-                            rows={2}
-                            className="w-full rounded-md px-2.5 py-1.5 text-xs font-mono resize-none"
-                            style={{ backgroundColor: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-muted)', color: 'var(--color-text-primary)' }}
-                          />
-                        </div>
-                        {customModelError && (
-                          <p className="text-xs" style={{ color: 'var(--color-loss)' }}>{customModelError}</p>
-                        )}
-                        <div className="flex items-center gap-2 justify-end">
-                          <button
-                            type="button"
-                            onClick={handleCustomModelCancel}
-                            className="px-3 py-1.5 rounded-md text-xs font-medium"
-                            style={{ color: 'var(--color-text-primary)', backgroundColor: 'transparent' }}
-                          >
-                            {t('common.cancel')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleCustomModelSave}
-                            className="px-3 py-1.5 rounded-md text-xs font-medium"
-                            style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
-                          >
-                            {t('common.save')}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>)}
+              {/* Manage providers link */}
+              <div
+                className="flex items-center justify-between"
+                style={{ borderTop: '1px solid var(--color-border-muted)', paddingTop: '16px' }}
+              >
+                <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+                  Add or remove API keys, custom providers, and models
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/setup/method')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors shrink-0"
+                  style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                  {t('settings.manageProviders', 'Manage providers')}
+                </button>
               </div>
+
 
               {modelTabError && (
                 <div className="p-3 rounded-md" style={{ backgroundColor: 'var(--color-loss-soft)', border: '1px solid var(--color-border-loss)' }}>

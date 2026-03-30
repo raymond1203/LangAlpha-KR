@@ -48,7 +48,11 @@ async def client():
     ) as c:
         with (
             patch(f"{DB}._get_supported_providers", return_value=["openai", "anthropic"]),
-            patch(f"{DB}._get_provider_display_names", return_value={"openai": "OpenAI", "anthropic": "Anthropic"}),
+            patch(f"{DB}._get_provider_info_map", return_value={
+                "openai": {"display_name": "OpenAI", "access_type": "api_key", "brand_key": "openai"},
+                "anthropic": {"display_name": "Anthropic", "access_type": "api_key", "brand_key": "anthropic"},
+            }),
+            patch(f"{DB}._build_provider_catalog", return_value=[]),
         ):
             yield c
 
@@ -84,6 +88,7 @@ class TestListModelsResponse:
         assert "models" in body
         assert "model_metadata" in body
         assert "system_defaults" in body
+        assert "provider_catalog" in body
 
     @pytest.mark.asyncio
     async def test_system_defaults_populated(self, client):

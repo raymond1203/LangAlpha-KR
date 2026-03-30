@@ -73,6 +73,11 @@ class ModelConfig:
         """Get model configuration from llm_config."""
         return self.llm_config.get(model_id)
 
+    @property
+    def flat_providers(self) -> Dict[str, Dict]:
+        """Public accessor for the flattened provider dict."""
+        return self._flat_providers
+
     def get_provider_info(self, provider: str) -> Dict:
         """Get provider configuration from the flattened provider dict."""
         return self._flat_providers.get(provider, {})

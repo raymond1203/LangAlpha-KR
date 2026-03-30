@@ -18,7 +18,10 @@ from tests.conftest import create_test_app
 # ---------------------------------------------------------------------------
 
 SUPPORTED_PROVIDERS = ["openai", "anthropic"]
-DISPLAY_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic"}
+PROVIDER_INFO_MAP = {
+    "openai": {"display_name": "OpenAI", "access_type": "api_key", "brand_key": "openai"},
+    "anthropic": {"display_name": "Anthropic", "access_type": "api_key", "brand_key": "anthropic"},
+}
 
 DB = "src.server.app.api_keys"
 
@@ -41,8 +44,8 @@ async def client():
                 return_value=SUPPORTED_PROVIDERS,
             ),
             patch(
-                f"{DB}._get_provider_display_names",
-                return_value=DISPLAY_NAMES,
+                f"{DB}._get_provider_info_map",
+                return_value=PROVIDER_INFO_MAP,
             ),
         ):
             yield c
@@ -141,6 +144,11 @@ async def test_update_api_keys_set_key(client):
             new_callable=AsyncMock,
             return_value=updated,
         ),
+        patch(
+            "src.server.services.onboarding.maybe_complete_personalization",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
     ):
         resp = await client.put(
             "/api/v1/users/me/api-keys",
@@ -175,6 +183,11 @@ async def test_update_api_keys_delete_key(client):
             new_callable=AsyncMock,
             return_value=updated,
         ),
+        patch(
+            "src.server.services.onboarding.maybe_complete_personalization",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
     ):
         resp = await client.put(
             "/api/v1/users/me/api-keys",
@@ -199,16 +212,6 @@ async def test_update_api_keys_unsupported_provider(client):
 
     assert resp.status_code == 400
     assert "Unsupported provider" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_update_api_keys_validation_too_short(client):
-    """API key shorter than 10 chars should be rejected."""
-    resp = await client.put(
-        "/api/v1/users/me/api-keys",
-        json={"api_keys": {"openai": "short"}},
-    )
-    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

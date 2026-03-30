@@ -62,6 +62,7 @@ interface LocationState {
   model?: string;
   reasoningEffort?: string;
   isOnboarding?: boolean;
+  isPersonalizing?: boolean;
   isModifyingPreferences?: boolean;
   workspaceId?: string;
   workspaceName?: string;
@@ -282,9 +283,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const navigate = useNavigate();
   const { preferences } = usePreferences();
   const queryClient = useQueryClient();
-  const preferredModel = (preferences as Record<string, unknown> | null)?.other_preference
-    ? ((preferences as Record<string, unknown>).other_preference as Record<string, unknown>)?.preferred_model as string | null
-    : null;
   const initialMessageSentRef = useRef(false);
   // Determine agent mode: flash workspaces use flash mode, otherwise ptc
   const state = location.state as LocationState | null;
@@ -1392,22 +1390,23 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
       return;
     }
 
-    // Handle onboarding flow
-    if (location.state?.isOnboarding && !initialMessageSentRef.current && !isLoading && !isLoadingHistory) {
+    // Handle personalization / onboarding flow (isPersonalizing is the new flag;
+    // isOnboarding is kept for backward compatibility)
+    if ((location.state?.isPersonalizing || location.state?.isOnboarding) && !initialMessageSentRef.current && !isLoading && !isLoadingHistory) {
       initialMessageSentRef.current = true;
       // Clear navigation state to prevent re-sending on re-renders
       navigate(location.pathname, { replace: true, state: {} });
       // Small delay to ensure component is fully mounted
       setTimeout(() => {
-        const onboardingMessage = "Hi! I am new here and would like to set up my profile.";
+        const personalizationMessage = "I'd like to set up my investment profile";
         const additionalContext = [
           {
             type: "skills",
             name: "onboarding",
-            instruction: "Help the user with first-time onboarding to set up their investment profile.",
+            instruction: "Help the user set up their investment profile — watchlists, risk preferences, and alerts.",
           }
         ];
-        handleSendMessage(onboardingMessage, false, additionalContext);
+        handleSendMessage(personalizationMessage, false, additionalContext);
       }, 100);
       return;
     }
@@ -1973,8 +1972,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       files={workspaceFiles}
                       tokenUsage={tokenUsage}
                       onAction={handleAction}
-                      initialModel={threadModels[0] || preferredModel}
+                      initialModel={threadModels[0] || null}
                       threadModels={threadModels}
+                      mode={isFlashMode ? 'fast' : 'deep'}
                     />
                   </>
                 ) : activeAgent ? (

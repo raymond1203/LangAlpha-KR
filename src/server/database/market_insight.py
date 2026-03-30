@@ -39,7 +39,7 @@ async def create_market_insight(
                 INSERT INTO market_insights
                     (market_insight_id, user_id, type, status, model, metadata, created_at)
                 VALUES (%s, %s, %s, 'generating', %s, %s, %s)
-                RETURNING market_insight_id, user_id, type, status, model, metadata, created_at
+                RETURNING market_insight_id::text, user_id, type, status, model, metadata, created_at
                 """,
                 (insight_id, user_id, type, model, Json(metadata), now),
             )
@@ -68,7 +68,7 @@ async def create_market_insight_if_not_generating(
                     (market_insight_id, user_id, type, status, model, metadata, created_at)
                 VALUES (%s, %s, %s, 'generating', %s, %s, %s)
                 ON CONFLICT DO NOTHING
-                RETURNING market_insight_id, user_id, type, status, model, metadata, created_at
+                RETURNING market_insight_id::text, user_id, type, status, model, metadata, created_at
                 """,
                 (insight_id, user_id, type, model, Json(metadata), now),
             )

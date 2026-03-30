@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { X, User, LogOut, Eye, EyeOff, Trash2, HelpCircle, MessageSquareText, Sun, Moon, Monitor, Link2, Unlink, ExternalLink, Shield, ClipboardCopy, Plus, Pencil, Search, Pin } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { X, User, LogOut, Trash2, HelpCircle, MessageSquareText, Sun, Moon, Monitor, Link2, Unlink, ExternalLink, Shield, ClipboardCopy, Plus, Pencil, Search, Pin } from 'lucide-react';
 import { Input } from '../../../components/ui/input';
 import { Select } from '../../../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../../components/ui/dialog';
@@ -13,19 +13,13 @@ import { queryKeys } from '../../../lib/queryKeys';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { useTranslation } from 'react-i18next';
 import ConfirmDialog from './ConfirmDialog';
+import { ProviderManager } from '@/components/model/ProviderManager';
+import { ModelTierConfig } from '@/components/model/ModelTierConfig';
+import type { ByokProvider, ProviderModelsData } from '@/components/model/types';
 
 type SettingsTab = 'userInfo' | 'preferences' | 'model';
 
-interface ByokProvider {
-  provider: string;
-  display_name?: string;
-  parent_provider?: string;
-  has_key: boolean;
-  masked_key: string | null;
-  base_url: string | null;
-  is_custom?: boolean;
-  use_response_api?: boolean;
-}
+import type { CustomModelEntry, CustomModelFormState, AddProviderFormState } from '@/components/model/types';
 
 interface CodexDeviceCode {
   user_code: string;
@@ -40,31 +34,6 @@ interface OAuthStatus {
   plan_type?: string | null;
 }
 
-interface CustomModel {
-  name: string;
-  model_id: string;
-  provider: string;
-  parameters?: Record<string, unknown>;
-  extra_body?: Record<string, unknown>;
-}
-
-interface CustomModelForm {
-  name: string;
-  model_id: string;
-  provider: string;
-  parameters: string;
-  extra_body: string;
-  _customProvider?: boolean;
-}
-
-interface AddProviderForm {
-  name: string;
-  parent_provider: string;
-  api_key?: string;
-  base_url?: string;
-  use_response_api?: boolean;
-}
-
 // TODO: type properly — preferences have a loosely defined shape from the backend
 interface PreferencesData {
   risk_preference?: Record<string, unknown>;
@@ -74,7 +43,7 @@ interface PreferencesData {
     preferred_model?: string;
     preferred_flash_model?: string;
     starred_models?: string[];
-    custom_models?: CustomModel[];
+    custom_models?: CustomModelEntry[];
     custom_providers?: Array<{ name: string; parent_provider: string; use_response_api?: boolean }>;
   };
   [key: string]: unknown;
@@ -113,14 +82,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   const [preferences, setPreferences] = useState<PreferencesData | null>(null);
 
   // Model tab state
-  // Available models from the backend — keyed by provider name
-  interface ProviderModels {
-    models?: string[];
-    display_name?: string;
-    [key: string]: unknown;
-  }
-  type AvailableModelsMap = Record<string, string[] | ProviderModels>;
-  const [availableModels, setAvailableModels] = useState<AvailableModelsMap>({});
+  const [availableModels, setAvailableModels] = useState<Record<string, string[] | ProviderModelsData>>({});
   const [preferredModel, setPreferredModel] = useState('');
   const [preferredFlashModel, setPreferredFlashModel] = useState('');
   const [starredModels, setStarredModels] = useState<string[]>([]);
@@ -128,13 +90,12 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
-  const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
   const [selectedByokProvider, setSelectedByokProvider] = useState('');
-  const [deletingProvider, setDeletingProvider] = useState<string | null>(null);
+  const [_deletingProvider, setDeletingProvider] = useState<string | null>(null);
 
   // Custom (sub-)providers state
   const [showAddProviderForm, setShowAddProviderForm] = useState(false);
-  const [addProviderForm, setAddProviderForm] = useState<AddProviderForm>({ name: '', parent_provider: '' });
+  const [addProviderForm, setAddProviderForm] = useState<AddProviderFormState>({ name: '', parent_provider: '' });
   const [addProviderError, setAddProviderError] = useState<string | null>(null);
   const [modelTabError, setModelTabError] = useState<string | null>(null);
   const [modelSaveSuccess, setModelSaveSuccess] = useState(false);
@@ -142,10 +103,10 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   const [modelPickerSearch, setModelPickerSearch] = useState('');
 
   // Custom Models state
-  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
+  const [customModels, setCustomModels] = useState<CustomModelEntry[]>([]);
   const [showCustomModelForm, setShowCustomModelForm] = useState(false);
   const [editingCustomModelIdx, setEditingCustomModelIdx] = useState<number | null>(null);
-  const [customModelForm, setCustomModelForm] = useState<CustomModelForm>({ name: '', model_id: '', provider: '', parameters: '', extra_body: '' });
+  const [customModelForm, setCustomModelForm] = useState<CustomModelFormState>({ name: '', model_id: '', provider: '', parameters: '', extra_body: '' });
   const [customModelError, setCustomModelError] = useState<string | null>(null);
 
   // Connected Accounts (Codex OAuth — Device Code Flow)
@@ -269,7 +230,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
         getCodexOAuthStatus(),
         getClaudeOAuthStatus(),
       ]);
-      const modelsData = modelsRes as { models?: AvailableModelsMap };
+      const modelsData = modelsRes as { models?: Record<string, string[] | ProviderModelsData> };
       const keysData = keysRes as { byok_enabled?: boolean; providers?: ByokProvider[] };
       setAvailableModels(modelsData?.models || {});
       setByokEnabled(keysData?.byok_enabled || false);
@@ -400,7 +361,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
     setAddProviderError(null);
   };
 
-  const handleDeleteCustomProvider = (providerName: string) => {
+  const _handleDeleteCustomProvider = (providerName: string) => {
     setByokProviders(prev => prev.filter(p => p.provider !== providerName));
     // Also clean up any pending key/url inputs
     setKeyInputs(prev => { const next = { ...prev }; delete next[providerName]; return next; });
@@ -470,13 +431,13 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   // Custom Models helpers
   const CUSTOM_MODEL_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$/;
 
-  const validateCustomModelForm = (form: CustomModelForm, existingModels: CustomModel[], editIdx: number | null): string | null => {
+  const validateCustomModelForm = (form: CustomModelFormState, existingModels: CustomModelEntry[], editIdx: number | null): string | null => {
     if (!form.name?.trim()) return t('settings.customModelNameRequired');
     if (!CUSTOM_MODEL_NAME_RE.test(form.name.trim())) return t('settings.customModelNameInvalid');
     if (!form.model_id?.trim()) return t('settings.customModelIdRequired');
     if (!form.provider?.trim()) return t('settings.customModelProviderRequired');
     // Check collision with system models
-    const allSystemModels = Object.values(availableModels).flatMap(pd => Array.isArray(pd) ? pd as string[] : (pd as ProviderModels)?.models || []);
+    const allSystemModels = Object.values(availableModels).flatMap(pd => Array.isArray(pd) ? pd as string[] : (pd as ProviderModelsData)?.models || []);
     if (allSystemModels.includes(form.name.trim())) return t('settings.customModelNameConflict');
     // Check duplicate in custom models
     const dup = existingModels.findIndex((cm, i) => i !== editIdx && cm.name === form.name.trim());
@@ -498,7 +459,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
   const handleCustomModelSave = () => {
     const err = validateCustomModelForm(customModelForm, customModels, editingCustomModelIdx);
     if (err) { setCustomModelError(err); return; }
-    const entry: CustomModel = {
+    const entry: CustomModelEntry = {
       name: customModelForm.name.trim(),
       model_id: customModelForm.model_id.trim(),
       provider: customModelForm.provider.trim(),
@@ -715,6 +676,28 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
     setSaveSuccess(false);
     onClose();
   };
+
+  // Normalize availableModels to the Record<string, ProviderModelsData> shape
+  // expected by ModelTierConfig / ModelSelector (backend may return string[]).
+  const normalizedModels = useMemo<Record<string, ProviderModelsData>>(() => {
+    const out: Record<string, ProviderModelsData> = {};
+    for (const [provider, pd] of Object.entries(availableModels)) {
+      if (Array.isArray(pd)) {
+        out[provider] = { models: pd, display_name: provider.charAt(0).toUpperCase() + provider.slice(1) };
+      } else {
+        out[provider] = pd as ProviderModelsData;
+      }
+    }
+    return out;
+  }, [availableModels]);
+
+  // Build provider manifest for ProviderManager from byokProviders list.
+  const providerManifest = useMemo(() => {
+    return byokProviders.filter(p => !p.is_custom).map(p => ({
+      provider: p.provider,
+      display_name: p.display_name || p.provider,
+    }));
+  }, [byokProviders]);
 
   if (!isOpen) return null;
 
@@ -1094,53 +1077,14 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
                 <div className="space-y-6">
                   {/* Section 1: Model Preferences */}
                   <div>
-                    {/* Default + Flash selectors — side by side */}
-                    <div className="grid grid-cols-2 gap-3">
-                      {[
-                        { label: t('settings.defaultModel'), desc: t('settings.defaultModelDesc'), value: preferredModel, setter: setPreferredModel },
-                        { label: t('settings.flashModel'), desc: t('settings.flashModelDesc'), value: preferredFlashModel, setter: setPreferredFlashModel },
-                      ].map(({ label, desc, value, setter }) => (
-                        <div key={label}>
-                          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-secondary)' }}>{label}</label>
-                          <Select
-                            value={value}
-                            onChange={(e) => setter(e.target.value)}
-                            disabled={isSubmitting}
-                          >
-                            <option value="">{t('settings.systemDefault')}</option>
-                            {Object.entries(availableModels).map(([provider, providerData]) => {
-                              const pd = providerData as string[] | ProviderModels;
-                              const models: string[] = Array.isArray(pd) ? pd : (pd?.models || []);
-                              const displayName = (!Array.isArray(pd) && pd?.display_name) || provider.charAt(0).toUpperCase() + provider.slice(1);
-                              return (
-                              <optgroup key={provider} label={displayName}>
-                                {models.map((m) => (
-                                  <option key={m} value={m}>{m}</option>
-                                ))}
-                              </optgroup>
-                              );
-                            })}
-                            {byokProviders.filter(p => p.is_custom && p.has_key).length > 0 && (
-                              <optgroup label={t('settings.byokProviders', 'BYOK Providers')}>
-                                {byokProviders.filter(p => p.is_custom && p.has_key).map((prov) => (
-                                  <option key={`byok-${prov.provider}`} value={prov.provider}>
-                                    {prov.display_name || prov.provider} ({prov.parent_provider})
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            {customModels.length > 0 && (
-                              <optgroup label={t('settings.customModels')}>
-                                {customModels.map((cm) => (
-                                  <option key={`custom-${cm.name}`} value={cm.name}>{cm.name}</option>
-                                ))}
-                              </optgroup>
-                            )}
-                          </Select>
-                          <p className="text-[11px] mt-1" style={{ color: 'var(--color-text-tertiary)' }}>{desc}</p>
-                        </div>
-                      ))}
-                    </div>
+                    {/* Default + Flash model selectors */}
+                    <ModelTierConfig
+                      models={normalizedModels}
+                      primaryModel={preferredModel}
+                      onPrimaryModelChange={setPreferredModel}
+                      flashModel={preferredFlashModel}
+                      onFlashModelChange={setPreferredFlashModel}
+                    />
 
                     {/* Quick-access models — compact strip */}
                     <div style={{ marginTop: '16px' }}>
@@ -1214,7 +1158,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
                         {/* Provider groups */}
                         <div className="px-1 pb-1 max-h-[280px] overflow-y-auto">
                           {Object.entries(availableModels).map(([provider, providerData]) => {
-                            const pd = providerData as string[] | ProviderModels;
+                            const pd = providerData as string[] | ProviderModelsData;
                             const models: string[] = Array.isArray(pd) ? pd : (pd?.models || []);
                             const query = modelPickerSearch.toLowerCase();
                             const filtered = query
@@ -1546,38 +1490,29 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
 
                     {byokEnabled && (<>
                       <div className="space-y-3 mt-4">
-                        <div className="flex items-center gap-2">
-                          <Select
-                            value={selectedByokProvider}
-                            onChange={(e) => setSelectedByokProvider(e.target.value)}
-                            className="flex-1 min-w-0"
-                          >
-                            <option value="">{t('settings.selectProvider')}</option>
-                            {byokProviders.filter(p => !p.is_custom).map((prov) => (
-                              <option key={prov.provider} value={prov.provider}>
-                                {prov.display_name || prov.provider}{prov.has_key ? ' ✓' : ''}
-                              </option>
-                            ))}
-                            {byokProviders.some(p => p.is_custom) && (
-                              <optgroup label="─────────">
-                                {byokProviders.filter(p => p.is_custom).map((prov) => (
-                                  <option key={prov.provider} value={prov.provider}>
-                                    {prov.display_name}{prov.has_key ? ' ✓' : ''} ({prov.parent_provider})
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                          </Select>
-                          <button
-                            type="button"
-                            onClick={() => { setShowAddProviderForm(true); setAddProviderForm({ name: '', parent_provider: '', api_key: '', base_url: '', use_response_api: false }); setAddProviderError(null); }}
-                            className="p-2 rounded-md shrink-0 transition-colors"
-                            style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
-                            title={t('settings.addProvider')}
-                          >
-                            <Plus className="h-4 w-4" />
-                          </button>
-                        </div>
+                        <ProviderManager
+                          providers={providerManifest}
+                          configuredProviders={byokProviders.filter(p => p.has_key)}
+                          selectedProvider={selectedByokProvider || null}
+                          onSelectProvider={(p) => setSelectedByokProvider(p || '')}
+                          keyInputs={keyInputs}
+                          onKeyChange={(provider, value) => setKeyInputs(prev => ({ ...prev, [provider]: value }))}
+                          baseUrlInputs={baseUrlInputs}
+                          onBaseUrlChange={(provider, value) => setBaseUrlInputs(prev => ({ ...prev, [provider]: value }))}
+                          providerNeedsBaseUrl={(provider) => !!byokProviders.find(p => p.provider === provider)?.is_custom}
+                          onDeleteProvider={handleDeleteProviderKey}
+                        />
+
+                        {/* Add custom sub-provider button */}
+                        <button
+                          type="button"
+                          onClick={() => { setShowAddProviderForm(true); setAddProviderForm({ name: '', parent_provider: '', api_key: '', base_url: '', use_response_api: false }); setAddProviderError(null); }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                          style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          {t('settings.addProvider')}
+                        </button>
 
                         {/* Add Provider inline form */}
                         {showAddProviderForm && (
@@ -1678,102 +1613,6 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
                             </div>
                           </div>
                         )}
-
-                        {(() => {
-                          const prov = byokProviders.find(p => p.provider === selectedByokProvider);
-                          if (!prov) return null;
-                          return (
-                            <div className="space-y-2">
-                              {prov.is_custom && (
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                                    style={{ backgroundColor: 'var(--color-accent-soft)', color: 'var(--color-accent-primary)' }}
-                                  >
-                                    {prov.parent_provider}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteCustomProvider(prov.provider)}
-                                    className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded transition-colors"
-                                    style={{ color: 'var(--color-loss)' }}
-                                  >
-                                    <Trash2 className="h-3 w-3" /> Remove
-                                  </button>
-                                </div>
-                              )}
-                              <div className="flex-1 relative">
-                                <input
-                                  type={visibleKeys[prov.provider] ? 'text' : 'password'}
-                                  value={keyInputs[prov.provider] || ''}
-                                  onChange={(e) => setKeyInputs((prev) => ({ ...prev, [prov.provider]: e.target.value }))}
-                                  placeholder={prov.has_key ? (prov.masked_key ?? undefined) : t('settings.enterApiKey')}
-                                  className="w-full rounded-md px-3 py-1.5 pr-16 text-sm"
-                                  style={{
-                                    backgroundColor: 'var(--color-bg-card)',
-                                    border: '1px solid var(--color-border-muted)',
-                                    color: 'var(--color-text-primary)',
-                                  }}
-                                />
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => setVisibleKeys((prev) => ({ ...prev, [prov.provider]: !prev[prov.provider] }))}
-                                    className="p-0.5"
-                                    style={{ color: 'var(--color-text-tertiary)' }}
-                                  >
-                                    {visibleKeys[prov.provider] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                                  </button>
-                                  {prov.has_key && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteProviderKey(prov.provider)}
-                                      disabled={deletingProvider === prov.provider}
-                                      className="p-0.5"
-                                      style={{ color: 'var(--color-loss)' }}
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                              {/* Base URL + options only for custom sub-providers */}
-                              {prov.is_custom && (
-                                <>
-                                  <input
-                                    type="text"
-                                    value={baseUrlInputs[prov.provider] || ''}
-                                    onChange={(e) => setBaseUrlInputs((prev) => ({ ...prev, [prov.provider]: e.target.value }))}
-                                    placeholder={t('settings.baseUrlPlaceholder')}
-                                    className="w-full rounded-md px-3 py-1.5 text-sm"
-                                    style={{
-                                      backgroundColor: 'var(--color-bg-card)',
-                                      border: '1px solid var(--color-border-muted)',
-                                      color: 'var(--color-text-tertiary)',
-                                    }}
-                                  />
-                                  {/* Provider options — only for openai-based */}
-                                  {prov.parent_provider === 'openai' && (
-                                    <div className="flex items-center justify-between pt-1">
-                                      <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>{t('settings.useResponseApi')}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setByokProviders(prev => prev.map(p =>
-                                            p.provider === prov.provider ? { ...p, use_response_api: !p.use_response_api } : p
-                                          ));
-                                        }}
-                                        className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                                        style={{ backgroundColor: prov.use_response_api ? 'var(--color-accent-primary)' : 'var(--color-border-muted)' }}
-                                      >
-                                        <span className="inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform" style={{ transform: prov.use_response_api ? 'translateX(17px)' : 'translateX(3px)' }} />
-                                      </button>
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          );
-                        })()}
                       </div>
 
                       {/* Custom Models — inside BYOK */}

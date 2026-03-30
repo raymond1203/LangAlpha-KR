@@ -439,29 +439,9 @@ export const getPortfolio = portfolioApi.listPortfolio;
 /** Add portfolio holding. Payload: symbol, instrument_type, quantity, average_cost?, ... */
 export const addPortfolioHolding = portfolioApi.addPortfolioHolding;
 
-// --- Models ---
+// --- Models & BYOK API Keys (moved to shared api/model.ts) ---
 
-export async function getAvailableModels(): Promise<Record<string, unknown>> {
-  const { data } = await api.get('/api/v1/models');
-  return data;
-}
-
-// --- BYOK API Keys ---
-
-export async function getUserApiKeys(): Promise<Record<string, unknown>> {
-  const { data } = await api.get('/api/v1/users/me/api-keys');
-  return data;
-}
-
-export async function updateUserApiKeys(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data } = await api.put('/api/v1/users/me/api-keys', payload);
-  return data;
-}
-
-export async function deleteUserApiKey(provider: string): Promise<Record<string, unknown>> {
-  const { data } = await api.delete(`/api/v1/users/me/api-keys/${provider}`);
-  return data;
-}
+export { getAvailableModels, getUserApiKeys, updateUserApiKeys, deleteUserApiKey } from '@/api/model';
 
 // --- OAuth (Connected Accounts) ---
 

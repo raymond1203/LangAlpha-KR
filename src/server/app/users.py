@@ -249,6 +249,7 @@ async def update_current_user(
         timezone=request.timezone,
         locale=request.locale,
         onboarding_completed=request.onboarding_completed,
+        personalization_completed=request.personalization_completed,
     )
 
     if not user:
@@ -310,8 +311,8 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
     name_re = re.compile(CUSTOM_MODEL_NAME_RE)
     seen_names: set[str] = set()
 
-    # Build valid provider set once: BYOK-eligible built-ins + custom providers
-    valid_providers = set(mc.get_byok_eligible_providers())
+    # Build valid provider set: all known flat providers + custom providers
+    valid_providers = set(mc.flat_providers.keys())
     if custom_providers:
         valid_providers.update(
             cp["name"] for cp in custom_providers if isinstance(cp, dict) and cp.get("name")

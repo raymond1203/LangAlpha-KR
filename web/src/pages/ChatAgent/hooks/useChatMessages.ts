@@ -16,6 +16,7 @@
 import type React from 'react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useUser } from '@/hooks/useUser';
 import { sendChatMessageStream, replayThreadHistory, getWorkflowStatus, reconnectToWorkflowStream, sendHitlResponse, streamSubagentTaskEvents, fetchThreadTurns, submitFeedback, removeFeedback, getThreadFeedback } from '../utils/api';
 import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 export { removeStoredThreadId } from './utils/threadStorage';
@@ -468,6 +469,12 @@ export function useChatMessages(
   onWorkspaceCreated: ((info: { workspaceId: string; question: string }) => void) | null = null,
 ) {
   const { t } = useTranslation();
+
+  // User locale/timezone — prefer saved preference, fall back to browser detection
+  const { user } = useUser();
+  const userLocale = user?.locale || navigator.language || 'en-US';
+  const userTimezone = user?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+
   // State
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [threadId, setThreadId] = useState<string>(() => {
@@ -3130,7 +3137,9 @@ export function useChatMessages(
           }
         },
         additionalContext,
-        agentMode
+        agentMode,
+        userLocale,
+        userTimezone
       );
     } catch (err: unknown) {
       console.error('Error sending steering:', err);
@@ -3270,7 +3279,7 @@ export function useChatMessages(
         processEvent,
         additionalContext,
         agentMode,
-        undefined, undefined, undefined, undefined,
+        userLocale, userTimezone, undefined, undefined,
         model || null,
         reasoningEffort || null,
         fastMode || null
@@ -3746,8 +3755,8 @@ export function useChatMessages(
         processEvent,
         null,
         agentMode,
-        undefined, // locale
-        undefined, // timezone
+        userLocale,
+        userTimezone,
         checkpointId,
         forkFromTurn,
         modelOptions.model || null,

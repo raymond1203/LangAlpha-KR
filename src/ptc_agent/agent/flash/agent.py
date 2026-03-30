@@ -251,11 +251,14 @@ class FlashAgent:
 
         # Model resilience middleware (retry + fallback)
         if ModelFallbackMiddleware is not None and self.config.llm.fallback:
-            from src.llms import get_llm_by_type
-
-            fallback_instances = [
-                get_llm_by_type(name) for name in self.config.llm.fallback
-            ]
+            # Use pre-resolved clients (OAuth/BYOK-aware) when available
+            if self.config.fallback_llm_clients:
+                fallback_instances = self.config.fallback_llm_clients
+            else:
+                from src.llms import get_llm_by_type
+                fallback_instances = [
+                    get_llm_by_type(name) for name in self.config.llm.fallback
+                ]
             main_middleware.append(ModelFallbackMiddleware(*fallback_instances))
             logger.info(
                 "Flash model fallback enabled",

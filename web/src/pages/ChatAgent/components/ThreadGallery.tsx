@@ -620,6 +620,7 @@ function ThreadGallery({ workspaceId, onBack, onThreadSelect }: ThreadGalleryPro
                 disabled={isSendingMessage || !workspaceId}
                 files={panelFiles}
                 dropdownDirection="down"
+                mode={isFlash ? 'fast' : 'deep'}
               />
             </div>
 

@@ -281,6 +281,24 @@ async def _handle_send_message(
     agent_mode = request.agent_mode or "ptc"
     workspace_id = request.workspace_id
 
+    # 403 guard: require at least one configured API key (or OAuth connection)
+    # before allowing chat. Skip in open-source mode (no auth).
+    from src.config.settings import AUTH_ENABLED
+    if AUTH_ENABLED and not is_byok:
+        from src.server.database.api_keys import is_byok_active
+        has_key = await is_byok_active(user_id)
+        if not has_key:
+            # Check for OAuth connections as an alternative
+            from src.server.database.oauth_tokens import has_any_oauth_token
+            has_oauth = await has_any_oauth_token(user_id)
+            if not has_oauth:
+                from src.server.dependencies.usage_limits import release_burst_slot
+                await release_burst_slot(user_id)
+                raise HTTPException(
+                    status_code=403,
+                    detail="No API key configured. Please complete setup at /setup/connect.",
+                )
+
     # Resolve workspace_id from thread if not provided
     if not workspace_id and thread_id:
         thread_record = await get_thread_by_id(thread_id)

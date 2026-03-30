@@ -7,6 +7,11 @@ export interface User {
   email: string;
   name?: string | null;
   avatar_url?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  has_api_key?: boolean;
+  has_oauth_token?: boolean;
+  invitation_redeemed?: boolean;
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;

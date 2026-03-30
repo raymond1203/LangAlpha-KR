@@ -134,3 +134,14 @@ async def get_oauth_status(
                     "plan_type": row["plan_type"],
                 }
             return {"connected": False, "account_id": None, "email": None, "plan_type": None}
+
+
+async def has_any_oauth_token(user_id: str) -> bool:
+    """Quick check: does the user have at least one OAuth token row?"""
+    async with get_db_connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(
+                "SELECT 1 FROM user_oauth_tokens WHERE user_id = %s LIMIT 1",
+                (user_id,),
+            )
+            return (await cur.fetchone()) is not None
