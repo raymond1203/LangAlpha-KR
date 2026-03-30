@@ -109,6 +109,8 @@ export default function ExportPreviewModal({
   const [pageCount, setPageCount] = useState(0);
   const [rendering, setRendering] = useState(false);
   const [previewZoom, setPreviewZoom] = useState(0.5);
+  const previewZoomRef = useRef(previewZoom);
+  previewZoomRef.current = previewZoom;
 
   // ---- Derived ----
   const activePreset = useMemo(
@@ -253,7 +255,7 @@ export default function ExportPreviewModal({
         // (clientHeight is unzoomed but getBoundingClientRect is zoomed),
         // causing it to fit 2x content per page.
         const pagesEl = container.querySelector('.pagedjs_pages') as HTMLElement | null;
-        if (pagesEl) pagesEl.style.zoom = String(previewZoom);
+        if (pagesEl) pagesEl.style.zoom = String(previewZoomRef.current);
         // Reveal now that zoom is applied — no layout flash
         container.style.visibility = 'visible';
         setRendering(false);
@@ -418,8 +420,19 @@ export default function ExportPreviewModal({
     </span>
   );
 
+  // Disable Save when preview is still catching up to typography changes
+  const typoPending =
+    debouncedTypo.font !== printFontFamily ||
+    debouncedTypo.size !== printFontSize ||
+    debouncedTypo.height !== printLineHeight;
+
   const saveBtn = (
-    <button className="export-preview-save-btn" onClick={() => handlePrint()}>
+    <button
+      className="export-preview-save-btn"
+      onClick={() => handlePrint()}
+      disabled={rendering || typoPending}
+      style={rendering || typoPending ? { opacity: 0.6, cursor: 'wait' } : undefined}
+    >
       {t('filePanel.saveAsPdf')}
     </button>
   );
@@ -487,7 +500,7 @@ export default function ExportPreviewModal({
             <button onClick={() => fetchContent()} className="export-preview-retry-btn">
               {t('filePanel.tryAgain') ?? 'Try Again'}
             </button>
-            <button onClick={() => setError(null)} className="export-preview-anyway-btn">
+            <button onClick={() => { setError(null); setFullContent(content); }} className="export-preview-anyway-btn">
               {t('filePanel.exportAnyway') ?? 'Export Anyway'}
             </button>
           </div>

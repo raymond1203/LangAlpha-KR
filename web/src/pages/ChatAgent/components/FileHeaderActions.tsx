@@ -8,6 +8,7 @@
 import React, { useState } from 'react';
 import { Download, Pencil, Save, X, Undo2, Redo2, FileDiff, FileText, Check, Clipboard } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { toast } from '@/components/ui/use-toast';
 import { useTranslation } from 'react-i18next';
 
 // --- File type detection helpers ---
@@ -83,11 +84,8 @@ function FileHeaderActions({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const [copying, setCopying] = useState(false);
-
   const handleCopy = async () => {
     if (!selectedFile) return;
-    setCopying(true);
     setDropdownOpen(false);
     try {
       // Fetch full content to avoid copying truncated text for large files
@@ -96,9 +94,7 @@ function FileHeaderActions({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      console.error('Copy failed');
-    } finally {
-      setCopying(false);
+      toast({ description: t('filePanel.copyFailed'), variant: 'destructive' });
     }
   };
 

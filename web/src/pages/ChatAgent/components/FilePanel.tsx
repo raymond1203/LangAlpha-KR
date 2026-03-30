@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react';
 import type { editor } from 'monaco-editor';
-import { ArrowLeft, X, FileText, FileImage, File, RefreshCw, Download, Upload, Folder, ChevronRight, ChevronDown, ArrowUpDown, AlertTriangle, Trash2, CheckSquare, Square, HardDrive, Printer, Minus, Plus, Pencil, Save, FileDiff, Undo2, Redo2, TextSelect, FolderOpen, Settings } from 'lucide-react';
+import { ArrowLeft, X, FileText, FileImage, File, RefreshCw, Upload, Folder, ChevronRight, ChevronDown, ArrowUpDown, AlertTriangle, Trash2, CheckSquare, Square, HardDrive, Pencil, TextSelect, FolderOpen, Settings } from 'lucide-react';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { SandboxSettingsContent } from './SandboxSettingsPanel';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useReactToPrint } from 'react-to-print';
 import SyntaxHighlighter, { oneDark, oneLight } from './SyntaxHighlighter';
 import { useTranslation } from 'react-i18next';
 import { readWorkspaceFile, readWorkspaceFileFull, writeWorkspaceFile, downloadWorkspaceFile, downloadWorkspaceFileAsArrayBuffer, triggerFileDownload, uploadWorkspaceFile, deleteWorkspaceFiles, backupWorkspaceFiles, getBackupStatus } from '../utils/api';
@@ -12,6 +11,7 @@ import { stripLineNumbers } from './toolDisplayConfig';
 import Markdown from './Markdown';
 import ImageLightbox from './ImageLightbox';
 import DocumentErrorBoundary from './viewers/DocumentErrorBoundary';
+import FileHeaderActions from './FileHeaderActions';
 import './FilePanel.css';
 import type { LucideIcon } from 'lucide-react';
 
@@ -20,6 +20,7 @@ const ExcelViewer = React.lazy(() => import('./viewers/ExcelViewer'));
 const CsvViewer = React.lazy(() => import('./viewers/CsvViewer'));
 const HtmlViewer = React.lazy(() => import('./viewers/HtmlViewer'));
 const CodeEditor = React.lazy(() => import('./viewers/CodeEditor'));
+const ExportPreviewModal = React.lazy(() => import('./ExportPreviewModal'));
 
 // --- Types ---
 
@@ -76,20 +77,6 @@ interface BackupResult {
   [key: string]: unknown;
 }
 
-interface PrintFont {
-  value: string;
-  label: string;
-  group: string;
-  google?: string;
-}
-
-interface PrintPreset {
-  label: string;
-  font: string;
-  size: number;
-  height: number;
-}
-
 interface SortOption {
   value: string;
   label: string;
@@ -142,36 +129,6 @@ function getAvailableTypes(filePaths: string[]): string[] {
   // Fixed display order, filtered to only those present
   return ['Docs', 'Code', 'Data', 'Image', 'Other'].filter((t) => types.has(t));
 }
-
-const PRINT_FONTS: PrintFont[] = [
-  // Sans-serif
-  { value: 'system-ui, -apple-system, sans-serif', label: 'System Sans', group: 'Sans-serif' },
-  { value: '"Inter", sans-serif', label: 'Inter', group: 'Sans-serif', google: 'Inter' },
-  { value: '"Open Sans", sans-serif', label: 'Open Sans', group: 'Sans-serif', google: 'Open+Sans' },
-  { value: '"Noto Sans", sans-serif', label: 'Noto Sans', group: 'Sans-serif', google: 'Noto+Sans' },
-  { value: '"Roboto", sans-serif', label: 'Roboto', group: 'Sans-serif', google: 'Roboto' },
-  // Serif
-  { value: '"Merriweather", serif', label: 'Merriweather', group: 'Serif', google: 'Merriweather' },
-  { value: '"Lora", serif', label: 'Lora', group: 'Serif', google: 'Lora' },
-  { value: '"Source Serif 4", serif', label: 'Source Serif', group: 'Serif', google: 'Source+Serif+4' },
-  { value: '"Noto Serif", serif', label: 'Noto Serif', group: 'Serif', google: 'Noto+Serif' },
-  // Monospace
-  { value: '"JetBrains Mono", monospace', label: 'JetBrains Mono', group: 'Mono', google: 'JetBrains+Mono' },
-  { value: '"Fira Code", monospace', label: 'Fira Code', group: 'Mono', google: 'Fira+Code' },
-  { value: '"Source Code Pro", monospace', label: 'Source Code Pro', group: 'Mono', google: 'Source+Code+Pro' },
-];
-
-const GOOGLE_FONTS_URL = 'https://fonts.googleapis.com/css2?' +
-  PRINT_FONTS.filter((f) => f.google)
-    .map((f) => `family=${f.google}:wght@400;600;700`)
-    .join('&') + '&display=swap';
-
-const PRINT_PRESETS: PrintPreset[] = [
-  { label: 'Equity Research', font: '"Inter", sans-serif', size: 11, height: 1.4 },
-  { label: 'Academic',        font: '"Source Serif 4", serif', size: 12, height: 1.6 },
-  { label: 'Technical',       font: '"JetBrains Mono", monospace', size: 12, height: 1.5 },
-  { label: 'General',         font: 'system-ui, -apple-system, sans-serif', size: 14, height: 1.6 },
-];
 
 const SORT_OPTIONS: SortOption[] = [
   { value: 'name-asc', label: 'Name A-Z' },
@@ -563,7 +520,6 @@ function FilePanel({
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const markdownRef = useRef<HTMLDivElement>(null);
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -769,31 +725,8 @@ function FilePanel({
     }
   }, [onAddContext]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Print / PDF export state
-  const [printMode, setPrintMode] = useState(false);
-  const [printFontSize, setPrintFontSize] = useState(11);
-  const [printLineHeight, setPrintLineHeight] = useState(1.4);
-  const [printFontFamily, setPrintFontFamily] = useState(PRINT_FONTS[1].value);
-
-  const activePreset = useMemo(
-    () => PRINT_PRESETS.find((p) => p.font === printFontFamily && p.size === printFontSize && p.height === printLineHeight),
-    [printFontFamily, printFontSize, printLineHeight],
-  );
-  const activePresetLabel = activePreset?.label ?? '';
-
-  const handlePrint = useReactToPrint({ contentRef: markdownRef });
-
-  // Lazy-load Google Fonts when print mode activates
-  useEffect(() => {
-    if (!printMode) return;
-    const id = 'print-google-fonts';
-    if (document.getElementById(id)) return;
-    const link = document.createElement('link');
-    link.id = id;
-    link.rel = 'stylesheet';
-    link.href = GOOGLE_FONTS_URL;
-    document.head.appendChild(link);
-  }, [printMode]);
+  // Export modal state
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Filter and sort state
   const [filterType, setFilterType] = useState('All');
@@ -1062,7 +995,6 @@ function FilePanel({
   const selectedExt = selectedFile ? getFileExtension(selectedFile.split('/').pop() || '') : '';
   const canEdit = selectedFile
     && !readOnly
-    && !printMode
     && EDITABLE_EXTENSIONS.has(selectedExt)
     && fileMime !== 'image'
     && fileMime !== 'error'
@@ -1084,7 +1016,7 @@ function FilePanel({
     setFileContent(null);
     setFileArrayBuffer(null);
     setFileMime(null);
-    setPrintMode(false);
+    setExportModalOpen(false);
     setIsEditing(false);
     setEditContent(null);
     setShowDiff(false);
@@ -1351,90 +1283,28 @@ function FilePanel({
               </button>
             </>
           )}
-          {selectedFile && !isEditing && (
-            <>
-              <button
-                onClick={async () => {
-                  try {
-                    await triggerDownloadFn(workspaceId, selectedFile);
-                  } catch (err) {
-                    console.error('[FilePanel] Download failed:', err);
-                  }
-                }}
-                className="file-panel-icon-btn"
-                title={t('filePanel.download')}
-              >
-                <Download className="h-4 w-4" />
-              </button>
-              {canEdit && (
-                <button
-                  onClick={handleStartEdit}
-                  className="file-panel-icon-btn"
-                  title={t('filePanel.editFile')}
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-              )}
-              {(getFileExtension(selectedFile) === 'md' || fileMime?.includes('markdown')) && (
-                <button
-                  onClick={() => setPrintMode((v) => !v)}
-                  className={`file-panel-icon-btn ${printMode ? 'file-panel-icon-btn-active' : ''}`}
-                  title={printMode ? t('filePanel.closePrintSettings') : t('filePanel.savePdf')}
-                >
-                  <Printer className="h-4 w-4" />
-                </button>
-              )}
-            </>
-          )}
-          {selectedFile && isEditing && (
-            <>
-              {saveError && (
-                <span className="text-xs truncate" style={{ color: 'var(--color-icon-danger)', maxWidth: 120 }} title={saveError}>
-                  {saveError}
-                </span>
-              )}
-              <button
-                onClick={() => editorRef.current?.trigger('toolbar', 'undo', null)}
-                className="file-panel-icon-btn"
-                title={t('filePanel.undo')}
-                disabled={!canUndo}
-              >
-                <Undo2 className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => editorRef.current?.trigger('toolbar', 'redo', null)}
-                className="file-panel-icon-btn"
-                title={t('filePanel.redo')}
-                disabled={!canRedo}
-              >
-                <Redo2 className="h-4 w-4" />
-              </button>
-              {hasUnsavedChanges && (
-                <button
-                  onClick={() => setShowDiff((d) => !d)}
-                  className={`file-panel-icon-btn ${showDiff ? 'file-panel-icon-btn-active' : ''}`}
-                  title={showDiff ? t('filePanel.hideDiff') : t('filePanel.showDiff')}
-                >
-                  <FileDiff className="h-4 w-4" />
-                </button>
-              )}
-              <button
-                onClick={handleSave}
-                className="file-panel-icon-btn"
-                title={t('filePanel.save')}
-                disabled={!hasUnsavedChanges || isSaving}
-              >
-                <Save className={`h-4 w-4 ${isSaving ? 'animate-pulse' : ''}`} />
-              </button>
-              <button
-                onClick={handleCancelEdit}
-                className="file-panel-icon-btn"
-                title={t('filePanel.cancelEditing')}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </>
-          )}
+          <FileHeaderActions
+            selectedFile={selectedFile}
+            isEditing={isEditing}
+            workspaceId={workspaceId}
+            fileContent={fileContent}
+            fileMime={fileMime}
+            canEdit={canEdit}
+            onStartEdit={handleStartEdit}
+            onOpenExportModal={() => setExportModalOpen(true)}
+            triggerDownloadFn={triggerDownloadFn}
+            readFileFullFn={readFileFullFn}
+            editorRef={editorRef}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            hasUnsavedChanges={hasUnsavedChanges}
+            showDiff={showDiff}
+            setShowDiff={setShowDiff}
+            isSaving={isSaving}
+            saveError={saveError}
+            onSave={handleSave}
+            onCancelEdit={handleCancelEdit}
+          />
           {!selectMode && !isEditing && (
             <button onClick={onClose} className="file-panel-icon-btn" title={t('filePanel.close')}>
               <X className="h-4 w-4" />
@@ -1492,73 +1362,6 @@ function FilePanel({
         </div>
       )}
 
-      {/* Print settings toolbar */}
-      {printMode && selectedFile && (
-        <div className="print-settings-toolbar">
-          <div className="print-settings-row">
-            <span className="print-settings-label">Style</span>
-            <select
-              className="print-settings-select"
-              value={activePresetLabel}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                const preset = PRINT_PRESETS.find((p) => p.label === e.target.value);
-                if (preset) {
-                  setPrintFontFamily(preset.font);
-                  setPrintFontSize(preset.size);
-                  setPrintLineHeight(preset.height);
-                }
-              }}
-            >
-              {PRINT_PRESETS.map((p) => (
-                <option key={p.label} value={p.label}>{p.label}</option>
-              ))}
-              {!activePreset && <option value="" disabled>Custom</option>}
-            </select>
-          </div>
-          <div className="print-settings-row">
-            <span className="print-settings-label">Font</span>
-            <select
-              className="print-settings-select"
-              value={printFontFamily}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setPrintFontFamily(e.target.value)}
-            >
-              {['Sans-serif', 'Serif', 'Mono'].map((group) => (
-                <optgroup key={group} label={group}>
-                  {PRINT_FONTS.filter((f) => f.group === group).map((f) => (
-                    <option key={f.label} value={f.value}>{f.label}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          <div className="print-settings-row">
-            <span className="print-settings-label">Size</span>
-            <div className="print-settings-stepper">
-              <button className="print-settings-stepper-btn" onClick={() => setPrintFontSize((v) => Math.max(10, v - 1))} disabled={printFontSize <= 10}>
-                <Minus className="h-3 w-3" />
-              </button>
-              <span className="print-settings-stepper-value">{printFontSize}px</span>
-              <button className="print-settings-stepper-btn" onClick={() => setPrintFontSize((v) => Math.min(22, v + 1))} disabled={printFontSize >= 22}>
-                <Plus className="h-3 w-3" />
-              </button>
-            </div>
-            <span className="print-settings-label" style={{ marginLeft: 12 }}>Height</span>
-            <div className="print-settings-stepper">
-              <button className="print-settings-stepper-btn" onClick={() => setPrintLineHeight((v) => Math.max(1.2, +(v - 0.2).toFixed(1)))} disabled={printLineHeight <= 1.2}>
-                <Minus className="h-3 w-3" />
-              </button>
-              <span className="print-settings-stepper-value">{printLineHeight.toFixed(1)}</span>
-              <button className="print-settings-stepper-btn" onClick={() => setPrintLineHeight((v) => Math.min(2.4, +(v + 0.2).toFixed(1)))} disabled={printLineHeight >= 2.4}>
-                <Plus className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
-          <button className="print-settings-print-btn" onClick={handlePrint}>
-            <Printer className="h-3.5 w-3.5" />
-            Save as PDF
-          </button>
-        </div>
-      )}
 
       {/* Filter & Sort toolbar */}
       {!showSettings && !selectedFile && !filesLoading && !filesError && files.length > 0 && (
@@ -1733,20 +1536,12 @@ function FilePanel({
                 ) : fileMime === 'error' ? (
                   <DocumentErrorFallback onDownload={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FilePanel] Download failed:', err))} />
                 ) : selectedFile?.startsWith('/large_tool_results/') ? (
-                  <div
-                    ref={markdownRef}
-                    className={`markdown-print-content ${printMode ? 'print-preview-active' : ''}`}
-                    style={printMode ? { '--print-font-size': `${printFontSize}px`, '--print-line-height': printLineHeight, '--print-font-family': printFontFamily } as React.CSSProperties : undefined}
-                  >
-                    <Markdown variant="panel" content={stripLineNumbers(fileContent) ?? ''} className={printMode ? undefined : 'text-sm'} />
+                  <div className="markdown-print-content">
+                    <Markdown variant="panel" content={stripLineNumbers(fileContent) ?? ''} className="text-sm" />
                   </div>
                 ) : fileMime?.includes('markdown') || getFileExtension(selectedFile) === 'md' ? (
-                  <div
-                    ref={markdownRef}
-                    className={`markdown-print-content ${printMode ? 'print-preview-active' : ''}`}
-                    style={printMode ? { '--print-font-size': `${printFontSize}px`, '--print-line-height': printLineHeight, '--print-font-family': printFontFamily } as React.CSSProperties : undefined}
-                  >
-                    <Markdown variant="panel" content={fileContent ?? ''} className={printMode ? undefined : 'text-sm'} />
+                  <div className="markdown-print-content">
+                    <Markdown variant="panel" content={fileContent ?? ''} className="text-sm" />
                   </div>
                 ) : (
                   <SyntaxHighlighter
@@ -1812,6 +1607,19 @@ function FilePanel({
           )}
         </div>
       </div>
+      )}
+
+      {selectedFile && exportModalOpen && (
+        <Suspense fallback={null}>
+          <ExportPreviewModal
+            open={exportModalOpen}
+            onOpenChange={setExportModalOpen}
+            content={fileContent ?? ''}
+            fileName={selectedFile}
+            workspaceId={workspaceId}
+            readFileFullFn={readFileFullFn}
+          />
+        </Suspense>
       )}
     </div>
   );
