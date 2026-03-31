@@ -6,7 +6,6 @@ import { Shield, X } from 'lucide-react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useConfiguredProviders } from '@/hooks/useConfiguredProviders';
 import { skipSetup } from '@/hooks/useSetupGate';
-import { useIsMobile } from '@/hooks/useIsMobile';
 
 // Self-hosted / local dev: always allow exiting the wizard since keys are in .env
 const AUTH_ENABLED = !!import.meta.env.VITE_SUPABASE_URL;
@@ -137,7 +136,6 @@ function slideVariants(direction: number) {
 export default function SetupWizard() {
   const { t } = useTranslation();
   const { theme } = useTheme();
-  const isMobile = useIsMobile();
   const logo = theme === 'light' ? logoDark : logoLight;
   const location = useLocation();
   const navigate = useNavigate();
@@ -177,9 +175,8 @@ export default function SetupWizard() {
       <header className="flex flex-col items-center gap-3 sm:gap-4 pt-5 sm:pt-10 pb-2 px-4">
         <img src={logo} alt="LangAlpha" className="h-7" />
         <h1
-          className="text-center font-semibold"
+          className="text-center font-semibold text-lg sm:text-2xl"
           style={{
-            fontSize: isMobile ? '1.125rem' : '1.5rem',
             lineHeight: 1.3,
             color: 'var(--color-text-primary)',
           }}
