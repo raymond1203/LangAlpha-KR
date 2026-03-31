@@ -1,13 +1,6 @@
-/* CSS classes used:
-   .file-panel-icon-btn — existing button style
-   .file-panel-icon-btn-active — existing active state
-   .file-header-dropdown — popover dropdown container (defined in FilePanel.css)
-   .file-header-dropdown-item — menu item button (defined in FilePanel.css)
-*/
-
 import React, { useState } from 'react';
 import { Download, Pencil, Save, X, Undo2, Redo2, FileDiff, FileText, Check, Clipboard } from 'lucide-react';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/use-toast';
 import { useTranslation } from 'react-i18next';
 
@@ -81,12 +74,10 @@ function FileHeaderActions({
   onCancelEdit,
 }: FileHeaderActionsProps) {
   const { t } = useTranslation();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     if (!selectedFile) return;
-    setDropdownOpen(false);
     try {
       // Fetch full content to avoid copying truncated text for large files
       const { content } = await readFileFullFn(workspaceId, selectedFile);
@@ -163,20 +154,14 @@ function FileHeaderActions({
       // Markdown file: Download as PDF + Download as Markdown
       return (
         <>
-          <button
-            className="file-header-dropdown-item"
-            onClick={() => { onOpenExportModal(); setDropdownOpen(false); }}
-          >
+          <DropdownMenuItem onSelect={() => onOpenExportModal()}>
             <FileText className="h-3.5 w-3.5" />
             {t('filePanel.downloadAsPdf')}
-          </button>
-          <button
-            className="file-header-dropdown-item"
-            onClick={() => { triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err)); setDropdownOpen(false); }}
-          >
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.downloadAsMarkdown')}
-          </button>
+          </DropdownMenuItem>
         </>
       );
     }
@@ -185,17 +170,11 @@ function FileHeaderActions({
       // Non-markdown text file: Download + Copy to clipboard
       return (
         <>
-          <button
-            className="file-header-dropdown-item"
-            onClick={() => { triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err)); setDropdownOpen(false); }}
-          >
+          <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
             <Download className="h-3.5 w-3.5" />
             {t('filePanel.download')}
-          </button>
-          <button
-            className="file-header-dropdown-item"
-            onClick={handleCopy}
-          >
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleCopy}>
             {copied
               ? <Check className="h-3.5 w-3.5" style={{ color: 'var(--color-success)' }} />
               : <Clipboard className="h-3.5 w-3.5" />
@@ -204,42 +183,35 @@ function FileHeaderActions({
               ? (t('filePanel.copiedToClipboard') ?? 'Copied!')
               : (t('filePanel.copyToClipboard') ?? 'Copy to clipboard')
             }
-          </button>
+          </DropdownMenuItem>
         </>
       );
     }
 
     // Binary file: Download only
     return (
-      <button
-        className="file-header-dropdown-item"
-        onClick={() => { triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err)); setDropdownOpen(false); }}
-      >
+      <DropdownMenuItem onSelect={() => triggerDownloadFn(workspaceId, selectedFile).catch((err: unknown) => console.error('[FileHeaderActions] Download failed:', err))}>
         <Download className="h-3.5 w-3.5" />
         {t('filePanel.download')}
-      </button>
+      </DropdownMenuItem>
     );
   };
 
   return (
     <>
-      <Popover open={dropdownOpen} onOpenChange={setDropdownOpen}>
-        <PopoverTrigger asChild>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
           <button
-            className={`file-panel-icon-btn ${dropdownOpen ? 'file-panel-icon-btn-active' : ''}`}
+            className="file-panel-icon-btn"
             aria-label={t('filePanel.downloadOptions') ?? 'Download options'}
           >
             <Download className="h-4 w-4" />
           </button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="end"
-          sideOffset={4}
-          className="file-header-dropdown"
-        >
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={4}>
           {renderDropdownItems()}
-        </PopoverContent>
-      </Popover>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {canEdit && (
         <button

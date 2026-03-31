@@ -353,6 +353,10 @@
     color: var(--color-accent-primary) !important;
     background-color: var(--color-accent-soft) !important;
   }
+  .file-panel-icon-btn[data-state=open] {
+    color: var(--color-accent-primary) !important;
+    background-color: var(--color-accent-soft) !important;
+  }
 
   /* ====== Edit Hint Banner ====== */
   .file-panel-edit-hint {
@@ -371,40 +375,6 @@
   [data-theme="light"] .file-panel-edit-hint {
     background-color: rgba(85, 72, 217, 0.06);
     border-bottom-color: rgba(85, 72, 217, 0.15);
-  }
-
-  /* ====== Download Dropdown ====== */
-  .file-header-dropdown {
-    width: auto !important;
-    min-width: 180px;
-    padding: 4px !important;
-    background: var(--color-bg-elevated) !important;
-    border: 1px solid var(--color-border-muted) !important;
-    border-radius: 6px !important;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
-  }
-  .file-header-dropdown-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 12px;
-    border: none;
-    background: none;
-    border-radius: 4px;
-    font-size: 13px;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    transition: all 0.15s;
-    text-align: left;
-  }
-  .file-header-dropdown-item:hover {
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-  }
-  .file-header-dropdown-item:focus-visible {
-    outline: 2px solid var(--color-accent-primary);
-    outline-offset: -2px;
   }
 
   /* ====== Selection Tooltip ("Add to context") ====== */

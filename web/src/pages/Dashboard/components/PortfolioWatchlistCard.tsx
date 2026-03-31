@@ -1,19 +1,11 @@
 import React, { useState } from 'react';
-import { Plus, ArrowUpRight, ArrowDownRight, Trash2, Pencil, Eye, EyeOff, Sunrise, Sunset } from 'lucide-react';
+import { Plus, ArrowUpRight, ArrowDownRight, Trash2, Pencil, Eye, EyeOff, Sunrise, Sunset, MoreVertical } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { getExtendedHoursInfo } from '@/lib/marketUtils';
-
-interface MenuPosition {
-  x: number;
-  y: number;
-}
-
-interface ContextMenuItem {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from '@/components/ui/context-menu';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 
 interface WatchlistRow {
   watchlist_item_id?: string | number;
@@ -46,40 +38,6 @@ interface PortfolioRow {
 // TODO: type properly once marketUtils exports this
 type MarketStatusData = Parameters<typeof getExtendedHoursInfo>[0];
 
-interface ContextMenuProps {
-  menu: MenuPosition | null;
-  onClose: () => void;
-  items: ContextMenuItem[];
-}
-
-function ContextMenu({ menu, onClose, items }: ContextMenuProps) {
-  if (!menu) return null;
-  return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div
-        className="fixed z-50 min-w-[120px] rounded-lg border py-1 shadow-lg"
-        style={{ left: menu.x, top: menu.y, backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}
-      >
-        {items.map((item, i) => (
-          <button
-            key={i}
-            type="button"
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors"
-            style={{ color: 'var(--color-text-primary)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-            onClick={item.onClick}
-          >
-            {item.icon}
-            {item.label}
-          </button>
-        ))}
-      </div>
-    </>
-  );
-}
-
 interface WatchlistItemProps {
   item: WatchlistRow;
   index: number;
@@ -89,83 +47,107 @@ interface WatchlistItemProps {
 
 function WatchlistItem({ item, index, onDelete, marketStatus }: WatchlistItemProps) {
   const navigate = useNavigate();
-  const [menu, setMenu] = useState<MenuPosition | null>(null);
+  const isMobile = useIsMobile();
   const pos = item.isPositive;
   const pctStr = (pos ? '+' : '') + Number(item.changePercent).toFixed(2) + '%';
+  const hasId = !!item.watchlist_item_id;
 
   // Extended hours: show when not regular session and data available
   const { extPct, extType, extPrice: _extPrice, extChange: _extChange } = getExtendedHoursInfo(marketStatus, item, { shortLabels: true });
   const extColor = extType === 'pre' ? '#fbbf24' : '#3b82f6';
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    if (!item.watchlist_item_id) return;
-    e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY });
-  };
+  const rowContent = (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+      className="flex items-center justify-between p-3 rounded-xl border border-transparent transition-all cursor-pointer"
+      style={{ backgroundColor: 'transparent' }}
+      onClick={() => navigate(`/market?symbol=${encodeURIComponent(item.symbol)}`)}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
+        e.currentTarget.style.borderColor = 'var(--color-border-muted)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.backgroundColor = 'transparent';
+        e.currentTarget.style.borderColor = 'transparent';
+      }}
+    >
+      <div>
+        <div className="font-bold text-sm" style={{ color: 'var(--color-text-primary)' }}>
+          {item.symbol}
+        </div>
+        <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>Stock</div>
+      </div>
 
-  return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: index * 0.05 }}
-        className="flex items-center justify-between p-3 rounded-xl border border-transparent transition-all cursor-pointer"
-        style={{ backgroundColor: 'transparent' }}
-        onClick={() => navigate(`/market?symbol=${encodeURIComponent(item.symbol)}`)}
-        onContextMenu={handleContextMenu}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
-          e.currentTarget.style.borderColor = 'var(--color-border-muted)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.backgroundColor = 'transparent';
-          e.currentTarget.style.borderColor = 'transparent';
-        }}
-      >
-        <div>
-          <div className="font-bold text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            {item.symbol}
+      <div className="flex items-center gap-4">
+        <div className="text-right">
+          <div className="text-sm font-medium dashboard-mono" style={{ color: 'var(--color-text-primary)' }}>
+            {Number(extType && item.previousClose != null ? item.previousClose : item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
-          <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>Stock</div>
+          <div className="text-xs font-medium dashboard-mono" style={{ color: pos ? 'var(--color-profit)' : 'var(--color-loss)' }}>
+            {(pos ? '+' : '') + Number(item.change).toFixed(2)}
+          </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="text-right">
-            <div className="text-sm font-medium dashboard-mono" style={{ color: 'var(--color-text-primary)' }}>
-              {Number(extType && item.previousClose != null ? item.previousClose : item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className="text-xs font-medium dashboard-mono" style={{ color: pos ? 'var(--color-profit)' : 'var(--color-loss)' }}>
-              {(pos ? '+' : '') + Number(item.change).toFixed(2)}
-            </div>
+        <div className="text-right">
+          <div
+            className="w-16 py-1 rounded-lg text-center text-xs font-bold"
+            style={{
+              backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+              color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
+            }}
+          >
+            {pctStr}
           </div>
-
-          <div className="text-right">
-            <div
-              className="w-16 py-1 rounded-lg text-center text-xs font-bold"
-              style={{
-                backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
-                color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
-              }}
-            >
-              {pctStr}
+          {extType && extPct != null && (
+            <div className="text-[10px] mt-0.5 text-center flex items-center justify-center gap-0.5" style={{ color: extColor }}>
+              {extType === 'pre' ? <Sunrise size={10} /> : <Sunset size={10} />}
+              {Number(item.price).toFixed(2)} {extPct >= 0 ? '+' : ''}{extPct.toFixed(2)}%
             </div>
-            {extType && extPct != null && (
-              <div className="text-[10px] mt-0.5 text-center flex items-center justify-center gap-0.5" style={{ color: extColor }}>
-                {extType === 'pre' ? <Sunrise size={10} /> : <Sunset size={10} />}
-                {Number(item.price).toFixed(2)} {extPct >= 0 ? '+' : ''}{extPct.toFixed(2)}%
-              </div>
-            )}
-          </div>
+          )}
         </div>
-      </motion.div>
 
-      <ContextMenu
-        menu={menu}
-        onClose={() => setMenu(null)}
-        items={[{ icon: <Trash2 className="h-3.5 w-3.5" style={{ color: 'var(--color-text-secondary)' }} />, label: 'Delete', onClick: () => { setMenu(null); onDelete?.(String(item.watchlist_item_id)); } }]}
-      />
-    </>
+        {/* Mobile: visible menu button */}
+        {isMobile && hasId && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="p-1 -mr-1 rounded-md transition-colors"
+                style={{ color: 'var(--color-text-tertiary)' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical size={16} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onSelect={() => onDelete?.(String(item.watchlist_item_id))}>
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </motion.div>
   );
+
+  // Desktop: wrap with right-click context menu
+  if (!isMobile && hasId) {
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{rowContent}</ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem variant="destructive" onSelect={() => onDelete?.(String(item.watchlist_item_id))}>
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  return rowContent;
 }
 
 interface PortfolioItemProps {
@@ -179,91 +161,132 @@ interface PortfolioItemProps {
 
 function PortfolioItem({ item, index, onEdit, onDelete, valuesHidden, marketStatus }: PortfolioItemProps) {
   const navigate = useNavigate();
-  const [menu, setMenu] = useState<MenuPosition | null>(null);
+  const isMobile = useIsMobile();
   const pos = item.isPositive;
   const plStr =
     item.unrealizedPlPercent != null
       ? (pos ? '+' : '') + Number(item.unrealizedPlPercent).toFixed(2) + '%'
       : '—';
+  const hasId = !!item.user_portfolio_id;
 
   // Extended hours
   const { extPct, extType, extPrice: _extPrice2 } = getExtendedHoursInfo(marketStatus, item, { shortLabels: true });
   const extColor = extType === 'pre' ? '#fbbf24' : '#3b82f6';
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    if (!item.user_portfolio_id) return;
-    e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY });
-  };
-
-  return (
+  const menuItems = (
     <>
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: index * 0.05 }}
-        className="flex items-center justify-between p-3 rounded-xl border border-transparent transition-all cursor-pointer"
-        style={{ backgroundColor: 'transparent' }}
-        onClick={() => navigate(`/market?symbol=${encodeURIComponent(item.symbol)}`)}
-        onContextMenu={handleContextMenu}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
-          e.currentTarget.style.borderColor = 'var(--color-border-muted)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.backgroundColor = 'transparent';
-          e.currentTarget.style.borderColor = 'transparent';
-        }}
-      >
-        <div>
-          <div className="font-bold text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            {item.symbol}
-          </div>
-          <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-            {valuesHidden ? '*** shares' : item.quantity != null ? `${Number(item.quantity).toLocaleString()} shares` : ''}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <div className="text-right">
-            <div className="text-sm font-medium dashboard-mono" style={{ color: 'var(--color-text-primary)' }}>
-              {valuesHidden ? '******' : `$${Number(item.marketValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-            </div>
-            <div className="text-xs dashboard-mono" style={{ color: 'var(--color-text-secondary)' }}>
-              {valuesHidden ? '***' : `@${Number(extType && item.previousClose != null ? item.previousClose : item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-            </div>
-          </div>
-
-          <div className="text-right">
-            <div
-              className="w-16 py-1 rounded-lg text-center text-xs font-bold"
-              style={{
-                backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
-                color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
-              }}
-            >
-              {plStr}
-            </div>
-            {extType && extPct != null && (
-              <div className="text-[10px] mt-0.5 text-center flex items-center justify-center gap-0.5" style={{ color: extColor }}>
-                {extType === 'pre' ? <Sunrise size={10} /> : <Sunset size={10} />}
-                {Number(item.price).toFixed(2)} {extPct >= 0 ? '+' : ''}{extPct.toFixed(2)}%
-              </div>
-            )}
-          </div>
-        </div>
-      </motion.div>
-
-      <ContextMenu
-        menu={menu}
-        onClose={() => setMenu(null)}
-        items={[
-          { icon: <Pencil className="h-3.5 w-3.5" style={{ color: 'var(--color-text-secondary)' }} />, label: 'Edit', onClick: () => { setMenu(null); onEdit?.(item); } },
-          { icon: <Trash2 className="h-3.5 w-3.5" style={{ color: 'var(--color-text-secondary)' }} />, label: 'Delete', onClick: () => { setMenu(null); onDelete?.(String(item.user_portfolio_id)); } },
-        ]}
-      />
+      {isMobile ? (
+        <>
+          <DropdownMenuItem onSelect={() => onEdit?.(item)}>
+            <Pencil className="h-3.5 w-3.5" />
+            Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onSelect={() => onDelete?.(String(item.user_portfolio_id))}>
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </DropdownMenuItem>
+        </>
+      ) : (
+        <>
+          <ContextMenuItem onSelect={() => onEdit?.(item)}>
+            <Pencil className="h-3.5 w-3.5" />
+            Edit
+          </ContextMenuItem>
+          <ContextMenuItem variant="destructive" onSelect={() => onDelete?.(String(item.user_portfolio_id))}>
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </ContextMenuItem>
+        </>
+      )}
     </>
   );
+
+  const rowContent = (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+      className="flex items-center justify-between p-3 rounded-xl border border-transparent transition-all cursor-pointer"
+      style={{ backgroundColor: 'transparent' }}
+      onClick={() => navigate(`/market?symbol=${encodeURIComponent(item.symbol)}`)}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)';
+        e.currentTarget.style.borderColor = 'var(--color-border-muted)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.backgroundColor = 'transparent';
+        e.currentTarget.style.borderColor = 'transparent';
+      }}
+    >
+      <div>
+        <div className="font-bold text-sm" style={{ color: 'var(--color-text-primary)' }}>
+          {item.symbol}
+        </div>
+        <div className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+          {valuesHidden ? '*** shares' : item.quantity != null ? `${Number(item.quantity).toLocaleString()} shares` : ''}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4">
+        <div className="text-right">
+          <div className="text-sm font-medium dashboard-mono" style={{ color: 'var(--color-text-primary)' }}>
+            {valuesHidden ? '******' : `$${Number(item.marketValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          </div>
+          <div className="text-xs dashboard-mono" style={{ color: 'var(--color-text-secondary)' }}>
+            {valuesHidden ? '***' : `@${Number(extType && item.previousClose != null ? item.previousClose : item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          </div>
+        </div>
+
+        <div className="text-right">
+          <div
+            className="w-16 py-1 rounded-lg text-center text-xs font-bold"
+            style={{
+              backgroundColor: pos ? 'var(--color-profit-soft)' : 'var(--color-loss-soft)',
+              color: pos ? 'var(--color-profit)' : 'var(--color-loss)',
+            }}
+          >
+            {plStr}
+          </div>
+          {extType && extPct != null && (
+            <div className="text-[10px] mt-0.5 text-center flex items-center justify-center gap-0.5" style={{ color: extColor }}>
+              {extType === 'pre' ? <Sunrise size={10} /> : <Sunset size={10} />}
+              {Number(item.price).toFixed(2)} {extPct >= 0 ? '+' : ''}{extPct.toFixed(2)}%
+            </div>
+          )}
+        </div>
+
+        {/* Mobile: visible menu button */}
+        {isMobile && hasId && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="p-1 -mr-1 rounded-md transition-colors"
+                style={{ color: 'var(--color-text-tertiary)' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical size={16} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {menuItems}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </motion.div>
+  );
+
+  // Desktop: wrap with right-click context menu
+  if (!isMobile && hasId) {
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{rowContent}</ContextMenuTrigger>
+        <ContextMenuContent>{menuItems}</ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  return rowContent;
 }
 
 interface AddNewButtonProps {

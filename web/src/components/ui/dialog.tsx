@@ -21,7 +21,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-[1010] bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-[1030] bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props} />
@@ -30,11 +30,11 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
 // Mobile swipe variant: flex column container, no overflow (inner scroll child handles it)
 const DIALOG_MOBILE_SHEET_CLASSES =
-  "fixed left-0 bottom-0 z-[1010] flex flex-col w-full max-w-lg border bg-background shadow-lg duration-200 rounded-t-3xl max-h-[90dvh] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom";
+  "fixed left-0 bottom-0 z-[1030] flex flex-col w-full max-w-lg border bg-background shadow-lg duration-200 rounded-t-3xl max-h-[90dvh] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom";
 
 // Desktop / centered: single-element grid with native overflow scroll
 const DIALOG_CENTERED_CLASSES =
-  "fixed left-[50%] top-[50%] z-[1010] grid w-full max-w-lg gap-4 border bg-background p-6 shadow-lg duration-200 translate-x-[-50%] translate-y-[-50%] rounded-lg max-h-[85vh] overflow-y-auto data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]";
+  "fixed left-[50%] top-[50%] z-[1030] grid w-full max-w-lg gap-4 border bg-background p-6 shadow-lg duration-200 translate-x-[-50%] translate-y-[-50%] rounded-lg max-h-[85vh] overflow-y-auto data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]";
 
 const DialogContent = React.forwardRef<
   React.ComponentRef<typeof DialogPrimitive.Content>,
@@ -80,6 +80,7 @@ const DialogContent = React.forwardRef<
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content
+          aria-describedby={undefined}
           ref={containerRefCb}
           className={cn(DIALOG_MOBILE_SHEET_CLASSES, className)}
           {...props}
@@ -98,7 +99,7 @@ const DialogContent = React.forwardRef<
           {/* Scrollable content — mirrors MobileBottomSheet inner div */}
           <div
             ref={contentRef}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden grid gap-4 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden grid gap-4 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] [&>*]:min-w-0"
             style={{ overscrollBehaviorY: 'contain' }}
           >
             {children}
@@ -115,6 +116,7 @@ const DialogContent = React.forwardRef<
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
+        aria-describedby={undefined}
         ref={ref}
         className={cn(
           DIALOG_CENTERED_CLASSES,
@@ -138,7 +140,7 @@ const DialogHeader = ({
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
-    className={cn("flex flex-col space-y-1.5 text-center sm:text-left", className)}
+    className={cn("flex flex-col space-y-1.5 text-left", className)}
     {...props} />
 )
 DialogHeader.displayName = "DialogHeader"

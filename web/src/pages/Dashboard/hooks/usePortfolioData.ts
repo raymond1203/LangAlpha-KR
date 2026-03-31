@@ -171,13 +171,15 @@ export function usePortfolioData() {
     [queryClient]
   );
 
-  const openEdit = useCallback((row: PortfolioRow) => {
+  const openEdit = useCallback((row: PortfolioRow | null) => {
     setEditRow(row);
-    setEditForm({
-      quantity: row.quantity != null ? String(row.quantity) : '',
-      averageCost: row.average_cost != null ? String(row.average_cost) : '',
-      notes: row.notes ?? '',
-    });
+    if (row) {
+      setEditForm({
+        quantity: row.quantity != null ? String(row.quantity) : '',
+        averageCost: row.average_cost != null ? String(row.average_cost) : '',
+        notes: row.notes ?? '',
+      });
+    }
   }, []);
 
   const handleUpdate = useCallback(async (): Promise<void> => {

@@ -18,15 +18,16 @@ vi.mock('@/components/ui/use-toast', () => ({
   toast: vi.fn(),
 }));
 
-vi.mock('@/components/ui/popover', () => ({
-  Popover: ({ children, open, onOpenChange }: any) => (
-    <div data-testid="popover">
-      {typeof children === 'function' ? children({ open }) : children}
-    </div>
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: any) => (
+    <div data-testid="dropdown-menu">{children}</div>
   ),
-  PopoverTrigger: ({ children, asChild }: any) => <>{children}</>,
-  PopoverContent: ({ children }: any) => (
-    <div data-testid="popover-content">{children}</div>
+  DropdownMenuTrigger: ({ children }: any) => <>{children}</>,
+  DropdownMenuContent: ({ children }: any) => (
+    <div data-testid="dropdown-menu-content">{children}</div>
+  ),
+  DropdownMenuItem: ({ children, onSelect, ...props }: any) => (
+    <button onClick={onSelect} {...props}>{children}</button>
   ),
 }));
 
@@ -228,7 +229,7 @@ describe('FileHeaderActions', () => {
     render(<FileHeaderActions {...defaultProps} isEditing={true} />);
     expect(screen.queryByText('filePanel.downloadAsPdf')).not.toBeInTheDocument();
     expect(screen.queryByText('filePanel.downloadAsMarkdown')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('popover')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dropdown-menu')).not.toBeInTheDocument();
   });
 
   it('copies full content to clipboard on copy click', async () => {

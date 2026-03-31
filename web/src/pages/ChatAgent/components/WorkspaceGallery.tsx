@@ -8,6 +8,7 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import CreateWorkspaceModal from './CreateWorkspaceModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import MorphingPageDots from '../../../components/ui/morphing-page-dots';
@@ -35,11 +36,6 @@ interface DeleteModalState {
   isOpen: boolean;
   workspace: WorkspaceRecord | null;
 }
-
-const hoverHandlers = (bgVar: string) => ({
-  onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.backgroundColor = `var(${bgVar})`; },
-  onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.backgroundColor = ''; },
-});
 
 const slideVariants = {
   enter: (direction: number) => ({
@@ -73,69 +69,30 @@ interface CardMenuProps {
 
 function CardMenu({ workspace, onTogglePin, onDelete }: CardMenuProps) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [open]);
 
   return (
-    <div ref={menuRef} className="relative">
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        className="h-8 w-8 rounded-md transition-colors flex items-center justify-center"
-        style={{ color: 'var(--color-text-tertiary)' }}
-        {...hoverHandlers('--color-border-muted')}
-      >
-        <MoreHorizontal className="h-5 w-5" />
-      </button>
-
-      {open && (
-        <div
-          className="absolute right-0 top-9 z-50 min-w-[150px] rounded-lg border py-1 shadow-lg"
-          style={{
-            backgroundColor: 'var(--color-bg-elevated, var(--color-bg-card))',
-            borderColor: 'var(--color-border-muted)',
-          }}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="h-8 w-8 rounded-md transition-colors flex items-center justify-center hover:bg-[var(--color-border-muted)]"
+          style={{ color: 'var(--color-text-tertiary)' }}
         >
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onTogglePin(workspace);
-              setOpen(false);
-            }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors"
-            style={{ color: 'var(--color-text-secondary)' }}
-            {...hoverHandlers('--color-bg-subtle')}
-          >
-            <Pin className="h-4 w-4" />
-            {workspace.is_pinned ? t('workspace.unpin') : t('workspace.pinToTop')}
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(workspace);
-              setOpen(false);
-            }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors"
-            style={{ color: 'var(--color-loss)' }}
-            {...hoverHandlers('--color-bg-subtle')}
-          >
-            <Trash2 className="h-4 w-4" />
-            {t('common.delete', 'Delete')}
-          </button>
-        </div>
-      )}
-    </div>
+          <MoreHorizontal className="h-5 w-5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={4}>
+        <DropdownMenuItem onSelect={() => onTogglePin(workspace)}>
+          <Pin className="h-4 w-4" />
+          {workspace.is_pinned ? t('workspace.unpin') : t('workspace.pinToTop')}
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" onSelect={() => onDelete(workspace)}>
+          <Trash2 className="h-4 w-4" />
+          {t('common.delete', 'Delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

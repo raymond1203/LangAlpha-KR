@@ -47,7 +47,7 @@ function AddPortfolioHoldingDialog({
   const [searchResults, setSearchResults] = useState<StockResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [selectedStock, setSelectedStock] = useState<StockResult | null>(null);
-  
+
   // Form fields for page 2
   const [quantity, setQuantity] = useState('');
   const [averageCost, setAverageCost] = useState('');
@@ -155,17 +155,19 @@ function AddPortfolioHoldingDialog({
     onAdd(payload);
   };
 
+  const exchange = selectedStock?.exchangeShortName || selectedStock?.stockExchange || '';
+
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose?.()}>
-      <DialogContent className="sm:max-w-md border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
+      <DialogContent className="sm:max-w-md border max-sm:min-h-[60dvh]" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
         {page === 1 ? (
           <>
-            <DialogHeader>
+            <DialogHeader className="text-left">
               <DialogTitle className="title-font" style={{ color: 'var(--color-text-primary)' }}>
                 Add Portfolio Holding
               </DialogTitle>
             </DialogHeader>
-            <div className="pt-2">
+            <div className="pt-1">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4" style={{ color: 'var(--color-text-secondary)' }} />
                 <Input
@@ -177,7 +179,7 @@ function AddPortfolioHoldingDialog({
                   autoFocus
                 />
               </div>
-              <ScrollArea className="mt-4 max-h-[400px]">
+              <ScrollArea className="mt-3 max-h-[50dvh] sm:max-h-[400px]">
                 {searchLoading ? (
                   <div className="py-8 text-center text-sm" style={{ color: 'var(--color-text-secondary)' }}>
                     Searching...
@@ -191,16 +193,26 @@ function AddPortfolioHoldingDialog({
                     Type to search for stocks...
                   </div>
                 ) : (
-                  <div className="space-y-1">
+                  <div className="divide-y" style={{ borderColor: 'var(--color-border-muted)' }}>
                     {searchResults.map((stock, index) => (
                       <button
                         key={`${stock.symbol}-${index}`}
                         type="button"
                         onClick={() => handleStockSelect(stock)}
-                        className="w-full text-left px-3 py-2 rounded hover:bg-foreground/10 transition-colors"
+                        className="w-full text-left px-2 py-2.5 transition-colors flex items-center gap-3"
                         style={{ color: 'var(--color-text-primary)' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
                       >
-                        <div className="text-sm font-medium">{stock.name}</div>
+                        <span
+                          className="shrink-0 w-12 text-center text-xs font-bold py-1 rounded"
+                          style={{ backgroundColor: 'var(--color-bg-surface, var(--color-bg-hover))', color: 'var(--color-text-primary)' }}
+                        >
+                          {stock.symbol}
+                        </span>
+                        <span className="text-sm truncate" style={{ color: 'var(--color-text-secondary)' }}>
+                          {stock.name}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -210,83 +222,86 @@ function AddPortfolioHoldingDialog({
           </>
         ) : (
           <>
-            <DialogHeader>
+            <DialogHeader className="text-left">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handleBack}
-                  className="p-1 rounded hover:bg-foreground/10"
-                  style={{ color: 'var(--color-text-primary)' }}
+                  className="p-1.5 -ml-1 rounded-lg transition-colors"
+                  style={{ color: 'var(--color-text-secondary)' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--color-bg-hover)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
                   aria-label="Back"
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </button>
                 <DialogTitle className="title-font" style={{ color: 'var(--color-text-primary)' }}>
-                  Add Portfolio Holding
+                  Add to Portfolio
                 </DialogTitle>
               </div>
             </DialogHeader>
             {selectedStock && (
-              <div className="pt-2 space-y-4">
-                {/* Stock Information */}
-                <div className="space-y-2">
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>Symbol</div>
-                    <div className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+              <div className="space-y-5">
+                {/* Stock info card */}
+                <div
+                  className="rounded-xl p-4 border"
+                  style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-muted)' }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg font-bold" style={{ color: 'var(--color-text-primary)' }}>
                       {selectedStock.symbol}
-                    </div>
+                    </span>
+                    {exchange && (
+                      <span
+                        className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--color-bg-surface, var(--color-bg-hover))', color: 'var(--color-text-secondary)' }}
+                      >
+                        {exchange}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs mt-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
+                    {selectedStock.name}
+                  </div>
+                </div>
+
+                {/* Quantity + Average Cost — side by side */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
+                      Quantity <span style={{ color: 'var(--color-loss)' }}>*</span>
+                    </label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder="e.g. 10.5"
+                      value={quantity}
+                      onChange={(e) => setQuantity(e.target.value)}
+                      className="border"
+                      style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
+                    />
                   </div>
                   <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>Company Name</div>
-                    <div className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-                      {selectedStock.name}
-                    </div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
+                      Avg Cost <span style={{ color: 'var(--color-loss)' }}>*</span>
+                    </label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="any"
+                      placeholder="e.g. 175.50"
+                      value={averageCost}
+                      onChange={(e) => setAverageCost(e.target.value)}
+                      className="border"
+                      style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
+                    />
                   </div>
-                  <div>
-                    <div className="text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>Exchange</div>
-                    <div className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-                      {selectedStock.exchangeShortName || selectedStock.stockExchange || 'N/A'}
-                    </div>
-                  </div>
                 </div>
 
-                {/* Quantity Input */}
+                {/* Account Name */}
                 <div>
-                  <label className="block text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                    Quantity <span style={{ color: 'var(--color-loss)' }}>*</span>
-                  </label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="any"
-                    placeholder="e.g. 10.5"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                    className="border"
-                    style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
-                  />
-                </div>
-
-                {/* Average Cost Input */}
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>
-                    Average Cost Per Share <span style={{ color: 'var(--color-loss)' }}>*</span>
-                  </label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="any"
-                    placeholder="e.g. 175.50"
-                    value={averageCost}
-                    onChange={(e) => setAverageCost(e.target.value)}
-                    className="border"
-                    style={{ backgroundColor: 'var(--color-bg-card)', borderColor: 'var(--color-border-default)', color: 'var(--color-text-primary)' }}
-                  />
-                </div>
-
-                {/* Account Name Input */}
-                <div>
-                  <label className="block text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
                     Account Name
                   </label>
                   <Input
@@ -300,7 +315,7 @@ function AddPortfolioHoldingDialog({
 
                 {/* Notes Input */}
                 <div>
-                  <label className="block text-xs mb-1" style={{ color: 'var(--color-text-secondary)' }}>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--color-text-secondary)' }}>
                     Notes
                   </label>
                   <Input
@@ -316,7 +331,7 @@ function AddPortfolioHoldingDialog({
                 <button
                   type="button"
                   onClick={handleAdd}
-                  className="w-full px-4 py-2 rounded font-medium hover:opacity-90"
+                  className="w-full px-4 py-3 rounded-xl text-sm font-semibold hover:opacity-90 transition-opacity"
                   style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}
                 >
                   Add to Portfolio

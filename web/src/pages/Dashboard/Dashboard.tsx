@@ -18,7 +18,7 @@ import InsightDetailModal from './components/InsightDetailModal';
 import AddWatchlistItemDialog from './components/AddWatchlistItemDialog';
 import AddPortfolioHoldingDialog from './components/AddPortfolioHoldingDialog';
 import { useWatchlistData } from './hooks/useWatchlistData';
-import { usePortfolioData } from './hooks/usePortfolioData';
+import { usePortfolioData, type PortfolioRow } from './hooks/usePortfolioData';
 import { useTickerNews } from './hooks/useTickerNews';
 import { useDashboardData } from './hooks/useDashboardData';
 import { useOnboarding, snoozePersonalization } from './hooks/useOnboarding';
@@ -91,14 +91,14 @@ function Dashboard() {
   const portfolioWatchlistProps = {
     watchlistRows: watchlist.rows,
     watchlistLoading: watchlist.loading,
-    onWatchlistAdd: () => watchlist.setModalOpen(true),
-    onWatchlistDelete: watchlist.handleDelete,
+    onWatchlistAdd: () => { setShowWatchlistSheet(false); watchlist.setModalOpen(true); },
+    onWatchlistDelete: (id: string) => { setShowWatchlistSheet(false); watchlist.handleDelete(id); },
     portfolioRows: portfolio.rows,
     portfolioLoading: portfolio.loading,
     hasRealHoldings: portfolio.hasRealHoldings,
-    onPortfolioAdd: () => portfolio.setModalOpen(true),
-    onPortfolioDelete: handleDeletePortfolioItem,
-    onPortfolioEdit: portfolio.openEdit,
+    onPortfolioAdd: () => { setShowWatchlistSheet(false); portfolio.setModalOpen(true); },
+    onPortfolioDelete: (id: string) => { setShowWatchlistSheet(false); handleDeletePortfolioItem(id); },
+    onPortfolioEdit: (item: PortfolioRow) => { setShowWatchlistSheet(false); portfolio.openEdit(item); },
     marketStatus,
   };
 
@@ -242,7 +242,7 @@ function Dashboard() {
       {/* Personalization banner is rendered inline above the market overview */}
 
       {/* Portfolio Edit Dialog */}
-      <Dialog open={!!portfolio.editRow} onOpenChange={(open) => !open && (portfolio.openEdit as (row: unknown) => void)(null)}>
+      <Dialog open={!!portfolio.editRow} onOpenChange={(open) => !open && portfolio.openEdit(null)}>
         <DialogContent className="sm:max-w-sm border" style={{ backgroundColor: 'var(--color-bg-elevated)', borderColor: 'var(--color-border-elevated)' }}>
           <DialogHeader>
             <DialogTitle className="title-font" style={{ color: 'var(--color-text-primary)' }}>Edit holding — {portfolio.editRow?.symbol}</DialogTitle>
@@ -286,7 +286,7 @@ function Dashboard() {
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => (portfolio.openEdit as (row: unknown) => void)(null)} className="px-3 py-1.5 rounded text-sm border hover:bg-foreground/10" style={{ color: 'var(--color-text-primary)', borderColor: 'var(--color-border-default)' }}>
+            <button type="button" onClick={() => portfolio.openEdit(null)} className="px-3 py-1.5 rounded text-sm border hover:bg-foreground/10" style={{ color: 'var(--color-text-primary)', borderColor: 'var(--color-border-default)' }}>
               Cancel
             </button>
             <button type="button" onClick={portfolio.handleUpdate} className="px-3 py-1.5 rounded text-sm font-medium hover:opacity-90" style={{ backgroundColor: 'var(--color-accent-primary)', color: 'var(--color-text-on-accent)' }}>

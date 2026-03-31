@@ -168,7 +168,7 @@ function EarningsModal({ earnings, onClose }: EarningsModalProps) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8"
+      className="fixed inset-0 z-[1030] flex items-center justify-center p-4 md:p-8"
       style={{ backgroundColor: 'var(--color-bg-overlay, rgba(0,0,0,0.6))', backdropFilter: 'blur(4px)' }}
     >
       <motion.div
