@@ -292,29 +292,28 @@ class TestInjectMultimodalContext:
         result = inject_multimodal_context([], [ctx])
         assert result == []
 
-    def test_image_injects_image_url_block(self):
+    def test_image_merges_into_user_message(self):
         msgs = [{"role": "user", "content": "describe this"}]
         ctx = MultimodalContext(type="image", data="data:image/png;base64,abc", description="chart")
         result = inject_multimodal_context(msgs, [ctx])
-        assert len(result) == 2  # injected + original
-        injected = result[0]
-        assert injected["role"] == "user"
-        # Should have text label + image_url blocks
-        blocks = injected["content"]
-        assert any(b["type"] == "image_url" for b in blocks)
+        assert len(result) == 1  # merged, not inserted
+        blocks = result[0]["content"]
+        assert isinstance(blocks, list)
+        assert any(b.get("type") == "image_url" for b in blocks)
         assert any("chart" in b.get("text", "") for b in blocks)
+        # Original text is last
+        assert blocks[-1] == {"type": "text", "text": "describe this"}
 
-    def test_pdf_injects_file_block(self):
+    def test_pdf_merges_file_block(self):
         msgs = [{"role": "user", "content": "summarize"}]
         ctx = MultimodalContext(type="image", data="data:application/pdf;base64,abc", description="report")
         result = inject_multimodal_context(msgs, [ctx])
-        assert len(result) == 2
-        injected = result[0]
-        blocks = injected["content"]
-        assert any(b["type"] == "file" for b in blocks)
+        assert len(result) == 1  # merged
+        blocks = result[0]["content"]
+        assert any(b.get("type") == "file" for b in blocks)
         assert any("report" in b.get("text", "") for b in blocks)
 
-    def test_inserts_before_last_user_message(self):
+    def test_merges_into_last_user_message(self):
         msgs = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "first"},
@@ -323,7 +322,8 @@ class TestInjectMultimodalContext:
         ]
         ctx = MultimodalContext(type="image", data="data:image/png;base64,abc")
         result = inject_multimodal_context(msgs, [ctx])
-        # Injected should be at index 3, right before the last user message
-        assert result[3]["role"] == "user"
+        # Same message count, last user message now has list content
+        assert len(result) == 4
         assert isinstance(result[3]["content"], list)
-        assert result[4]["content"] == "second"
+        # First user message untouched
+        assert result[1]["content"] == "first"
