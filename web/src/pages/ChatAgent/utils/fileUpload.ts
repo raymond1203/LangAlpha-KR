@@ -44,8 +44,8 @@ export function attachmentsToContexts(attachments: Attachment[]): ImageContext[]
   return attachments
     .filter((a) => a.dataUrl != null)
     .map((a) => ({
-      type: a.file.type.startsWith('image/') ? 'image'
-          : a.file.type === 'application/pdf' ? 'pdf'
+      type: a.type.startsWith('image/') ? 'image'
+          : a.type === 'application/pdf' ? 'pdf'
           : 'file',
       data: a.dataUrl!,
       description: a.file.name,
