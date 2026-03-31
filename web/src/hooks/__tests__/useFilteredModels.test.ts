@@ -121,6 +121,24 @@ describe('filterModelsByAccess', () => {
     expect(result.openai?.models).toEqual(['gpt-4o']);
   });
 
+  it('excludes groupKey fallback when access_type differs (coding_plan leak)', () => {
+    // dashscope-coding models grouped under dashscope — user only has api_key
+    const providerMap = makeProviderMap({
+      dashscope: ['qwen3-turbo', 'qwen3.5-plus-coding'],
+    });
+    const metadata: Record<string, ModelMetadataEntry> = {
+      'qwen3-turbo': { provider: 'dashscope', access_type: 'api_key' },
+      'qwen3.5-plus-coding': { provider: 'dashscope-coding', access_type: 'coding_plan' },
+    };
+    const { configuredSet, configuredTypeMap } = makeConfigured([
+      { provider: 'dashscope', displayName: 'DashScope', type: 'api_key' },
+    ]);
+
+    const result = filterModelsByAccess(providerMap, metadata, configuredSet, configuredTypeMap);
+
+    expect(result.dashscope?.models).toEqual(['qwen3-turbo']);
+  });
+
   it('excludes groupKey fallback when variant requires own key (regional variant)', () => {
     // z-ai-cn models grouped under z-ai — both api_key but different env_key
     const providerMap = makeProviderMap({

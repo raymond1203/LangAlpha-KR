@@ -19,6 +19,7 @@ import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
 import { ModelTierConfig } from '@/components/model/ModelTierConfig';
 import type { ByokProvider, CustomModelEntry, CustomModelFormState, AddProviderFormState, ProviderModelsData } from '@/components/model/types';
 import { filterModelsByAccess, buildConfiguredTypeMap } from '@/hooks/useFilteredModels';
+import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
 import type { ConfiguredProvider } from '@/hooks/useConfiguredProviders';
 import './Settings.css';
 
@@ -81,7 +82,7 @@ function Settings() {
 
   // Model tab state
   const [availableModels, setAvailableModels] = useState<Record<string, string[] | ProviderModelsData>>({});
-  const [modelMetadata, setModelMetadata] = useState<Record<string, { provider?: string; sdk?: string; access_type?: string }>>({});
+  const [modelMetadata, setModelMetadata] = useState<Record<string, ModelMetadataEntry>>({});
   const [preferredModel, setPreferredModel] = useState('');
   const [preferredFlashModel, setPreferredFlashModel] = useState('');
   const [starredModels, setStarredModels] = useState<string[]>([]);

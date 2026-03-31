@@ -17,6 +17,7 @@ import { ProviderManager } from '@/components/model/ProviderManager';
 import { ModelTierConfig } from '@/components/model/ModelTierConfig';
 import type { ByokProvider, ProviderModelsData } from '@/components/model/types';
 import { filterModelsByAccess, buildConfiguredTypeMap } from '@/hooks/useFilteredModels';
+import type { ModelMetadataEntry } from '@/hooks/useFilteredModels';
 import type { ConfiguredProvider } from '@/hooks/useConfiguredProviders';
 
 type SettingsTab = 'userInfo' | 'preferences' | 'model';
@@ -85,7 +86,7 @@ function UserConfigPanel({ isOpen, onClose, onModifyPreferences, onStartOnboardi
 
   // Model tab state
   const [availableModels, setAvailableModels] = useState<Record<string, string[] | ProviderModelsData>>({});
-  const [modelMetadata, setModelMetadata] = useState<Record<string, { provider?: string; sdk?: string; access_type?: string }>>({});
+  const [modelMetadata, setModelMetadata] = useState<Record<string, ModelMetadataEntry>>({});
   const [preferredModel, setPreferredModel] = useState('');
   const [preferredFlashModel, setPreferredFlashModel] = useState('');
   const [starredModels, setStarredModels] = useState<string[]>([]);
