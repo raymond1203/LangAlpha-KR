@@ -86,9 +86,11 @@ def _extract_system_to_instructions(payload: dict) -> None:
         else:
             filtered.append(item)
 
-    if system_parts:
-        payload["instructions"] = "\n\n".join(system_parts)
+    if len(filtered) < len(items):
+        # Always strip system messages from input (Codex rejects them)
         payload["input"] = filtered
+        if system_parts:
+            payload["instructions"] = "\n\n".join(system_parts)
         logger.debug("[codex] Promoted %d system message(s) to instructions", len(system_parts))
 
 
