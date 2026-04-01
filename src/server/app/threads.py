@@ -281,23 +281,20 @@ async def _handle_send_message(
     agent_mode = request.agent_mode or "ptc"
     workspace_id = request.workspace_id
 
-    # 403 guard: require at least one configured API key (or OAuth connection)
-    # before allowing chat. Skip in open-source mode (no auth).
+    # 403 guard: require BYOK, OAuth, or platform access (tier >= 0).
+    # All flags are pre-checked by enforce_chat_limit — no DB calls here.
     from src.config.settings import AUTH_ENABLED
-    if AUTH_ENABLED and not is_byok:
-        from src.server.database.api_keys import is_byok_active
-        has_key = await is_byok_active(user_id)
-        if not has_key:
-            # Check for OAuth connections as an alternative
-            from src.server.database.oauth_tokens import has_any_oauth_token
-            has_oauth = await has_any_oauth_token(user_id)
-            if not has_oauth:
-                from src.server.dependencies.usage_limits import release_burst_slot
-                await release_burst_slot(user_id)
-                raise HTTPException(
-                    status_code=403,
-                    detail="No API key configured. Please complete setup at /setup/connect.",
-                )
+    if AUTH_ENABLED and not auth.is_byok and not auth.has_oauth and auth.access_tier < 0:
+        from src.server.dependencies.usage_limits import release_burst_slot
+        await release_burst_slot(user_id)
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "No provider configured. Set up an API key or connect via OAuth.",
+                "type": "no_provider",
+                "link": {"url": "/setup/method", "label": "Set up provider"},
+            },
+        )
 
     # Resolve workspace_id from thread if not provided
     if not workspace_id and thread_id:
@@ -378,13 +375,15 @@ async def _handle_send_message(
     # (BYOK, custom model via BYOK, or OAuth), not just whether the toggle is on
     is_byok = config.llm_client is not None
 
-    # Credit check: only when using platform key (no user-provided key resolved)
-    if config.llm_client is None:
-        try:
-            await enforce_credit_limit(user_id)
-        except HTTPException:
-            await release_burst_slot(user_id)
-            raise
+    # Credit check: always enforce.
+    # - Platform-served (is_byok=False): block when daily limit reached.
+    # - BYOK/OAuth (is_byok=True): block only on negative balance (outstanding
+    #   debt from past platform usage, e.g. fallback routing).
+    try:
+        await enforce_credit_limit(user_id, byok=is_byok)
+    except HTTPException:
+        await release_burst_slot(user_id)
+        raise
 
     # Route to appropriate streaming function based on agent mode
     if agent_mode == "flash":

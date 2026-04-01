@@ -1,12 +1,14 @@
 """
 FastAPI dependencies for usage limit enforcement.
 
-Provides two dependencies that compose with get_current_user_id:
-- ChatRateLimited: Enforces burst guard (concurrent request limit)
-- WorkspaceLimitCheck: Enforces active workspace limits
+Gate hierarchy:
+  AUTH_ENABLED (= bool(SUPABASE_URL))   — master switch; OSS mode skips all gates.
+  AUTH_SERVICE_URL                       — platform quota service; guards
+                                           credit/workspace limits and access tier
+                                           checks.  Can be absent even when
+                                           AUTH_ENABLED is true (partial deploy).
 
-Open-source mode (AUTH_SERVICE_URL unset): all operations allowed, no limits.
-Commercial mode (AUTH_SERVICE_URL set): calls ginlix-auth for quota checks.
+Fail-open: when the platform service is unreachable, requests are allowed.
 """
 
 import asyncio
@@ -51,58 +53,13 @@ async def close_http_client() -> None:
 
 @dataclass
 class ChatAuthResult:
-    """Result from chat rate-limit dependency, carrying BYOK status to avoid re-querying."""
+    """Result from enforce_chat_limit. Downstream gates read these flags
+    instead of re-querying the DB."""
     user_id: str
     is_byok: bool = False
+    has_oauth: bool = False
+    access_tier: int = -1  # -1 = no platform access, 0+ = tier level
 
-
-async def _get_bearer_token() -> Optional[str]:
-    """Extract the raw bearer token from the current request context.
-
-    This is a simplified helper — in practice the token is available from
-    the FastAPI request.  We piggy-back on the jwt_bearer module's scheme.
-    """
-    # We can't easily get the raw token here without adding a dependency.
-    # Instead, the enforce_chat_limit dependency receives the token via a
-    # nested dependency.  See _call_validate_with_token below.
-    return None
-
-
-async def _call_validate(
-    token: str,
-    check_quota: Optional[str] = None,
-    byok: bool = False,
-) -> Optional[dict]:
-    """Call ginlix-auth POST /api/auth/validate with optional quota check.
-
-    Returns the parsed JSON response, or None on failure (fail-open).
-    """
-    if not AUTH_SERVICE_URL:
-        return None
-
-    client = await _get_http_client()
-    headers = {"Authorization": f"Bearer {token}"}
-    body = {}
-    if check_quota:
-        body["check_quota"] = check_quota
-    if byok:
-        body["byok"] = True
-
-    try:
-        resp = await client.post(
-            f"{AUTH_SERVICE_URL.rstrip('/')}/api/auth/validate",
-            json=body if body else None,
-            headers=headers,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning(
-            "ginlix-auth validate returned %d: %s", resp.status_code, resp.text[:200]
-        )
-        return None
-    except Exception as e:
-        logger.warning("ginlix-auth unreachable, failing open: %s", e)
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +95,8 @@ async def _check_burst_guard(user_id: str, max_concurrent: int) -> dict:
 
 async def release_burst_slot(user_id: str) -> None:
     """Release a burst slot (DECR) after request completes."""
-    if not AUTH_SERVICE_URL:
-        return  # No burst guard in open-source mode
+    if not AUTH_ENABLED:
+        return  # No burst guard in OSS mode
 
     from src.utils.cache.redis_cache import get_cache_client
 
@@ -164,28 +121,25 @@ async def enforce_chat_limit(
     user_id: str = Depends(get_current_user_id),
 ) -> ChatAuthResult:
     """
-    FastAPI dependency: enforce burst guard only.
+    FastAPI dependency: burst guard + auth status collection.
 
-    Credit check is deferred to after LLM config resolution (provider-based):
-    - Own-key users (BYOK / OAuth) skip credit check for their provider's models
-    - Platform-key users get credit-checked via enforce_credit_limit()
+    Populates ChatAuthResult with is_byok / has_oauth / access_tier so
+    downstream gates (403 in threads.py, credit check) can decide without
+    re-querying the DB.
 
-    Open-source mode (no AUTH_SERVICE_URL): always allowed.
-
-    Returns ChatAuthResult on success, raises HTTPException(429) if burst limit hit.
+    OSS mode (AUTH_ENABLED=false): skip everything, return bare result.
     """
-    # Open-source mode or auth disabled: no limits
-    if not AUTH_SERVICE_URL or not AUTH_ENABLED:
+    if not AUTH_ENABLED:
         return ChatAuthResult(user_id=user_id)
 
-    # Check BYOK status locally (passed to resolve_llm_config for key lookup)
     from src.server.database.api_keys import is_byok_active
+    from src.server.database.oauth_tokens import has_any_oauth_token
 
     is_byok = await is_byok_active(user_id)
+    has_oauth = await has_any_oauth_token(user_id)
 
-    # Burst guard for all users (BYOK, OAuth, and platform)
-    max_concurrent = _DEFAULT_MAX_CONCURRENT
-    burst_result = await _check_burst_guard(user_id, max_concurrent)
+    # Burst guard (local Redis, no external dependency)
+    burst_result = await _check_burst_guard(user_id, _DEFAULT_MAX_CONCURRENT)
     if not burst_result["allowed"]:
         raise HTTPException(
             status_code=429,
@@ -197,24 +151,49 @@ async def enforce_chat_limit(
             headers={"Retry-After": "5"},
         )
 
-    return ChatAuthResult(user_id=user_id, is_byok=is_byok)
+    # Platform access tier — only when quota service is available and user
+    # has no own-key path (BYOK or OAuth already grants access).
+    tier = -1
+    if AUTH_SERVICE_URL and not is_byok and not has_oauth:
+        from src.server.app.users import _fetch_platform_tier
+        tier = await _fetch_platform_tier(user_id)
+
+    return ChatAuthResult(
+        user_id=user_id,
+        is_byok=is_byok,
+        has_oauth=has_oauth,
+        access_tier=tier,
+    )
 
 
-async def enforce_credit_limit(user_id: str) -> None:
+_BYOK_BALANCE_CACHE_TTL = 60  # seconds — negative balance changes slowly
+
+
+async def enforce_credit_limit(user_id: str, *, byok: bool = False) -> None:
     """
     Check credit quota via ginlix-auth. Raises HTTPException(429) if exceeded.
 
-    Called after LLM config resolution — only when using platform key (no own-key
-    injected via BYOK or OAuth for the resolved model's provider).
+    When ``byok=False`` (platform-served): blocks when daily credit limit is
+    reached (``allowed=False``).  Not cached — credits deplete per-message and
+    users need real-time feedback.
+
+    When ``byok=True`` (user's own key): blocks only when credits are negative.
+    Cached in Redis (60 s) to avoid an HTTP round-trip on every message.
+    Negative balance changes slowly (only on platform fallback completion).
     """
-    if not AUTH_SERVICE_URL or not AUTH_ENABLED:
+    if not AUTH_SERVICE_URL:
         return
 
+    # BYOK fast path: cached negative-balance check (Redis, 60 s TTL).
+    if byok:
+        await _enforce_byok_negative_balance(user_id)
+        return
+
+    # Platform-served: uncached real-time quota check.
     result = await _call_validate_for_user(user_id, check_quota="chat")
 
     if result is None:
-        # Fail-open: ginlix-auth unreachable
-        return
+        return  # Fail-open
 
     quota = result.get("quota")
     if not quota:
@@ -245,6 +224,80 @@ async def enforce_credit_limit(user_id: str) -> None:
         )
 
 
+async def _enforce_byok_negative_balance(user_id: str) -> None:
+    """Check BYOK user for negative credit balance (cached, 60 s TTL).
+
+    Only blocks when ``remaining_credits < 0`` (outstanding debt from past
+    platform usage).  The result is cached in Redis to avoid an HTTP
+    round-trip to the platform service on every BYOK message.
+    """
+    from src.utils.cache.redis_cache import get_cache_client
+
+    cache = get_cache_client()
+    cache_key = f"byok_balance:{user_id}"
+
+    # Fast path: check cache
+    if cache.enabled and cache.client:
+        try:
+            cached = await cache.get(cache_key)
+            if cached is not None:
+                if cached == "negative":
+                    raise HTTPException(
+                        status_code=429,
+                        detail={
+                            "message": "Outstanding credit balance. Please add credits to continue.",
+                            "type": "negative_balance",
+                            "retry_after": 30,
+                        },
+                        headers={"Retry-After": "30"},
+                    )
+                return  # cached "ok"
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("BYOK balance cache read error, falling through: %s", e)
+
+    # Cache miss or no Redis — fetch from platform
+    result = await _call_validate_for_user(user_id, check_quota="chat", byok=True)
+
+    if result is None:
+        return  # Fail-open
+
+    quota = result.get("quota")
+    remaining = quota.get("remaining_credits") if quota else None
+
+    is_negative = remaining is not None and remaining < 0
+
+    # Cache the result
+    if cache.enabled and cache.client:
+        try:
+            await cache.set(
+                cache_key,
+                "negative" if is_negative else "ok",
+                ttl=_BYOK_BALANCE_CACHE_TTL,
+            )
+        except Exception as e:
+            logger.warning("BYOK balance cache write error: %s", e)
+
+    if is_negative:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": "Outstanding credit balance. Please add credits to continue.",
+                "type": "negative_balance",
+                "used_credits": quota.get("used_credits"),
+                "credit_limit": quota.get("credit_limit"),
+                "remaining_credits": remaining,
+                "retry_after": quota.get("retry_after", 30),
+            },
+            headers={
+                "Retry-After": str(quota.get("retry_after") or 30),
+                "X-RateLimit-Limit": str(quota.get("credit_limit", "")),
+                "X-RateLimit-Remaining": str(remaining),
+            },
+        )
+
+
 async def _call_validate_for_user(
     user_id: str,
     check_quota: Optional[str] = None,
@@ -257,10 +310,10 @@ async def _call_validate_for_user(
     client = await _get_http_client()
     headers = {"X-User-Id": user_id}
 
-    # Use internal service token if available
+    # Use internal service token if available (shared secret, not a JWT)
     internal_token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
     if internal_token:
-        headers["Authorization"] = f"Bearer {internal_token}"
+        headers["X-Service-Token"] = internal_token
 
     body = {}
     if check_quota:
@@ -296,7 +349,7 @@ async def enforce_workspace_limit(
 
     Returns user_id on success, raises HTTPException(429) if at limit.
     """
-    if not AUTH_SERVICE_URL or not AUTH_ENABLED:
+    if not AUTH_SERVICE_URL:
         return user_id
 
     result = await _call_validate_for_user(user_id, check_quota="workspace")

@@ -1,7 +1,8 @@
 """
 Tests for the Users API router (src/server/app/users.py).
 
-Covers user CRUD, preferences CRUD, and delete-preferences (reset onboarding).
+Covers user CRUD, preferences CRUD, delete-preferences (reset onboarding),
+and platform access tier from the platform service.
 The auth-sync endpoint is NOT tested here because it depends on
 get_current_auth_info (a different dependency not overridden in create_test_app).
 """
@@ -10,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -380,3 +382,230 @@ async def test_delete_preferences_user_not_found(client):
         resp = await client.delete("/api/v1/users/me/preferences")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/users/me — access_tier from platform
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_user_access_tier_has_access(client):
+    """When platform returns access_tier=0, user response reflects it."""
+    result = {"user": _user(), "preferences": _prefs()}
+    with (
+        patch(
+            f"{DB}.get_user_with_preferences",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        patch(
+            f"{DB}._fetch_platform_tier",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+    ):
+        resp = await client.get("/api/v1/users/me")
+
+    assert resp.status_code == 200
+    assert resp.json()["user"]["access_tier"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_user_access_tier_no_access(client):
+    """When AUTH_SERVICE_URL is unset, access_tier defaults to -1."""
+    result = {"user": _user(), "preferences": _prefs()}
+    with (
+        patch(
+            f"{DB}.get_user_with_preferences",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        patch(
+            f"{DB}._fetch_platform_tier",
+            new_callable=AsyncMock,
+            return_value=-1,
+        ),
+    ):
+        resp = await client.get("/api/v1/users/me")
+
+    assert resp.status_code == 200
+    assert resp.json()["user"]["access_tier"] == -1
+
+
+@pytest.mark.asyncio
+async def test_get_user_access_tier_platform_unreachable(client):
+    """When platform is unreachable, access_tier defaults to -1 (fail-open)."""
+    result = {"user": _user(), "preferences": _prefs()}
+    with (
+        patch(
+            f"{DB}.get_user_with_preferences",
+            new_callable=AsyncMock,
+            return_value=result,
+        ),
+        patch(
+            f"{DB}._fetch_platform_tier",
+            new_callable=AsyncMock,
+            return_value=-1,
+        ),
+    ):
+        resp = await client.get("/api/v1/users/me")
+
+    assert resp.status_code == 200
+    assert resp.json()["user"]["access_tier"] == -1
+
+
+# ---------------------------------------------------------------------------
+# _fetch_platform_tier — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+def _mock_cache(cached_value=None):
+    """Return a mock cache that returns cached_value on get, no-ops on set."""
+    cache = AsyncMock()
+    cache.get = AsyncMock(return_value=cached_value)
+    cache.set = AsyncMock(return_value=True)
+    return cache
+
+
+@pytest.mark.asyncio
+async def test_fetch_platform_tier_no_service_url():
+    """Returns -1 immediately when AUTH_SERVICE_URL is unset."""
+    with patch(f"{DB}.AUTH_SERVICE_URL", ""):
+        from src.server.app.users import _fetch_platform_tier
+
+        result = await _fetch_platform_tier("user-123")
+
+    assert result == -1
+
+
+@pytest.mark.asyncio
+async def test_fetch_platform_tier_returns_tier():
+    """Returns tier when platform responds with access_tier."""
+    mock_response = httpx.Response(
+        200, json={"valid": True, "access_tier": 0}
+    )
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    cache = _mock_cache(cached_value=None)  # cache miss
+
+    with (
+        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(
+            "src.server.dependencies.usage_limits._get_http_client",
+            return_value=mock_client,
+        ),
+        patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+        patch("os.getenv", return_value="service-token"),
+    ):
+        from src.server.app.users import _fetch_platform_tier
+
+        result = await _fetch_platform_tier("user-123")
+
+    assert result == 0
+
+    # Verify correct headers and body
+    call_kwargs = mock_client.post.call_args
+    headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
+    body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+
+    assert headers["X-User-Id"] == "user-123"
+    assert headers["X-Service-Token"] == "service-token"
+    assert "Authorization" not in headers
+    assert body == {"check_quota": "none"}
+
+    # Verify result was cached
+    cache.set.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_fetch_platform_tier_cache_hit():
+    """Returns cached value without calling platform."""
+    cache = _mock_cache(cached_value=1)
+    mock_client = AsyncMock()
+
+    with (
+        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(
+            "src.server.dependencies.usage_limits._get_http_client",
+            return_value=mock_client,
+        ),
+        patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+    ):
+        from src.server.app.users import _fetch_platform_tier
+
+        result = await _fetch_platform_tier("user-123")
+
+    assert result == 1
+    mock_client.post.assert_not_called()  # no HTTP call on cache hit
+
+
+@pytest.mark.asyncio
+async def test_fetch_platform_tier_platform_error():
+    """Returns -1 on non-200 response (fail-open)."""
+    mock_response = httpx.Response(500, text="Internal Server Error")
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    cache = _mock_cache(cached_value=None)
+
+    with (
+        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(
+            "src.server.dependencies.usage_limits._get_http_client",
+            return_value=mock_client,
+        ),
+        patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+        patch("os.getenv", return_value="token"),
+    ):
+        from src.server.app.users import _fetch_platform_tier
+
+        result = await _fetch_platform_tier("user-123")
+
+    assert result == -1
+
+
+@pytest.mark.asyncio
+async def test_fetch_platform_tier_network_error():
+    """Returns -1 on network errors (fail-open)."""
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    cache = _mock_cache(cached_value=None)
+
+    with (
+        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(
+            "src.server.dependencies.usage_limits._get_http_client",
+            return_value=mock_client,
+        ),
+        patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+        patch("os.getenv", return_value="token"),
+    ):
+        from src.server.app.users import _fetch_platform_tier
+
+        result = await _fetch_platform_tier("user-123")
+
+    assert result == -1
+
+
+@pytest.mark.asyncio
+async def test_fetch_platform_tier_missing_field():
+    """Returns -1 when response lacks access_tier field."""
+    mock_response = httpx.Response(200, json={"valid": True})
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    cache = _mock_cache(cached_value=None)
+
+    with (
+        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(
+            "src.server.dependencies.usage_limits._get_http_client",
+            return_value=mock_client,
+        ),
+        patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
+        patch("os.getenv", return_value="token"),
+    ):
+        from src.server.app.users import _fetch_platform_tier
+
+        result = await _fetch_platform_tier("user-123")
+
+    assert result == -1

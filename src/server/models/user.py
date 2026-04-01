@@ -167,8 +167,8 @@ class UserResponse(UserBase):
     has_oauth_token: bool = Field(
         default=False, description="Whether user has at least one OAuth token connected"
     )
-    invitation_redeemed: bool = Field(
-        default=False, description="Whether user has redeemed an invitation code"
+    access_tier: int = Field(
+        default=-1, description="Platform access tier. -1 = no access, 0+ = tier level."
     )
     auth_provider: Optional[str] = Field(
         None, description="Authentication provider (e.g. google, github, email)"
