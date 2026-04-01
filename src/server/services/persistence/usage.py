@@ -286,8 +286,13 @@ class UsagePersistenceService:
             final_msg_type = msg_type or 'ptc'
 
             # Compute is_byok from actual per-call billing data.
-            # If any LLM call used the platform key, this turn is NOT fully BYOK.
-            effective_is_byok = not self._has_platform_calls if self._token_usage else is_byok
+            # If we tracked any LLM calls, use real billing data: BYOK only
+            # when no call used the platform key.  Otherwise fall back to the
+            # flag from the auth layer.
+            if self._token_usage:
+                effective_is_byok = not self._has_platform_calls
+            else:
+                effective_is_byok = is_byok
 
             # Build usage record (write-once data, no updates)
             usage_data = {

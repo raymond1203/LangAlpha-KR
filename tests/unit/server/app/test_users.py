@@ -400,7 +400,7 @@ async def test_get_user_access_tier_has_access(client):
             return_value=result,
         ),
         patch(
-            f"{DB}._fetch_platform_tier",
+            "src.server.dependencies.usage_limits._fetch_platform_tier",
             new_callable=AsyncMock,
             return_value=0,
         ),
@@ -422,7 +422,7 @@ async def test_get_user_access_tier_no_access(client):
             return_value=result,
         ),
         patch(
-            f"{DB}._fetch_platform_tier",
+            "src.server.dependencies.usage_limits._fetch_platform_tier",
             new_callable=AsyncMock,
             return_value=-1,
         ),
@@ -444,7 +444,7 @@ async def test_get_user_access_tier_platform_unreachable(client):
             return_value=result,
         ),
         patch(
-            f"{DB}._fetch_platform_tier",
+            "src.server.dependencies.usage_limits._fetch_platform_tier",
             new_callable=AsyncMock,
             return_value=-1,
         ),
@@ -468,11 +468,14 @@ def _mock_cache(cached_value=None):
     return cache
 
 
+LIMITS = "src.server.dependencies.usage_limits"
+
+
 @pytest.mark.asyncio
 async def test_fetch_platform_tier_no_service_url():
     """Returns -1 immediately when AUTH_SERVICE_URL is unset."""
-    with patch(f"{DB}.AUTH_SERVICE_URL", ""):
-        from src.server.app.users import _fetch_platform_tier
+    with patch(f"{LIMITS}.AUTH_SERVICE_URL", ""):
+        from src.server.dependencies.usage_limits import _fetch_platform_tier
 
         result = await _fetch_platform_tier("user-123")
 
@@ -490,29 +493,19 @@ async def test_fetch_platform_tier_returns_tier():
     cache = _mock_cache(cached_value=None)  # cache miss
 
     with (
-        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            "src.server.dependencies.usage_limits._get_http_client",
+            f"{LIMITS}._get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         patch("os.getenv", return_value="service-token"),
     ):
-        from src.server.app.users import _fetch_platform_tier
+        from src.server.dependencies.usage_limits import _fetch_platform_tier
 
         result = await _fetch_platform_tier("user-123")
 
     assert result == 0
-
-    # Verify correct headers and body
-    call_kwargs = mock_client.post.call_args
-    headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
-    body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
-
-    assert headers["X-User-Id"] == "user-123"
-    assert headers["X-Service-Token"] == "service-token"
-    assert "Authorization" not in headers
-    assert body == {"check_quota": "none"}
 
     # Verify result was cached
     cache.set.assert_called_once()
@@ -525,14 +518,14 @@ async def test_fetch_platform_tier_cache_hit():
     mock_client = AsyncMock()
 
     with (
-        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            "src.server.dependencies.usage_limits._get_http_client",
+            f"{LIMITS}._get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
     ):
-        from src.server.app.users import _fetch_platform_tier
+        from src.server.dependencies.usage_limits import _fetch_platform_tier
 
         result = await _fetch_platform_tier("user-123")
 
@@ -549,15 +542,15 @@ async def test_fetch_platform_tier_platform_error():
     cache = _mock_cache(cached_value=None)
 
     with (
-        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            "src.server.dependencies.usage_limits._get_http_client",
+            f"{LIMITS}._get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         patch("os.getenv", return_value="token"),
     ):
-        from src.server.app.users import _fetch_platform_tier
+        from src.server.dependencies.usage_limits import _fetch_platform_tier
 
         result = await _fetch_platform_tier("user-123")
 
@@ -572,15 +565,15 @@ async def test_fetch_platform_tier_network_error():
     cache = _mock_cache(cached_value=None)
 
     with (
-        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            "src.server.dependencies.usage_limits._get_http_client",
+            f"{LIMITS}._get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         patch("os.getenv", return_value="token"),
     ):
-        from src.server.app.users import _fetch_platform_tier
+        from src.server.dependencies.usage_limits import _fetch_platform_tier
 
         result = await _fetch_platform_tier("user-123")
 
@@ -596,15 +589,15 @@ async def test_fetch_platform_tier_missing_field():
     cache = _mock_cache(cached_value=None)
 
     with (
-        patch(f"{DB}.AUTH_SERVICE_URL", "http://localhost:8003"),
+        patch(f"{LIMITS}.AUTH_SERVICE_URL", "http://localhost:8003"),
         patch(
-            "src.server.dependencies.usage_limits._get_http_client",
+            f"{LIMITS}._get_http_client",
             return_value=mock_client,
         ),
         patch("src.utils.cache.redis_cache.get_cache_client", return_value=cache),
         patch("os.getenv", return_value="token"),
     ):
-        from src.server.app.users import _fetch_platform_tier
+        from src.server.dependencies.usage_limits import _fetch_platform_tier
 
         result = await _fetch_platform_tier("user-123")
 

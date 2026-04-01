@@ -135,10 +135,14 @@ async def enforce_chat_limit(
     from src.server.database.api_keys import is_byok_active
     from src.server.database.oauth_tokens import has_any_oauth_token
 
-    is_byok = await is_byok_active(user_id)
-    has_oauth = await has_any_oauth_token(user_id)
+    # Two independent DB queries — run in parallel to cut TTFT latency.
+    is_byok, has_oauth = await asyncio.gather(
+        is_byok_active(user_id),
+        has_any_oauth_token(user_id),
+    )
 
-    # Burst guard (local Redis, no external dependency)
+    # Burst guard runs after DB queries succeed so the INCR'd slot
+    # isn't leaked if a DB connection error propagates above.
     burst_result = await _check_burst_guard(user_id, _DEFAULT_MAX_CONCURRENT)
     if not burst_result["allowed"]:
         raise HTTPException(
@@ -155,7 +159,6 @@ async def enforce_chat_limit(
     # has no own-key path (BYOK or OAuth already grants access).
     tier = -1
     if AUTH_SERVICE_URL and not is_byok and not has_oauth:
-        from src.server.app.users import _fetch_platform_tier
         tier = await _fetch_platform_tier(user_id)
 
     return ChatAuthResult(
@@ -378,6 +381,42 @@ async def enforce_workspace_limit(
         )
 
     return user_id
+
+
+# ---------------------------------------------------------------------------
+# Platform access tier
+# ---------------------------------------------------------------------------
+
+_PLATFORM_TIER_CACHE_TTL = 300  # 5 minutes
+
+
+async def _fetch_platform_tier(user_id: str) -> int:
+    """Fetch the user's platform access tier.
+
+    Returns the numeric tier (0+) on success, or -1 when the user has no
+    platform access, the service is unavailable, or AUTH_SERVICE_URL is unset.
+    Results are cached in Redis for 5 minutes.
+    """
+    if not AUTH_SERVICE_URL:
+        return -1
+
+    from src.utils.cache.redis_cache import get_cache_client
+
+    cache = get_cache_client()
+    cache_key = f"platform_tier:{user_id}"
+    cached = await cache.get(cache_key)
+    if cached is not None:
+        return int(cached)
+
+    result = await _call_validate_for_user(user_id)
+    if result is not None:
+        tier = result.get("access_tier", -1)
+        await cache.set(cache_key, tier, ttl=_PLATFORM_TIER_CACHE_TTL)
+        return tier
+
+    # Brief negative cache prevents thundering herd against a down service.
+    await cache.set(cache_key, -1, ttl=15)
+    return -1
 
 
 # ---------------------------------------------------------------------------

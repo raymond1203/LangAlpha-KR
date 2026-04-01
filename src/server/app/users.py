@@ -13,7 +13,6 @@ Endpoints:
 """
 
 import logging
-import os
 import re
 from datetime import datetime
 from typing import Optional
@@ -51,58 +50,6 @@ from src.server.utils.api import CurrentUserId, handle_api_exceptions, raise_not
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["Users"])
-
-
-_PLATFORM_TIER_CACHE_TTL = 300  # 5 minutes
-
-
-async def _fetch_platform_tier(user_id: str) -> int:
-    """Fetch the user's platform access tier.
-
-    Returns the numeric tier (0+) on success, or -1 when the user has no
-    platform access, the service is unavailable, or AUTH_SERVICE_URL is unset.
-    Results are cached in Redis for 5 minutes.
-    """
-    if not AUTH_SERVICE_URL:
-        return -1
-
-    # Check cache first
-    from src.utils.cache.redis_cache import get_cache_client
-
-    cache = get_cache_client()
-    cache_key = f"platform_tier:{user_id}"
-    cached = await cache.get(cache_key)
-    if cached is not None:
-        return int(cached)
-
-    # Cache miss — fetch from platform
-    from src.server.dependencies.usage_limits import _get_http_client
-
-    internal_token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
-    headers = {"X-User-Id": user_id}
-    if internal_token:
-        headers["X-Service-Token"] = internal_token
-
-    try:
-        client = await _get_http_client()
-        resp = await client.post(
-            f"{AUTH_SERVICE_URL.rstrip('/')}/api/auth/validate",
-            json={"check_quota": "none"},
-            headers=headers,
-        )
-        if resp.status_code == 200:
-            tier = resp.json().get("access_tier", -1)
-            await cache.set(cache_key, tier, ttl=_PLATFORM_TIER_CACHE_TTL)
-            return tier
-        logger.warning(
-            "Failed to fetch platform tier (HTTP %d): %s",
-            resp.status_code,
-            resp.text[:200],
-        )
-    except Exception as e:
-        logger.warning("Failed to fetch platform tier: %s", e)
-
-    return -1
 
 
 # ==================== Auth Sync ====================
@@ -260,6 +207,7 @@ async def get_current_user(user_id: CurrentUserId):
     user_response = UserResponse.model_validate(result["user"])
 
     # Populate platform access tier (cached, SaaS mode only)
+    from src.server.dependencies.usage_limits import _fetch_platform_tier
     user_response.access_tier = await _fetch_platform_tier(user_id)
 
     preferences_response = None
