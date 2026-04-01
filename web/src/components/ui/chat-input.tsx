@@ -1498,13 +1498,28 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                         </DropdownMenuSubContent>
                       </DropdownMenuSub>
                     )}
-                    <DropdownMenuItem
-                      onSelect={() => navigate('/settings?tab=model')}
-                      className="text-xs"
-                      style={{ color: 'var(--color-text-tertiary)' }}
-                    >
-                      {t('chat.modelSelector.manageModels')}
-                    </DropdownMenuItem>
+                    {isMobile ? (
+                      <div
+                        className="relative flex w-full cursor-default select-none items-center rounded-sm px-3 py-2 text-xs outline-none transition-colors hover:bg-accent/15"
+                        style={{ color: 'var(--color-text-tertiary)' }}
+                        role="menuitem"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          navigate('/settings?tab=model');
+                          setModelMenuOpen(false);
+                        }}
+                      >
+                        {t('chat.modelSelector.manageModels')}
+                      </div>
+                    ) : (
+                      <DropdownMenuItem
+                        onSelect={() => navigate('/settings?tab=model')}
+                        className="text-xs"
+                        style={{ color: 'var(--color-text-tertiary)' }}
+                      >
+                        {t('chat.modelSelector.manageModels')}
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
