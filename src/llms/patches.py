@@ -16,6 +16,8 @@ def _patch_langchain_anthropic_usage_metadata():
         from pydantic import BaseModel
 
         original_fn = chat_models._create_usage_metadata
+        if getattr(original_fn, "_is_patched", False):
+            return
 
         def _patched(anthropic_usage: BaseModel):
             cache_creation = getattr(anthropic_usage, "cache_creation", None)
@@ -25,6 +27,7 @@ def _patch_langchain_anthropic_usage_metadata():
                         object.__setattr__(cache_creation, field, 0)
             return original_fn(anthropic_usage)
 
+        _patched._is_patched = True
         chat_models._create_usage_metadata = _patched
         logger.debug("Patched langchain_anthropic._create_usage_metadata for None cache values")
     except Exception as e:

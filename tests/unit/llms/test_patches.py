@@ -56,6 +56,9 @@ class TestPatchLangchainAnthropicUsageMetadata:
 
         result = _create_usage_metadata(usage)
         assert result["output_tokens"] == 50
+        input_details = result.get("input_token_details", {})
+        assert input_details.get("ephemeral_5m_input_tokens") == 10
+        assert input_details.get("ephemeral_1h_input_tokens") == 20
 
     def test_no_cache_creation_still_works(self):
         """Usage without cache_creation should work normally."""
