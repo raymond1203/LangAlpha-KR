@@ -319,7 +319,7 @@ async def astream_ptc_workflow(
                 )
 
             # 2. Filter by model capability for native content blocks
-            modalities = get_input_modalities(effective_model) if effective_model else ["text"]
+            modalities = get_input_modalities(effective_model, custom_modalities=config.input_modalities) if effective_model else ["text"]
             supported, unsupported, file_only = filter_multimodal_by_capability(
                 multimodal_contexts, modalities
             )

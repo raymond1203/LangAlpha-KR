@@ -355,7 +355,7 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
         if not name_re.match(name):
             raise HTTPException(
                 status_code=400,
-                detail=f"custom_models[{idx}]: name '{name}' is invalid (alphanumeric start, max 63 chars, only .-_ allowed)",
+                detail=f"custom_models[{idx}]: name '{name}' is invalid (alphanumeric start, max 63 chars, only .-_:/ allowed)",
             )
 
         # No collision with system models
@@ -395,6 +395,25 @@ def _validate_custom_models(custom_models: list, custom_providers: list | None =
                     status_code=400,
                     detail=f"custom_models[{idx}]: {field} must be a JSON object",
                 )
+
+        # Validate input_modalities if present
+        _VALID_MODALITIES = {"text", "image", "pdf"}
+        modalities = cm.get("input_modalities")
+        if modalities is not None:
+            if not isinstance(modalities, list) or len(modalities) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"custom_models[{idx}]: input_modalities must be a non-empty list",
+                )
+            for m in modalities:
+                if not isinstance(m, str) or m not in _VALID_MODALITIES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"custom_models[{idx}]: invalid modality '{m}', allowed: {sorted(_VALID_MODALITIES)}",
+                    )
+            # Ensure "text" is always present
+            if "text" not in modalities:
+                cm["input_modalities"] = ["text"] + modalities
 
 
 def _validate_custom_providers(custom_providers: list) -> None:

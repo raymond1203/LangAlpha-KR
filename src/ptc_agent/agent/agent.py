@@ -407,7 +407,11 @@ class PTCAgent:
 
         # Add multimodal middleware for read_file image/PDF support (when enabled)
         if self.config.enable_view_image:
-            shared_middleware.append(MultimodalMiddleware(sandbox=sandbox, model_name=self.config.llm.name))
+            shared_middleware.append(MultimodalMiddleware(
+                sandbox=sandbox,
+                model_name=self.config.llm.name,
+                custom_modalities=self.config.input_modalities,
+            ))
 
         # Add dynamic skill loader middleware for user onboarding etc.
         # Includes filesystem scanning for user-installed skills when enabled

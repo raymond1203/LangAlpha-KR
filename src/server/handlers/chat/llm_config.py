@@ -322,7 +322,8 @@ async def resolve_llm_config(
     mc = LLMFactory.get_model_config()
     is_system_model = mc.get_model_config(effective_model) is not None
     if not is_system_model:
-        is_custom = await get_custom_model_config(user_id, effective_model, _pref_cache=model_pref) is not None
+        custom_cm = await get_custom_model_config(user_id, effective_model, _pref_cache=model_pref)
+        is_custom = custom_cm is not None
         is_custom_provider = not is_custom and await get_custom_provider_config(user_id, effective_model, _pref_cache=model_pref) is not None
         if (is_custom or is_custom_provider) and not is_byok:
             # Custom model/provider requires BYOK — revert to system default
@@ -333,6 +334,13 @@ async def resolve_llm_config(
             )
             effective_model = default_model
             config = base_config
+            custom_cm = None  # Reverted to system model
+
+        # Thread custom model input_modalities onto config
+        if custom_cm and custom_cm.get("input_modalities"):
+            if config is base_config:
+                config = config.model_copy(deep=True)
+            config.input_modalities = custom_cm["input_modalities"]
 
     # Resolve reasoning effort: per-request > user pref > None (use model default)
     effective_reasoning = reasoning_effort

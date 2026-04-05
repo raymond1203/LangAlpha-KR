@@ -171,6 +171,7 @@ class MultimodalMiddleware(AgentMiddleware):
         *,
         sandbox: Any | None = None,
         model_name: str | None = None,
+        custom_modalities: list[str] | None = None,
     ) -> None:
         """Initialize the MultimodalMiddleware.
 
@@ -179,10 +180,13 @@ class MultimodalMiddleware(AgentMiddleware):
                     Required for local file support.
             model_name: LLM model name for capability checking (from models.json).
                        Used to determine which input modalities the model supports.
+            custom_modalities: Override modalities for custom models (from user
+                              preferences). When set, bypasses the models.json lookup.
         """
         super().__init__()
         self.sandbox = sandbox
         self.model_name = model_name
+        self.custom_modalities = custom_modalities
 
     def wrap_tool_call(
         self,
@@ -225,7 +229,7 @@ class MultimodalMiddleware(AgentMiddleware):
         model = self.model_name
         token = _active_model.set(model)
         try:
-            modalities = get_input_modalities(model) if model else ["text"]
+            modalities = get_input_modalities(model, custom_modalities=self.custom_modalities) if model else ["text"]
             has_image = "image" in modalities
             has_pdf = "pdf" in modalities
 
@@ -273,7 +277,7 @@ class MultimodalMiddleware(AgentMiddleware):
 
         # Check model capabilities — skip content injection for unsupported modalities
         model = _active_model.get() or self.model_name
-        modalities = get_input_modalities(model) if model else ["text"]
+        modalities = get_input_modalities(model, custom_modalities=self.custom_modalities) if model else ["text"]
 
         # Determine file extension (from local path or URL path)
         if file_path.startswith(("http://", "https://")):

@@ -167,6 +167,9 @@ class AgentConfig(BaseModel):
     # Flash agent configuration
     flash: FlashConfig = Field(default_factory=FlashConfig)
 
+    # Custom model input modalities override (set by resolve_llm_config for custom models)
+    input_modalities: list[str] | None = None
+
     # Vision tool configuration
     # If True, enable view_image tool for viewing images (requires vision-capable model)
     enable_view_image: bool = True

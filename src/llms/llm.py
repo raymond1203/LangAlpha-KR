@@ -186,8 +186,9 @@ class ModelConfig:
 
 _UNSET = object()  # Sentinel to distinguish "no override" from "override to None"
 
-# Name regex for custom models: alphanumeric start, then alphanumeric/./_ /-
-CUSTOM_MODEL_NAME_RE = r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$"
+# Name regex for custom models: alphanumeric start, then alphanumeric/./_/-/:
+# Colon allowed for Ollama-style name:tag format (e.g. gemma4:31b)
+CUSTOM_MODEL_NAME_RE = r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$"
 
 
 class LLM:
@@ -409,10 +410,8 @@ class LLM:
             return {}
         url = self.base_url
         if "{HOST_IP}" in url:
-            host_ip = os.getenv("HOST_IP")
-            if not host_ip:
-                raise ValueError(f"HOST_IP environment variable is not set for {self.provider}")
-            url = url.replace("{HOST_IP}", host_ip)
+            from src.config.env import HOST_IP
+            url = url.replace("{HOST_IP}", HOST_IP)
         return {param_name: url}
 
     def _get_openai_llm(self):
@@ -530,7 +529,10 @@ class LLM:
         }
 
         if not params["api_key"]:
-            raise ValueError(f"{self.env_key or 'ANTHROPIC_API_KEY'} environment variable is not set")
+            if self.provider_info.get("local_only"):
+                params["api_key"] = "EMPTY"
+            else:
+                raise ValueError(f"{self.env_key or 'ANTHROPIC_API_KEY'} environment variable is not set")
 
         # Set base URL from provider configuration if available
         if self.base_url:
@@ -686,12 +688,18 @@ def get_configured_llm_models() -> dict[str, list[str]]:
         print(f"Warning: Failed to load LLM configuration: {e}")
         return {}
 
-def get_input_modalities(model_name: str) -> list[str]:
+def get_input_modalities(
+    model_name: str,
+    custom_modalities: list[str] | None = None,
+) -> list[str]:
     """Get supported input modalities for a model name.
 
-    Convenience wrapper around ModelConfig.get_input_modalities()
-    using the singleton instance.
+    When *custom_modalities* is provided (from a custom model's stored
+    preferences), it is returned directly.  Otherwise falls back to the
+    ``models.json`` lookup via the singleton :class:`ModelConfig`.
     """
+    if custom_modalities is not None:
+        return custom_modalities
     return LLM.get_model_config().get_input_modalities(model_name)
 
 

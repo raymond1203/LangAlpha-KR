@@ -47,6 +47,7 @@ export interface CustomModelEntry {
   provider: string;
   parameters?: Record<string, unknown>;
   extra_body?: Record<string, unknown>;
+  input_modalities?: string[];
 }
 
 export interface CustomModelFormState {
@@ -55,6 +56,7 @@ export interface CustomModelFormState {
   provider: string;
   parameters: string;
   extra_body: string;
+  input_modalities?: string[];
   _customProvider?: boolean;
 }
 

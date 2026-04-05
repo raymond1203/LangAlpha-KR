@@ -127,12 +127,15 @@ async def enforce_chat_limit(
     downstream gates (403 in threads.py, credit check) can decide without
     re-querying the DB.
 
-    OSS mode (AUTH_ENABLED=false): skip everything, return bare result.
+    OSS mode (AUTH_ENABLED=false): still check BYOK so custom models
+    (Ollama, LM Studio, etc.) work. Skip burst guard + platform tier.
     """
-    if not AUTH_ENABLED:
-        return ChatAuthResult(user_id=user_id)
-
     from src.server.database.api_keys import is_byok_active
+
+    if not AUTH_ENABLED:
+        byok = await is_byok_active(user_id)
+        return ChatAuthResult(user_id=user_id, is_byok=byok)
+
     from src.server.database.oauth_tokens import has_any_oauth_token
 
     # Two independent DB queries — run in parallel to cut TTFT latency.
