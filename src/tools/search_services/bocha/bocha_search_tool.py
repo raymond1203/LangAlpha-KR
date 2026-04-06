@@ -145,6 +145,7 @@ def _filter_artifact_for_frontend(raw_data: Dict[str, Any], verbose: bool) -> Di
         Filtered artifact with UI-only metadata
     """
     filtered = {
+        "type": "web_search",
         "query": raw_data.get("query", ""),
         "response_time": raw_data.get("response_time", 0),
         "total_results": raw_data.get("total_results", 0),

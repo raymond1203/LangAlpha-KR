@@ -7,8 +7,18 @@ Official docs: https://serper.dev/docs
 import os
 import time
 from typing import Any, Dict, List, Literal, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
+
+
+def _favicon_url(url: str) -> str:
+    """Build a Google favicon service URL from a page URL."""
+    try:
+        domain = urlparse(url).netloc.removeprefix("www.")
+        return f"https://www.google.com/s2/favicons?domain={domain}&sz=32" if domain else ""
+    except Exception:
+        return ""
 
 
 class SerperAPI:
@@ -124,6 +134,7 @@ class SerperAPI:
             })
 
         metadata = {
+            "type": "web_search",
             "query": query,
             "search_type": "news",
             "search_engine": "serper",
@@ -133,6 +144,7 @@ class SerperAPI:
                 {
                     "title": r["title"],
                     "url": r["url"],
+                    "favicon": _favicon_url(r["url"]),
                     "source": r["source"],
                     "date": r["date"],
                     "snippet": r["content"],
@@ -229,6 +241,7 @@ class SerperAPI:
             })
 
         metadata = {
+            "type": "web_search",
             "query": query,
             "search_type": "general",
             "search_engine": "serper",
@@ -253,6 +266,7 @@ class SerperAPI:
                 {
                     "title": r.get("title", ""),
                     "url": r.get("link", ""),
+                    "favicon": _favicon_url(r.get("link", "")),
                     "snippet": r.get("snippet", ""),
                 }
                 for r in organic_results

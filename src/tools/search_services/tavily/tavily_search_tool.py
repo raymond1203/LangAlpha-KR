@@ -114,6 +114,7 @@ def _filter_artifact_for_frontend(raw_results: Dict) -> Dict:
         Filtered artifact with content fields removed from results array
     """
     filtered = raw_results.copy()
+    filtered["type"] = "web_search"
 
     if "results" in filtered:
         filtered["results"] = [
