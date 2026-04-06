@@ -525,6 +525,7 @@ interface WebSearchResultItem {
   date: string;
   domain: string;
   source?: string;
+  favicon?: string;
 }
 
 interface WebSearchData {
@@ -554,6 +555,7 @@ function parseWebSearchResults(proc: ToolCallProcessRecord, t: TFunction): WebSe
       return {
         title: (item.title as string) || t('toolArtifact.untitled'),
         url: itemUrl,
+        favicon: (rich?.favicon as string) || '',
         snippet: resolveSnippet(item, rich),
         date: (item.date as string) || (item.publish_time as string) || '',
         domain: (() => {
@@ -627,12 +629,22 @@ function WebSearchCards({ data }: WebSearchCardsProps): React.ReactElement {
         >
           {/* Domain + external link icon */}
           <div className="flex items-center justify-between mb-1.5">
-            <span
-              className="text-xs truncate"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              {item.source || item.domain}
-            </span>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <img
+                src={item.favicon || `https://www.google.com/s2/favicons?domain=${encodeURIComponent(item.domain)}&sz=32`}
+                alt=""
+                width={14}
+                height={14}
+                style={{ borderRadius: 2, flexShrink: 0 }}
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+              />
+              <span
+                className="text-xs truncate"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                {item.source || item.domain}
+              </span>
+            </div>
             <ExternalLink
               className="h-3 w-3 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
               style={{ color: 'var(--color-text-tertiary)' }}

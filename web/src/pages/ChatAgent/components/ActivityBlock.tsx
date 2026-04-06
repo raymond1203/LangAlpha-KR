@@ -15,6 +15,7 @@ import {
   InlineSectorPerformanceCard,
   InlineSecFilingCard,
   InlineStockScreenerCard,
+  InlineWebSearchCard,
 } from './charts/InlineMarketCharts';
 import { InlineAutomationCard } from './charts/InlineAutomationCards';
 import { InlinePreviewCard } from './charts/InlinePreviewCard';
@@ -38,6 +39,7 @@ const INLINE_ARTIFACT_MAP: Record<string, React.ComponentType<{ artifact: Record
   stock_screener: InlineStockScreenerCard,
   automations: InlineAutomationCard,
   preview_url: InlinePreviewCard,
+  web_search: InlineWebSearchCard,
 };
 
 /** Spring config matching radix-accordion feel */

@@ -25,6 +25,7 @@ export const INLINE_ARTIFACT_TOOLS = new Set([
   'check_automations',
   'create_automation',
   'GetPreviewUrl',
+  'WebSearch',
 ]);
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -835,5 +836,204 @@ function Inline8KCard({ artifact, onClick }: InlineFilingCardProps): React.React
         </div>
       )}
     </div>
+  );
+}
+
+// ─── InlineWebSearchCard ──────────────────────────────────────────
+
+interface WebSearchResult {
+  title?: string;
+  url?: string;
+  favicon?: string;
+  snippet?: string;
+}
+
+/** Extract domain from a URL, stripping www. prefix. */
+function extractDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+/** Resolve favicon URL: use provided value or fall back to Google favicon service. */
+function resolveFavicon(result: WebSearchResult): string {
+  if (result.favicon) return result.favicon;
+  const domain = extractDomain(result.url || '');
+  return domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=32` : '';
+}
+
+const MAX_INLINE_RESULTS = 4;
+
+export function InlineWebSearchCard({ artifact, onClick }: InlineCardProps): React.ReactElement | null {
+  const isMobile = useIsMobile();
+  const sz = isMobile ? SIZES_MOBILE : SIZES_DESKTOP;
+
+  const query = (artifact?.query as string) || '';
+  const results = (artifact?.results as WebSearchResult[] | undefined) || [];
+
+  if (!results.length) return null;
+
+  const shown = results.slice(0, MAX_INLINE_RESULTS);
+  const remaining = results.length - shown.length;
+
+  return (
+    <div
+      style={isMobile ? mobileCardStyle : cardStyle}
+      onClick={onClick}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-border-muted)')}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = CARD_BORDER)}
+    >
+      {/* Header: search icon + query + count badge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: sz.gap, marginBottom: sz.sectionMb }}>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ width: isMobile ? 13 : 15, height: isMobile ? 13 : 15, flexShrink: 0, color: TEXT_COLOR }}
+        >
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        <span
+          style={{
+            fontWeight: 600,
+            color: 'var(--color-text-primary)',
+            fontSize: sz.headerFs,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {query}
+        </span>
+        <span
+          style={{
+            fontSize: sz.labelFs,
+            color: TEXT_COLOR,
+            backgroundColor: 'var(--color-bg-surface)',
+            padding: '1px 6px',
+            borderRadius: 10,
+            flexShrink: 0,
+          }}
+        >
+          {results.length} results
+        </span>
+      </div>
+
+      {/* Result rows */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: sz.listGap }}>
+        {shown.map((result, i) => {
+          const domain = extractDomain(result.url || '');
+          const faviconSrc = resolveFavicon(result);
+          return (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: sz.gap,
+                fontSize: sz.rowFs,
+                padding: sz.rowPad,
+              }}
+            >
+              {faviconSrc ? (
+                <FaviconImg src={faviconSrc} domain={domain} size={14} />
+              ) : (
+                <span
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 2,
+                    backgroundColor: 'var(--color-bg-surface)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 9,
+                    fontWeight: 600,
+                    color: TEXT_COLOR,
+                    flexShrink: 0,
+                  }}
+                >
+                  {(domain || '?')[0].toUpperCase()}
+                </span>
+              )}
+              <span
+                style={{
+                  color: 'var(--color-text-primary)',
+                  fontWeight: 500,
+                  flex: 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {result.title || domain}
+              </span>
+              <span
+                style={{
+                  color: TEXT_COLOR,
+                  fontSize: sz.labelFs,
+                  flexShrink: 0,
+                  opacity: 0.7,
+                }}
+              >
+                {domain}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* +N more results */}
+      {remaining > 0 && (
+        <div style={{ marginTop: sz.moreMt, fontSize: sz.labelFs, color: TEXT_COLOR }}>
+          +{remaining} more results
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Favicon <img> with onError fallback to a monogram span. */
+function FaviconImg({ src, domain, size }: { src: string; domain: string; size: number }): React.ReactElement {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <span
+        style={{
+          width: size,
+          height: size,
+          borderRadius: 2,
+          backgroundColor: 'var(--color-bg-surface)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: Math.round(size * 0.64),
+          fontWeight: 600,
+          color: TEXT_COLOR,
+          flexShrink: 0,
+        }}
+      >
+        {(domain || '?')[0].toUpperCase()}
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      width={size}
+      height={size}
+      style={{ borderRadius: 2, flexShrink: 0 }}
+      onError={() => setFailed(true)}
+    />
   );
 }
