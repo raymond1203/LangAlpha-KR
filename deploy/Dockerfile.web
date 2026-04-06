@@ -2,6 +2,7 @@ FROM node:20-alpine AS build
 RUN corepack enable && corepack prepare pnpm@latest --activate
 WORKDIR /app
 COPY web/package.json web/pnpm-lock.yaml ./
+COPY web/patches/ patches/
 RUN pnpm install --frozen-lockfile
 COPY web/ .
 ARG VITE_HOST_MODE="oss"
