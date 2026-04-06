@@ -455,7 +455,7 @@ export default function ConnectStep() {
       const saveProvider = effectiveProvider || provider;
       const payload: Record<string, unknown> = {
         byok_enabled: true,
-        api_keys: { [saveProvider]: apiKey || null },
+        api_keys: { [saveProvider]: apiKey },
       };
       if (baseUrl.trim()) {
         payload.base_urls = { [saveProvider]: baseUrl };

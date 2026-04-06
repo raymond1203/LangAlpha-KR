@@ -454,63 +454,6 @@ def _validate_custom_providers(custom_providers: list) -> None:
             raise HTTPException(status_code=400, detail=f"custom_providers[{idx}]: use_response_api must be a boolean")
 
 
-async def _ensure_local_provider_keys(
-    user_id: str, custom_models: list, custom_providers: list | None = None
-) -> None:
-    """Ensure local-only providers referenced by custom_models have a key row.
-
-    Ollama, LM Studio, vLLM don't need real API keys, but the BYOK resolution
-    chain (``is_byok_active`` → ``get_byok_config_for_provider``) requires a
-    ``user_api_keys`` row to exist.  This creates a placeholder row (empty key,
-    manifest base_url) for any local-only provider that is missing one.
-    """
-    from src.llms.llm import ModelConfig
-    from src.server.database.api_keys import get_user_api_keys, upsert_api_key, set_byok_enabled, invalidate_byok_cache
-
-    mc = ModelConfig()
-
-    # Collect providers referenced by custom_models
-    referenced_providers: set[str] = set()
-    for cm in custom_models:
-        p = cm.get("provider")
-        if p:
-            referenced_providers.add(p)
-
-    # Resolve custom sub-providers to their parent
-    cp_map = {cp["name"]: cp.get("parent_provider") for cp in (custom_providers or []) if isinstance(cp, dict)}
-
-    # Find which are local (access_type='local') and need a key row
-    local_providers: set[str] = set()
-    for p in referenced_providers:
-        # Resolve to parent if it's a custom sub-provider
-        effective = cp_map.get(p, p)
-        info = mc.get_provider_info(effective)
-        if info.get("access_type") == "local":
-            local_providers.add(p)
-
-    if not local_providers:
-        return
-
-    # Check which already have key rows
-    user_keys = await get_user_api_keys(user_id)
-    existing = set(user_keys.get("keys", {}).keys())
-
-    for provider in local_providers:
-        if provider not in existing:
-            # Resolve base_url from manifest (with {HOST_IP} placeholder intact,
-            # substituted at LLM construction time)
-            effective = cp_map.get(provider, provider)
-            info = mc.get_provider_info(effective)
-            base_url = info.get("base_url")
-            await upsert_api_key(user_id, provider, "", base_url=base_url)
-            logger.info(f"Auto-created key row for local provider {provider} (user {user_id})")
-
-    # Ensure BYOK is enabled so is_byok_active() returns true
-    if not user_keys.get("byok_enabled"):
-        await set_byok_enabled(user_id, True)
-
-    await invalidate_byok_cache(user_id)
-
 
 @router.put("/users/me/preferences", response_model=UserPreferencesResponse)
 @handle_api_exceptions("update preferences", logger)
@@ -567,7 +510,6 @@ async def update_preferences(
                 existing = await db_get_user_preferences(user_id)
                 cp_for_validation = (existing or {}).get("other_preference", {}).get("custom_providers") or []
             _validate_custom_models(custom_models, cp_for_validation)
-            await _ensure_local_provider_keys(user_id, custom_models, cp_for_validation)
 
     preferences = await upsert_user_preferences(
         user_id=user_id,
