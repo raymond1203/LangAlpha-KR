@@ -11,7 +11,7 @@ import pytest
 from src.llms.token_counter import (
     TokenUsageRecord,
     TokenUsageTracker,
-    _extract_cache_from_details,
+    extract_cache_from_details,
     extract_token_usage,
     get_global_tracker,
     reset_global_tracker,
@@ -213,7 +213,7 @@ class TestExtractTokenUsage:
 
 
 # ---------------------------------------------------------------------------
-# _extract_cache_from_details
+# extract_cache_from_details
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +226,7 @@ class TestExtractCacheFromDetails:
             "ephemeral_5m_input_tokens": 7882,
             "ephemeral_1h_input_tokens": 0,
         }
-        result = _extract_cache_from_details(details)
+        result = extract_cache_from_details(details)
         assert result["cached_tokens"] == 20459
         assert result["cache_5m_tokens"] == 7882
         assert "cache_1h_tokens" not in result
@@ -239,14 +239,14 @@ class TestExtractCacheFromDetails:
                 "ephemeral_1h_input_tokens": 200,
             },
         }
-        result = _extract_cache_from_details(details)
+        result = extract_cache_from_details(details)
         assert result["cached_tokens"] == 100
         assert result["cache_5m_tokens"] == 500
         assert result["cache_1h_tokens"] == 200
 
     def test_int_format_legacy(self):
         details = {"cache_read": 0, "cache_creation": 1000}
-        result = _extract_cache_from_details(details)
+        result = extract_cache_from_details(details)
         assert result["cache_5m_tokens"] == 1000
         assert "cached_tokens" not in result
 
@@ -255,22 +255,22 @@ class TestExtractCacheFromDetails:
             "ephemeral_5m_input_tokens": 800,
             "cache_creation": 1000,
         }
-        result = _extract_cache_from_details(details)
+        result = extract_cache_from_details(details)
         # Flat ephemeral key takes priority; int cache_creation ignored
         assert result["cache_5m_tokens"] == 800
 
     def test_none_details(self):
-        assert _extract_cache_from_details(None) == {}
+        assert extract_cache_from_details(None) == {}
 
     def test_empty_details(self):
-        assert _extract_cache_from_details({}) == {}
+        assert extract_cache_from_details({}) == {}
 
     def test_none_values_skipped(self):
         details = {
             "cache_read": None,
             "ephemeral_5m_input_tokens": None,
         }
-        result = _extract_cache_from_details(details)
+        result = extract_cache_from_details(details)
         assert result == {}
 
 

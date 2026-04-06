@@ -813,8 +813,8 @@ def add_cost_to_token_usage(token_usage: Optional[Dict[str, Any]]) -> Dict[str, 
         cache_1h_tokens = 0
 
         if 'input_token_details' in usage:
-            from src.llms.token_counter import _extract_cache_from_details
-            cache_info = _extract_cache_from_details(usage['input_token_details'])
+            from src.llms.token_counter import extract_cache_from_details
+            cache_info = extract_cache_from_details(usage['input_token_details'])
             cached_tokens = cache_info.get('cached_tokens', 0)
             cache_5m_tokens = cache_info.get('cache_5m_tokens', 0)
             cache_1h_tokens = cache_info.get('cache_1h_tokens', 0)

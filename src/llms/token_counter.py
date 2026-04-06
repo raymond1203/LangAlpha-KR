@@ -12,7 +12,7 @@ from .llm import LLM
 logger = logging.getLogger(__name__)
 
 
-def _extract_cache_from_details(details: Dict[str, Any]) -> Dict[str, Any]:
+def extract_cache_from_details(details: Dict[str, Any]) -> Dict[str, Any]:
     """Extract cache token counts from a LangChain input_token_details dict.
 
     Handles three formats produced by different providers/versions:
@@ -78,7 +78,7 @@ def extract_token_usage(response: Any) -> Dict[str, Any]:
             # Extract cache tokens from input_token_details (LangChain normalized format)
             if 'input_token_details' in usage:
                 details = usage['input_token_details']
-                token_info.update(_extract_cache_from_details(details))
+                token_info.update(extract_cache_from_details(details))
                 if details and 'audio' in details:
                     audio = details.get('audio')
                     if audio is not None:
