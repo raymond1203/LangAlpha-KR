@@ -333,7 +333,7 @@ async def ptc_agent(
             "User declined PTC agent dispatch.", tool_call_id
         )
 
-    # Create workspace if needed
+    # Create workspace or verify ownership
     if workspace_id is None:
         try:
             from src.server.services.workspace_manager import WorkspaceManager
@@ -348,6 +348,13 @@ async def ptc_agent(
         except Exception as e:
             logger.error(f"Failed to create workspace for PTC dispatch: {e}")
             return _error_command(f"workspace_creation_failed: {e}", tool_call_id)
+    else:
+        # Verify user owns the target workspace
+        from src.server.database.workspace import get_workspace
+
+        ws = await get_workspace(workspace_id)
+        if not ws or str(ws.get("user_id")) != user_id:
+            return _error_command("workspace not found", tool_call_id)
 
     # Generate a new thread ID
     thread_id = str(uuid.uuid4())
@@ -369,7 +376,7 @@ async def ptc_agent(
                     "X-Service-Token": service_token,
                     "X-User-Id": user_id,
                 },
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientTimeout(connect=10, sock_read=5),
             ) as resp:
                 # Only check status — don't read body (it's an SSE stream)
                 if resp.status >= 400:
@@ -487,6 +494,13 @@ async def _threads_list(
     """List threads, optionally filtered by workspace."""
     try:
         if workspace_id:
+            # Verify user owns the workspace before listing its threads
+            from src.server.database.workspace import get_workspace
+
+            ws = await get_workspace(workspace_id)
+            if not ws or str(ws.get("user_id")) != user_id:
+                return _error_command("workspace not found", tool_call_id)
+
             from src.server.database.conversation import get_workspace_threads
 
             threads, total = await get_workspace_threads(
