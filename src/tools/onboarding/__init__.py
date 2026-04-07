@@ -1,17 +1,12 @@
-"""
-Onboarding tools: user profile management + HITL workspace/question tools.
+"""Onboarding tools: user profile management + secretary workspace/dispatch tools."""
 
-Combines USER_PROFILE_TOOLS with create_workspace and start_question
-for the complete onboarding flow.
-"""
-
-from src.tools.onboarding.tools import create_workspace, start_question
+from src.tools.secretary.tools import manage_workspaces, ptc_agent
 from src.tools.user_profile import USER_PROFILE_TOOLS
 
-ONBOARDING_TOOLS = [*USER_PROFILE_TOOLS, create_workspace, start_question]
+ONBOARDING_TOOLS = [*USER_PROFILE_TOOLS, manage_workspaces, ptc_agent]
 
 __all__ = [
-    "create_workspace",
-    "start_question",
+    "manage_workspaces",
+    "ptc_agent",
     "ONBOARDING_TOOLS",
 ]
