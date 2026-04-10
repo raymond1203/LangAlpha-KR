@@ -503,6 +503,20 @@
       "text"
     ]
   },
+  "qwen3.6-plus": {
+    "model_id": "qwen3.6-plus",
+    "provider": "dashscope",
+    "visible": true,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf",
+      "video"
+    ],
+    "extra_body": {
+      "enable_thinking": true
+    }
+  },
   "qwen3.5-plus": {
     "model_id": "qwen3.5-plus",
     "provider": "dashscope",
@@ -534,6 +548,20 @@
       "text",
       "image",
       "pdf"
+    ],
+    "extra_body": {
+      "enable_thinking": true
+    }
+  },
+  "qwen3.6-plus-intl": {
+    "model_id": "qwen3.6-plus",
+    "provider": "dashscope-intl",
+    "visible": true,
+    "input_modalities": [
+      "text",
+      "image",
+      "pdf",
+      "video"
     ],
     "extra_body": {
       "enable_thinking": true

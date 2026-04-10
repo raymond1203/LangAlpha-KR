@@ -650,6 +650,40 @@
     ],
     "dashscope": [
       {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "is_reasoning": true,
+        "description": "Alibaba's Qwen3.6 Plus flagship model with Agentic coding, vision, and 1M context",
+        "context_window": 1000000,
+        "max_output": 65536,
+        "pricing": {
+          "input_tiers": [
+            {
+              "max_tokens": 256000,
+              "rate": 0.287,
+              "cached_input": 0.029
+            },
+            {
+              "max_tokens": 1000000,
+              "rate": 1.147,
+              "cached_input": 0.115
+            }
+          ],
+          "output_tiers": [
+            {
+              "max_tokens": 256000,
+              "rate": 1.72
+            },
+            {
+              "max_tokens": 1000000,
+              "rate": 6.89
+            }
+          ],
+          "output_pricing_mode": "input_dependent",
+          "unit": "per_1m_tokens"
+        }
+      },
+      {
         "id": "qwen3.5-plus",
         "name": "Qwen3.5 Plus",
         "is_reasoning": true,
@@ -865,6 +899,40 @@
       }
     ],
     "dashscope-intl": [
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus (SG)",
+        "is_reasoning": true,
+        "description": "Alibaba's Qwen3.6 Plus flagship model — Singapore international region",
+        "context_window": 1000000,
+        "max_output": 65536,
+        "pricing": {
+          "input_tiers": [
+            {
+              "max_tokens": 256000,
+              "rate": 0.538,
+              "cached_input": 0.054
+            },
+            {
+              "max_tokens": 1000000,
+              "rate": 2.15,
+              "cached_input": 0.215
+            }
+          ],
+          "output_tiers": [
+            {
+              "max_tokens": 256000,
+              "rate": 3.227
+            },
+            {
+              "max_tokens": 1000000,
+              "rate": 6.452
+            }
+          ],
+          "output_pricing_mode": "input_dependent",
+          "unit": "per_1m_tokens"
+        }
+      },
       {
         "id": "qwen3.5-plus",
         "name": "Qwen3.5 Plus (SG)",
