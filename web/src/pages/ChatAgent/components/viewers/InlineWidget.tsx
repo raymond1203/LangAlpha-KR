@@ -71,7 +71,7 @@ function buildSrcDoc(html: string, widgetData?: Record<string, string>): string 
 (function(){
   var _p=JSON.parse;
   JSON.parse=function(t,r){
-    if(typeof t==='string')t=t.replace(/\\bNaN\\b/g,'null').replace(/-?Infinity\\b/g,'null');
+    if(typeof t==='string')t=t.replace(/\\bNaN\\b/g,'null').replace(/(?<![A-Za-z_])-?Infinity\\b/g,'null');
     return _p.call(this,t,r);
   };
   var shown={},count=0,rendering=false;

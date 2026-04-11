@@ -211,7 +211,7 @@ async def _resolve_data_files(
             _, ext = os.path.splitext(path)
             if ext.lower() in ('.json', '.geojson', '.topojson'):
                 value = re.sub(r'\bNaN\b', 'null', value)
-                value = re.sub(r'-?Infinity\b', 'null', value)
+                value = re.sub(r'(?<![A-Za-z_])-?Infinity\b', 'null', value)
         else:
             b64 = base64.b64encode(content).decode()  # type: ignore[arg-type]
             value = f"data:{mime};base64,{b64}"
