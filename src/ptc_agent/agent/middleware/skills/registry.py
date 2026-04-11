@@ -96,6 +96,7 @@ SKILL_REGISTRY: dict[str, SkillDefinition] = {
         tools=[],
         skill_md_path="skills/secretary/SKILL.md",
         exposure="flash",
+        command="secretary",
     ),
     "automation": SkillDefinition(
         name="automation",

@@ -27,13 +27,15 @@ These run immediately (no approval):
 
 `ptc_agent` is **asynchronous** — it dispatches the question and returns immediately. The PTC agent runs in the background with full code execution, charts, and financial data tools.
 
-Return: `{ success, workspace_id, thread_id, status: "dispatched" }`
+Return: `{ success, workspace_id, thread_id, status: "dispatched", report_back }`
 
 - Omit `workspace_id` → auto-creates a new workspace (blocks ~8-10s for sandbox init)
 - Pass `workspace_id` → dispatches to existing workspace (new thread)
 - Pass `thread_id` → continues an existing conversation (overrides `workspace_id`)
+- `report_back=True` (default) → when PTC completes, you'll automatically receive the results and should summarize them for the user
+- `report_back=False` → fire-and-forget; the user will check results in the workspace themselves
 
-Use the returned `thread_id` with `agent_output` to check progress later.
+Use the returned `thread_id` with `agent_output` to check progress later (only needed when `report_back=False`).
 
 ### agent_output
 
