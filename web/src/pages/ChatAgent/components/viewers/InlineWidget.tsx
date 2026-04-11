@@ -71,13 +71,16 @@ function buildSrcDoc(html: string, widgetData?: Record<string, string>): string 
 (function(){
   var _p=JSON.parse;
   JSON.parse=function(t,r){
-    if(typeof t==='string')t=t.replace(/\\bNaN\\b/g,'null').replace(/\\b-?Infinity\\b/g,'null');
+    if(typeof t==='string')t=t.replace(/\\bNaN\\b/g,'null').replace(/-?Infinity\\b/g,'null');
     return _p.call(this,t,r);
   };
-  var shown={};
+  var shown={},count=0,rendering=false;
   function showError(msg){
-    if(shown[msg])return;
+    if(rendering||shown[msg])return;
     shown[msg]=1;
+    if(++count>5)return;
+    rendering=true;
+    msg=String(msg).slice(0,500);
     var root=document.body||document.documentElement;
     var d=document.createElement('div');
     d.style.cssText='margin:12px;padding:14px 16px;background:var(--color-bg-card);border:0.5px solid var(--color-border-muted);border-radius:10px;display:flex;align-items:center;gap:12px;';
@@ -98,6 +101,7 @@ function buildSrcDoc(html: string, widgetData?: Record<string, string>): string 
     d.appendChild(dot);d.appendChild(mid);d.appendChild(b);
     root.appendChild(d);
     parent.postMessage({type:'widget:resize',height:root.scrollHeight},'*');
+    rendering=false;
   }
   window.onerror=function(_,__,___,____,e){showError(e&&e.message||String(_));};
   window.addEventListener('unhandledrejection',function(e){showError(e.reason&&e.reason.message||String(e.reason));});
@@ -105,7 +109,7 @@ function buildSrcDoc(html: string, widgetData?: Record<string, string>): string 
 </script>\n`;
 
   return `<!DOCTYPE html><html><head>
-${earlyScripts}<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' cdnjs.cloudflare.com cdn.jsdelivr.net unpkg.com esm.sh; style-src 'unsafe-inline'; img-src data: blob:; font-src cdnjs.cloudflare.com cdn.jsdelivr.net; connect-src cdnjs.cloudflare.com cdn.jsdelivr.net unpkg.com esm.sh;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' cdnjs.cloudflare.com cdn.jsdelivr.net unpkg.com esm.sh; style-src 'unsafe-inline'; img-src data: blob:; font-src cdnjs.cloudflare.com cdn.jsdelivr.net; connect-src cdnjs.cloudflare.com cdn.jsdelivr.net unpkg.com esm.sh;">
 <style>
 :root {
   ${themeCSS}
@@ -114,7 +118,7 @@ ${earlyScripts}<meta http-equiv="Content-Security-Policy" content="default-src '
 body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--color-text-primary); background: transparent; overflow: hidden; }
 ${SEAMLESS_OVERRIDE}
 </style>
-${dataScript}<script>
+${earlyScripts}${dataScript}<script>
 window.sendPrompt = function(text) {
   parent.postMessage({ type: 'widget:sendPrompt', text: String(text) }, '*');
 };

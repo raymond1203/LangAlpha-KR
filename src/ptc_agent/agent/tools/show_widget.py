@@ -209,9 +209,9 @@ async def _resolve_data_files(
             # Sanitize non-standard JSON tokens (NaN/Infinity) that Python's
             # json.dumps emits by default — these break browser JSON.parse.
             _, ext = os.path.splitext(path)
-            if ext.lower() == '.json':
+            if ext.lower() in ('.json', '.geojson', '.topojson'):
                 value = re.sub(r'\bNaN\b', 'null', value)
-                value = re.sub(r'\b-?Infinity\b', 'null', value)
+                value = re.sub(r'-?Infinity\b', 'null', value)
         else:
             b64 = base64.b64encode(content).decode()  # type: ignore[arg-type]
             value = f"data:{mime};base64,{b64}"
