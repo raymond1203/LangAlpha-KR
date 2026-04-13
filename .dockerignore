@@ -15,3 +15,16 @@ dist/
 build/
 .mypy_cache/
 docs/
+# Backend tests
+tests/
+libs/ptc-cli/tests/
+mcp_servers/tests/
+
+# Frontend tests
+web/src/**/__tests__/
+web/src/test/
+web/e2e/
+web/**/*.test.*
+web/**/*.spec.*
+web/vitest.config.ts
+web/playwright.config.js
