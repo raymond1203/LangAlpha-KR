@@ -34,6 +34,10 @@ from ..tool_generator import ToolFunctionGenerator
 
 logger = structlog.get_logger(__name__)
 
+# Lock entry fields excluded from skills manifest hash — these timestamps
+# change on every computation and would force needless re-uploads.
+_LOCK_VOLATILE_KEYS: frozenset[str] = frozenset({"installedAt", "updatedAt"})
+
 
 @dataclass
 class ChartData:
@@ -1018,7 +1022,6 @@ class PTCSandbox:
             # Exclude volatile timestamp fields (installedAt, updatedAt) — they change
             # on every manifest computation and would force a full skills re-upload
             # on every workspace restart even when no skill files changed.
-            _LOCK_VOLATILE_KEYS = {"installedAt", "updatedAt"}
             lock_hash_parts = []
             for name in sorted(skills_metadata):
                 entry = skills_metadata[name].get("lock_entry")

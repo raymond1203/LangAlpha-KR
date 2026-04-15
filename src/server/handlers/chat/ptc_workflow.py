@@ -13,6 +13,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
+from typing import Coroutine
 
 from fastapi import HTTPException
 from langgraph.types import Command
@@ -75,7 +76,8 @@ from src.config.settings import get_ptc_recursion_limit
 from .llm_config import resolve_llm_config
 from .steering import backfill_steering_queries
 
-from typing import Coroutine
+# Strong references to fire-and-forget tasks so the event loop doesn't GC them.
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _fire_and_forget(coro: Coroutine, *, name: str = "") -> None:
@@ -89,7 +91,10 @@ def _fire_and_forget(coro: Coroutine, *, name: str = "") -> None:
             await coro
         except Exception:
             logger.debug(f"[PTC_CHAT] Fire-and-forget task failed: {name}", exc_info=True)
-    asyncio.create_task(_safe(), name=name or None)
+        finally:
+            _background_tasks.discard(t)
+    t = asyncio.create_task(_safe(), name=name or None)
+    _background_tasks.add(t)
 
 
 async def _flash_report_back(ptc_thread_id: str, workspace_id: str | None) -> None:
