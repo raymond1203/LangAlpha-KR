@@ -345,6 +345,10 @@ async def astream_ptc_workflow(
 
         # Check if workspace needs startup — emit early SSE so frontend
         # can show "Starting workspace..." instead of a silent wait.
+        # NOTE: This is broader than the old `ws_status == "stopped"` check.
+        # It also fires on server-restart cold starts (workspace running in
+        # Daytona but no session in memory). The extra "starting/ready" SSE
+        # pair is harmless — frontend treats it as a brief spinner.
         needs_startup = not workspace_manager.has_ready_session(workspace_id)
         if needs_startup:
             yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'starting', 'workspace_id': workspace_id})}\n\n"
