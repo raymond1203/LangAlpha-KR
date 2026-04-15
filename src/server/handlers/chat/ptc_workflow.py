@@ -18,10 +18,7 @@ from fastapi import HTTPException
 from langgraph.types import Command
 
 from src.server.app import setup
-from src.server.database.workspace import (
-    update_workspace_activity,
-    get_workspace as db_get_workspace,
-)
+from src.server.database.workspace import update_workspace_activity
 from src.server.handlers.streaming_handler import WorkflowStreamHandler
 from src.server.models.chat import (
     ChatRequest,
@@ -77,6 +74,22 @@ from src.config.settings import get_ptc_recursion_limit
 
 from .llm_config import resolve_llm_config
 from .steering import backfill_steering_queries
+
+from typing import Coroutine
+
+
+def _fire_and_forget(coro: Coroutine, *, name: str = "") -> None:
+    """Schedule a coroutine as a fire-and-forget background task.
+
+    Exceptions are logged at DEBUG and suppressed, so they never surface
+    as 'Task exception was never retrieved'.
+    """
+    async def _safe():
+        try:
+            await coro
+        except Exception:
+            logger.debug(f"[PTC_CHAT] Fire-and-forget task failed: {name}", exc_info=True)
+    asyncio.create_task(_safe(), name=name or None)
 
 
 async def _flash_report_back(ptc_thread_id: str, workspace_id: str | None) -> None:
@@ -201,9 +214,19 @@ async def astream_ptc_workflow(
     ptc_graph = None
     timezone_str = None
 
+    # Phase timing — collects wall-clock durations for each hot-path phase.
+    # Emits a single structured summary line when the workflow starts.
+    _phase_times: dict[str, float] = {}
+    _phase_t0 = start_time
+
+    def _mark_phase(name: str) -> None:
+        nonlocal _phase_t0
+        now = time.time()
+        _phase_times[name] = (now - _phase_t0) * 1000  # ms
+        _phase_t0 = now
+
     # Start execution tracking to capture agent messages
     ExecutionTracker.start_tracking()
-    logger.debug("PTC execution tracking started")
 
     slot_owned = True
     try:
@@ -279,7 +302,7 @@ async def astream_ptc_workflow(
             log_prefix="PTC_CHAT",
         )
         if not is_checkpoint_replay:
-            logger.info(
+            logger.debug(
                 f"[PTC_CHAT] Database records created: workspace_id={workspace_id} "
                 f"thread_id={thread_id} query_type={query_type}"
             )
@@ -296,11 +319,14 @@ async def astream_ptc_workflow(
 
         token_callback, tool_tracker = init_tracking(thread_id)
 
+        _mark_phase("db_setup")
+
         # =====================================================================
         # Session and Graph Setup
         # =====================================================================
 
         # Resolve LLM config (pre-resolved by route handler, fallback for standalone use)
+        _mark_phase("pre_session")
         if config is None:
             config = await resolve_llm_config(
                 setup.agent_config, user_id, request.llm_model, is_byok, mode="ptc",
@@ -315,38 +341,42 @@ async def astream_ptc_workflow(
         sandbox_id = None
 
         # Use WorkspaceManager for workspace-based sessions
-        logger.info(f"[PTC_CHAT] Using workspace: {workspace_id}")
         workspace_manager = WorkspaceManager.get_instance()
 
-        # Check if workspace needs startup -- emit early notification so frontend
+        # Check if workspace needs startup — emit early SSE so frontend
         # can show "Starting workspace..." instead of a silent wait.
-        workspace_record = await db_get_workspace(workspace_id)
-        ws_status = workspace_record.get("status") if workspace_record else None
-        if ws_status == "stopped":
+        needs_startup = not workspace_manager.has_ready_session(workspace_id)
+        if needs_startup:
             yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'starting', 'workspace_id': workspace_id})}\n\n"
 
         session = await workspace_manager.get_session_for_workspace(
             workspace_id, user_id=user_id
         )
 
-        if ws_status == "stopped":
+        if needs_startup:
             yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'ready', 'workspace_id': workspace_id})}\n\n"
 
-        # Update workspace activity
-        await update_workspace_activity(workspace_id)
+        _mark_phase("session")
 
+        # Fire-and-forget: update workspace activity (conditional SQL, skip if <60s)
+        _fire_and_forget(
+            update_workspace_activity(workspace_id),
+            name=f"update_activity_{workspace_id[:8]}",
+        )
+
+        # Post-session setup — parallelize when HITL (registry + plan interrupt check)
         registry_store = BackgroundRegistryStore.get_instance()
-        background_registry = await registry_store.get_or_create_registry(thread_id)
-
-        # Effective plan_mode: only enable if explicitly requested or resuming
-        # from a SubmitPlan interrupt. Other interrupt types (AskUserQuestion,
-        # onboarding) must NOT activate plan mode.
         if request.plan_mode:
             effective_plan_mode = True
+            background_registry = await registry_store.get_or_create_registry(thread_id)
         elif request.hitl_response:
-            effective_plan_mode = await _is_plan_interrupt_pending(thread_id)
+            background_registry, effective_plan_mode = await asyncio.gather(
+                registry_store.get_or_create_registry(thread_id),
+                _is_plan_interrupt_pending(thread_id),
+            )
         else:
             effective_plan_mode = False
+            background_registry = await registry_store.get_or_create_registry(thread_id)
 
         # Build graph with the workspace's session
         # Note: agent.md is injected dynamically by WorkspaceContextMiddleware
@@ -366,6 +396,8 @@ async def astream_ptc_workflow(
             store=setup.store,
             on_signed_url=_set_cached_signed_url,
         )
+
+        _mark_phase("graph_build")
 
         if session.sandbox:
             sandbox_id = getattr(session.sandbox, "sandbox_id", None)
@@ -545,9 +577,12 @@ async def astream_ptc_workflow(
                 request_path = session.sandbox.normalize_path(
                     f".agents/threads/{short_id}/request.md"
                 )
-                await session.sandbox.awrite_file_text(request_path, user_input)
+                _fire_and_forget(
+                    session.sandbox.awrite_file_text(request_path, user_input),
+                    name=f"write_request_{short_id}",
+                )
             except Exception:
-                pass  # Non-critical, don't fail the request
+                pass  # normalize_path is sync, can still throw
 
         # =====================================================================
         # LangSmith Tracing Configuration
@@ -589,18 +624,21 @@ async def astream_ptc_workflow(
         # Track steering messages injected mid-workflow for post-completion backfill
         setup_steering_tracking(handler)
 
-        # Initialize workflow tracker
+        # Initialize workflow tracker (fire-and-forget — return value unused)
         tracker = WorkflowTracker.get_instance()
-        await tracker.mark_active(
-            thread_id=thread_id,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            metadata={
-                "type": "ptc_agent",
-                "sandbox_id": sandbox_id,
-                "locale": request.locale,
-                "timezone": timezone_str,
-            },
+        _fire_and_forget(
+            tracker.mark_active(
+                thread_id=thread_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                metadata={
+                    "type": "ptc_agent",
+                    "sandbox_id": sandbox_id,
+                    "locale": request.locale,
+                    "timezone": timezone_str,
+                },
+            ),
+            name=f"mark_active_{thread_id[:8]}",
         )
 
         # =====================================================================
@@ -609,30 +647,10 @@ async def astream_ptc_workflow(
 
         manager = BackgroundTaskManager.get_instance()
 
-        # If the workspace was stopped since the last run, any old workflow
-        # holds stale sandbox references (closed Daytona client).  Cancel it
-        # cooperatively so the inner shielded task actually exits.
-        # Raw task.cancel() cannot penetrate asyncio.shield(), leaving the
-        # inner consumer running untracked against a dead sandbox.
-        if ws_status == "stopped":
-            await manager.cancel_workflow(thread_id)
-            # Also cancel the inner task directly so we don't have to wait
-            # for the next graph event to check cancel_event.
-            async with manager.task_lock:
-                stale = manager.tasks.get(thread_id)
-                if stale:
-                    if stale.inner_task and not stale.inner_task.done():
-                        stale.inner_task.cancel()
-                    stale_task = stale.task
-                else:
-                    stale_task = None
-            if stale_task and not stale_task.done():
-                done, _ = await asyncio.wait({stale_task}, timeout=10.0)
-                if not done:
-                    logger.warning(
-                        "Stale workflow did not exit within 10s after cancellation",
-                        thread_id=thread_id,
-                    )
+        # If the workspace was not ready (stopped or server restarted), any
+        # old workflow holds stale sandbox references.  Cancel it silently.
+        if needs_startup:
+            await manager.cancel_stale_workflow(thread_id)
 
         # Wait for any soft-interrupted workflow to complete before starting new one
         ready, steering_event = await wait_or_steer(
@@ -793,6 +811,18 @@ async def astream_ptc_workflow(
         )
         slot_owned = False  # Manager owns burst slot release from here
 
+        _mark_phase("workflow_start")
+        total_ms = (time.time() - start_time) * 1000
+        phases = " ".join(f"{k}={v:.0f}ms" for k, v in _phase_times.items())
+        llm_def = config.llm_definition
+        model_tag = (
+            f"{llm_def.provider}/{llm_def.model_id}" if llm_def
+            else config.llm.name if config.llm else "unknown"
+        )
+        logger.info(
+            f"[PTC_TIMING] thread_id={thread_id} model={model_tag} total={total_ms:.0f}ms ({phases})"
+        )
+
         # Stream live SSE events to the client
         async for event in stream_live_events(
             manager=manager,
@@ -850,4 +880,3 @@ async def astream_ptc_workflow(
     finally:
         # Always stop execution tracking to prevent memory leaks and context pollution
         ExecutionTracker.stop_tracking()
-        logger.debug("PTC execution tracking stopped")

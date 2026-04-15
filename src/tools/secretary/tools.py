@@ -653,6 +653,16 @@ async def _threads_delete(
         from src.server.database.conversation import delete_thread
 
         await delete_thread(thread_id)
+
+        # Invalidate thread existence cache (matches HTTP delete endpoint)
+        try:
+            from src.utils.cache.redis_cache import get_cache_client
+            cache = get_cache_client()
+            if cache.enabled and cache.client:
+                await cache.client.delete(f"thread_exists:{thread_id}")
+        except Exception:
+            pass
+
         return _success_command(
             {"success": True, "thread_id": thread_id},
             tool_call_id,

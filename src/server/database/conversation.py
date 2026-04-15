@@ -491,31 +491,60 @@ async def ensure_thread_exists(
         external_id: Optional external thread identifier (e.g. "chat_id:topic_id")
         platform: Optional platform identifier (e.g. "telegram", "slack")
     """
+    from src.utils.cache.redis_cache import get_cache_client
+
+    _EXISTS_TTL = 86400  # 24h — freshness via explicit invalidation
+    cache = get_cache_client()
+
     async with get_db_connection() as conn:
-        # Step 1: Verify workspace exists
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT workspace_id FROM workspaces WHERE workspace_id = %s
-            """,
-                (workspace_id,),
-            )
-            workspace = await cur.fetchone()
+        # Step 1: Verify workspace exists (cached — immutable after creation)
+        ws_key = f"ws_exists:{workspace_id}"
+        ws_cached = False
+        if cache.enabled and cache.client:
+            try:
+                ws_cached = (await cache.client.get(ws_key)) == b"1"
+            except Exception:
+                pass
 
-        if not workspace:
-            raise ValueError(
-                f"Workspace {workspace_id} does not exist. Create it first via POST /workspaces"
-            )
+        if not ws_cached:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT workspace_id FROM workspaces WHERE workspace_id = %s
+                """,
+                    (workspace_id,),
+                )
+                workspace = await cur.fetchone()
 
-        # Step 2: Check if thread already exists (for resume scenarios)
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute(
-                """
-                SELECT conversation_thread_id FROM conversation_threads WHERE conversation_thread_id = %s
-            """,
-                (conversation_thread_id,),
-            )
-            thread_exists = await cur.fetchone()
+            if not workspace:
+                raise ValueError(
+                    f"Workspace {workspace_id} does not exist. Create it first via POST /workspaces"
+                )
+            if cache.enabled and cache.client:
+                try:
+                    await cache.client.set(ws_key, b"1", ex=_EXISTS_TTL)
+                except Exception:
+                    pass
+
+        # Step 2: Check if thread already exists (cached — immutable after creation)
+        thread_key = f"thread_exists:{conversation_thread_id}"
+        thread_cached = False
+        if cache.enabled and cache.client:
+            try:
+                thread_cached = (await cache.client.get(thread_key)) == b"1"
+            except Exception:
+                pass
+
+        thread_exists = thread_cached
+        if not thread_cached:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT conversation_thread_id FROM conversation_threads WHERE conversation_thread_id = %s
+                """,
+                    (conversation_thread_id,),
+                )
+                thread_exists = await cur.fetchone()
 
         # Step 3: Create thread if it doesn't exist
         if not thread_exists:
@@ -532,12 +561,24 @@ async def ensure_thread_exists(
                 platform=platform,
                 conn=conn,
             )
+            # Cache the new thread's existence
+            if cache.enabled and cache.client:
+                try:
+                    await cache.client.set(thread_key, b"1", ex=_EXISTS_TTL)
+                except Exception:
+                    pass
         else:
             # Thread exists (resume scenario), update status
             await update_thread_status(
                 conversation_thread_id, initial_status, conn=conn
             )
-            logger.info(
+            # Cache thread existence on resume too (in case cache was cold)
+            if not thread_cached and cache.enabled and cache.client:
+                try:
+                    await cache.client.set(thread_key, b"1", ex=_EXISTS_TTL)
+                except Exception:
+                    pass
+            logger.debug(
                 f"Resumed thread {conversation_thread_id}, updated status to {initial_status}"
             )
 
@@ -789,7 +830,7 @@ async def create_query(
                         ),
                     )
                 result = await cur.fetchone()
-                logger.info(
+                logger.debug(
                     f"[conversation_db] create_query query_id={conversation_query_id} thread_id={conversation_thread_id} turn_index={turn_index} type={query_type}"
                 )
                 return dict(result)
@@ -1028,7 +1069,7 @@ async def create_response(
                         ),
                     )
                 result = await cur.fetchone()
-                logger.info(
+                logger.debug(
                     f"[conversation_db] create_response response_id={conversation_response_id} thread_id={conversation_thread_id} turn_index={turn_index} status={status}"
                 )
                 return dict(result)
@@ -1106,7 +1147,7 @@ async def create_response(
                             ),
                         )
                     result = await cur.fetchone()
-                    logger.info(
+                    logger.debug(
                         f"[conversation_db] create_response response_id={conversation_response_id} thread_id={conversation_thread_id} turn_index={turn_index} status={status}"
                     )
                     return dict(result)
