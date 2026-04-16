@@ -67,6 +67,22 @@ async def lifespan(app: FastAPI):
     # Configure logging based on environment settings (first thing on startup)
     configure_logging()
 
+    # Security warnings (one-time, startup only)
+    from src.config.env import HOST_MODE
+
+    if HOST_MODE == "oss":
+        logger.warning(
+            "HOST_MODE=oss: authentication is disabled. "
+            "All endpoints are accessible without a token. "
+            "Set HOST_MODE=platform for production use."
+        )
+    if os.getenv("BYOK_ENCRYPTION_KEY") == "langalpha-local-dev-encryption-key":
+        logger.warning(
+            "BYOK_ENCRYPTION_KEY is set to the default value from the repository. "
+            "User API keys are encrypted with a publicly known key. "
+            "Run `make config` or set a unique BYOK_ENCRYPTION_KEY."
+        )
+
     # Initialize and open conversation database pool
     from src.server.database.conversation import get_or_create_pool
 

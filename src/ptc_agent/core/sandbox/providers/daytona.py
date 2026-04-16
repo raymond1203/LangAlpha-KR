@@ -479,14 +479,16 @@ class DaytonaProvider(SandboxProvider):
                 "apt-get install -y nodejs",
                 *[f"npm install -g {pkg}" for pkg in pkgs],
                 "npm install -g docx pptxgenjs",
-                "curl -fsSL https://github.com/cli/cli/releases/download/"
-                "v2.87.3/gh_2.87.3_linux_amd64.tar.gz -o /tmp/gh.tar.gz"
+                'GH_ARCH=$(dpkg --print-architecture)'
+                " && curl -fsSL https://github.com/cli/cli/releases/download/"
+                'v2.87.3/gh_2.87.3_linux_${GH_ARCH}.tar.gz -o /tmp/gh.tar.gz'
                 " && tar -xzf /tmp/gh.tar.gz -C /tmp"
-                " && mv /tmp/gh_2.87.3_linux_amd64/bin/gh /usr/local/bin/gh"
-                " && rm -rf /tmp/gh.tar.gz /tmp/gh_2.87.3_linux_amd64",
-                "curl -fsSL https://github.com/Polymarket/polymarket-cli/"
+                ' && mv /tmp/gh_2.87.3_linux_${GH_ARCH}/bin/gh /usr/local/bin/gh'
+                ' && rm -rf /tmp/gh.tar.gz /tmp/gh_2.87.3_linux_${GH_ARCH}',
+                "POLY_ARCH=$(uname -m)"
+                " && curl -fsSL https://github.com/Polymarket/polymarket-cli/"
                 "releases/download/v0.1.4/"
-                "polymarket-v0.1.4-x86_64-unknown-linux-gnu.tar.gz"
+                'polymarket-v0.1.4-${POLY_ARCH}-unknown-linux-gnu.tar.gz'
                 " -o /tmp/polymarket.tar.gz"
                 " && tar -xzf /tmp/polymarket.tar.gz -C /tmp"
                 " && mv /tmp/polymarket /usr/local/bin/polymarket"
@@ -499,7 +501,8 @@ class DaytonaProvider(SandboxProvider):
                 " && curl -fsSL https://download.docker.com/linux/ubuntu/gpg"
                 " -o /etc/apt/keyrings/docker.asc"
                 " && chmod a+r /etc/apt/keyrings/docker.asc",
-                'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]'
+                'echo "deb [arch=$(dpkg --print-architecture)'
+                " signed-by=/etc/apt/keyrings/docker.asc]"
                 " https://download.docker.com/linux/ubuntu"
                 ' $(. /etc/os-release && echo $VERSION_CODENAME) stable"'
                 " > /etc/apt/sources.list.d/docker.list",

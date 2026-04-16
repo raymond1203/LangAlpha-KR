@@ -169,8 +169,8 @@ class UpdateApiKeysRequest(BaseModel):
         from src.config.settings import HOST_MODE
         for provider, key in v.items():
             if key is not None:
-                if len(key) > 256:
-                    raise ValueError(f"API key for {provider} must be under 256 chars")
+                if len(key) > 4096:
+                    raise ValueError(f"API key for {provider} must be under 4096 chars")
                 if key and not key.isascii():
                     raise ValueError(f"API key for {provider} must be ASCII")
                 if HOST_MODE == "platform" and key and len(key) < 8:
