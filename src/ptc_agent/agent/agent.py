@@ -52,6 +52,9 @@ from ptc_agent.agent.middleware import (
     WorkspaceContextMiddleware,
 )
 from ptc_agent.agent.middleware.runtime_context import RuntimeContextMiddleware
+from ptc_agent.agent.middleware.anthropic_thinking_sanitizer import (
+    AnthropicThinkingSanitizerMiddleware,
+)
 from ptc_agent.agent.middleware.background_subagent.registry import (
     BackgroundTaskRegistry,
 )
@@ -576,6 +579,7 @@ class PTCAgent:
                 AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 EmptyToolCallRetryMiddleware(),
                 PatchToolCallsMiddleware(),
+                AnthropicThinkingSanitizerMiddleware(),
             ]
             if m is not None
         ]
@@ -623,6 +627,7 @@ class PTCAgent:
                 PatchToolCallsMiddleware(),
                 *workspace_context_middleware,
                 *runtime_context_middleware,
+                AnthropicThinkingSanitizerMiddleware(),
             ]
             if m is not None
         ]

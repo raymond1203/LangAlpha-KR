@@ -88,6 +88,11 @@ from .runtime_context import (
     RuntimeContextMiddleware,
 )
 
+# Anthropic thinking-block sanitizer (repairs orphan signature-only blocks)
+from .anthropic_thinking_sanitizer import (
+    AnthropicThinkingSanitizerMiddleware,
+)
+
 # Subagent steering middleware
 from .background_subagent.steering import (
     SubagentSteeringMiddleware,
@@ -145,6 +150,8 @@ __all__ = [
     "WorkspaceContextMiddleware",
     # Runtime context
     "RuntimeContextMiddleware",
+    # Anthropic thinking sanitizer
+    "AnthropicThinkingSanitizerMiddleware",
     # Subagent middleware
     "CompiledSubAgent",
     "SubAgent",
