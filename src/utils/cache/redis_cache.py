@@ -105,19 +105,26 @@ class RedisCacheClient:
             return
 
         try:
+            # health_check_interval: redis-py sends PING on idle connections before
+            # handing them out, so poisoned connections (dropped by the server or
+            # network) get detected and discarded instead of lingering in the pool.
             self.pool = ConnectionPool.from_url(
                 self.url,
                 max_connections=self.max_connections,
                 socket_timeout=self.socket_timeout,
                 socket_connect_timeout=self.socket_connect_timeout,
                 decode_responses=False,
+                health_check_interval=30,
             )
 
             self.client = redis.Redis(connection_pool=self.pool)
 
             # Test connection
             await self.client.ping()
-            logger.info(f"Redis cache connected: {self.url}")
+            logger.info(
+                f"Redis cache connected: {self.url} "
+                f"(pool max={self.max_connections}, health_check=30s)"
+            )
 
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
@@ -132,6 +139,30 @@ class RedisCacheClient:
 
         if self.pool:
             await self.pool.disconnect()
+
+    def _log_error(self, context: str, err: Exception) -> None:
+        """Log a Redis error, with pool stats if the error is pool exhaustion.
+
+        Tested against redis-py 5.x where `MaxConnectionsError` is a subclass
+        of `ConnectionError`. The string fallback (`"Too many connections"`)
+        catches older/forked variants that raise the bare parent type.
+        Pool-internal attributes are underscore-prefixed in redis-py; we guard
+        with getattr so a future rename degrades gracefully to a plain log line.
+        """
+        is_pool_exhaustion = (
+            isinstance(err, getattr(redis.exceptions, "MaxConnectionsError", ()))
+            or "Too many connections" in str(err)
+        )
+        if is_pool_exhaustion:
+            in_use = len(getattr(self.pool, "_in_use_connections", []) or [])
+            avail = len(getattr(self.pool, "_available_connections", []) or [])
+            logger.error(
+                f"{context} — {type(err).__name__}: {err} "
+                f"(pool: in_use={in_use}, available={avail}, "
+                f"max={self.max_connections})"
+            )
+        else:
+            logger.error(f"{context}: {err}")
 
     async def health_check(self) -> bool:
         """
@@ -182,7 +213,7 @@ class RedisCacheClient:
             self.stats["errors"] += 1
             return None
         except Exception as e:
-            logger.error(f"Cache get error for {key}: {e}")
+            self._log_error(f"Cache get error for {key}", e)
             self.stats["errors"] += 1
             return None
 
@@ -225,7 +256,7 @@ class RedisCacheClient:
             self.stats["errors"] += 1
             return False
         except Exception as e:
-            logger.error(f"Cache set error for {key}: {e}")
+            self._log_error(f"Cache set error for {key}", e)
             self.stats["errors"] += 1
             return False
 
@@ -371,7 +402,7 @@ class RedisCacheClient:
             return True
 
         except Exception as e:
-            logger.error(f"List append error for {key}: {e}")
+            self._log_error(f"List append error for {key}", e)
             self.stats["errors"] += 1
             return False
 
@@ -451,6 +482,9 @@ class RedisCacheClient:
         """
         Set hash field value.
 
+        When `ttl` is set, HSET and EXPIRE are pipelined in a single MULTI/EXEC
+        so the write takes one pool checkout instead of two.
+
         Args:
             key: Redis key
             field: Hash field name
@@ -467,19 +501,23 @@ class RedisCacheClient:
             # Serialize value
             serialized = json.dumps(value, ensure_ascii=False, cls=DateTimeEncoder)
 
-            # Set hash field
-            await self.client.hset(key, field, serialized)
-
-            # Set TTL if provided
+            # Pipeline HSET + EXPIRE so we make one pool checkout instead of two.
+            # Under high event rate the doubled checkouts per hash write were a
+            # contributor to pool exhaustion.
             if ttl:
-                await self.client.expire(key, ttl)
+                async with self.client.pipeline(transaction=True) as pipe:
+                    pipe.hset(key, field, serialized)
+                    pipe.expire(key, ttl)
+                    await pipe.execute()
+            else:
+                await self.client.hset(key, field, serialized)
 
             self.stats["sets"] += 1
             logger.debug(f"Hash SET: {key}:{field} (TTL: {ttl}s)")
             return True
 
         except Exception as e:
-            logger.error(f"Hash set error for {key}:{field}: {e}")
+            self._log_error(f"Hash set error for {key}:{field}", e)
             self.stats["errors"] += 1
             return False
 
@@ -558,9 +596,63 @@ class RedisCacheClient:
             return result
 
         except Exception as e:
-            logger.error(f"Hash get all error for {key}: {e}")
+            self._log_error(f"Hash get all error for {key}", e)
             self.stats["errors"] += 1
             return {}
+
+    async def pipelined_event_buffer(
+        self,
+        events_key: str,
+        meta_key: str,
+        event: str,
+        max_size: int,
+        ttl: int,
+        last_event_id: Optional[int] = None,
+    ) -> tuple[bool, int]:
+        """Atomic pipeline for the SSE event-buffer hot path.
+
+        Pre-rewrite, `_buffer_event_redis` made ~9 sequential Redis round-trips
+        per SSE event (list_append + list_length + hash_get_all + 3x hash_set,
+        where hash_set was itself 2 commands). Under a workflow burst that
+        saturated the 50-slot connection pool and triggered MaxConnectionsError
+        for hours. This helper collapses all of it into one MULTI/EXEC so the
+        whole thing takes one pool checkout.
+
+        Uses HINCRBY for `seq` (atomic counter), HSETNX for created_at
+        (set-if-missing), and HSET for updated_at / last_event_id. The field
+        name is `seq` rather than `event_count` so HINCRBY cannot collide with
+        leftover JSON-quoted integers ("\\"42\\"") written by the older
+        hash_set-based code path (which would otherwise raise WRONGTYPE until
+        the meta key TTL-expired 24h later).
+
+        Returns (success, seq). On success `seq` is the new event count (1+);
+        on failure it's 0. Callers use the counter to drive capacity warnings
+        without an extra round-trip.
+        """
+        if not self.enabled or not self.client:
+            return False, 0
+
+        try:
+            now_iso_json = json.dumps(datetime.now().isoformat())
+            async with self.client.pipeline(transaction=True) as pipe:
+                pipe.rpush(events_key, event)
+                pipe.ltrim(events_key, -max_size, -1)
+                pipe.expire(events_key, ttl)
+                pipe.hincrby(meta_key, "seq", 1)
+                pipe.hsetnx(meta_key, "created_at", now_iso_json)
+                pipe.hset(meta_key, "updated_at", now_iso_json)
+                if last_event_id is not None:
+                    pipe.hset(meta_key, "last_event_id", json.dumps(last_event_id))
+                pipe.expire(meta_key, ttl)
+                results = await pipe.execute()
+            self.stats["sets"] += 1
+            # results[3] is HINCRBY's new value (position 4 in the queued commands)
+            seq = int(results[3]) if len(results) > 3 else 0
+            return True, seq
+        except Exception as e:
+            self._log_error(f"Pipelined event buffer failed for {events_key}", e)
+            self.stats["errors"] += 1
+            return False, 0
 
     async def clear_all(self) -> bool:
         """

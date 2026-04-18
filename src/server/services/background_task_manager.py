@@ -685,123 +685,82 @@ class BackgroundTaskManager:
                 if queue in task_info.live_queues:
                     task_info.live_queues.remove(queue)
 
-        # Store event to Redis (if configured) or fallback to in-memory
+        # Store event to Redis (if configured) or fallback to in-memory.
+        # The Redis path is one atomic pipeline (see cache.pipelined_event_buffer)
+        # — previously this was ~9 sequential awaits per event, which saturated
+        # the pool under workflow bursts. See fix plan 2026-04-18.
+        cache = get_cache_client()
+        use_redis = self.event_storage_backend == "redis" and cache.enabled
+
+        if not use_redis:
+            if self.event_storage_backend == "redis":
+                logger.warning(
+                    f"[EventBuffer] Redis unavailable, using in-memory buffer for {thread_id}"
+                )
+            await self._append_to_in_memory_buffer(thread_id, event)
+            return
+
+        # Parse event ID from SSE format ("id: N\n..."). `partition` avoids
+        # allocating a full split list for events with multi-KB JSON bodies.
+        event_id = None
         try:
-            cache = get_cache_client()
+            first_line, _, _ = event.partition("\n")
+            event_id = int(first_line.replace("id: ", "").strip())
+        except (ValueError, IndexError):
+            logger.debug("[EventBuffer] Could not parse event ID from SSE string")
 
-            # Check if Redis backend is enabled and Redis is available
-            use_redis = (
-                self.event_storage_backend == "redis"
-                and cache.enabled
-            )
+        events_key = f"workflow:events:{thread_id}"
+        meta_key = f"workflow:events:meta:{thread_id}"
 
-            if not use_redis:
-                # Use in-memory storage
-                if self.event_storage_backend == "redis":
-                    logger.warning(
-                        f"[EventBuffer] Redis unavailable, using in-memory buffer for {thread_id}"
-                    )
+        success, seq = await cache.pipelined_event_buffer(
+            events_key=events_key,
+            meta_key=meta_key,
+            event=event,
+            max_size=self.max_stored_messages,
+            ttl=self.redis_event_ttl,
+            last_event_id=event_id,
+        )
 
-                async with self.task_lock:
-                    task_info = self.tasks.get(thread_id)
-                    if task_info:
-                        task_info.result_buffer.append(event)
-                        if len(task_info.result_buffer) > self.max_stored_messages:
-                            task_info.result_buffer.popleft()
-                return
-
-            # Redis storage path
-            events_key = f"workflow:events:{thread_id}"
-            meta_key = f"workflow:events:meta:{thread_id}"
-
-            # Parse event ID from SSE format
-            event_id = None
-            try:
-                event_id_str = event.split("\n")[0].replace("id: ", "").strip()
-                event_id = int(event_id_str)
-            except (ValueError, IndexError):
-                logger.debug("[EventBuffer] Could not parse event ID from SSE string")
-
-            # Append to Redis list with automatic FIFO trimming
-            success = await cache.list_append(
-                events_key,
-                event,  # Store raw SSE string
-                max_size=self.max_stored_messages,
-                ttl=self.redis_event_ttl
-            )
-
-            # Check buffer size and warn if near capacity
-            if success:
-                buffer_size = await cache.list_length(events_key)
-                capacity_threshold = int(self.max_stored_messages * 0.9)  # 90% threshold
-
-                if buffer_size >= capacity_threshold:
-                    logger.warning(
-                        f"[EventBuffer] Buffer near capacity for {thread_id}: "
-                        f"{buffer_size}/{self.max_stored_messages} events. "
-                        f"Oldest events will be dropped (FIFO)."
-                    )
-
-            if not success:
-                # Fallback to in-memory if Redis write fails
-                if self.event_storage_fallback:
-                    logger.warning(
-                        f"[EventBuffer] Failed to buffer event to Redis for {thread_id}, "
-                        f"falling back to in-memory"
-                    )
-                    async with self.task_lock:
-                        task_info = self.tasks.get(thread_id)
-                        if task_info:
-                            task_info.result_buffer.append(event)
-                            if len(task_info.result_buffer) > self.max_stored_messages:
-                                task_info.result_buffer.popleft()
-                else:
-                    logger.error(
-                        f"[EventBuffer] Failed to buffer event to Redis for {thread_id}, "
-                        f"fallback disabled"
-                    )
-                return
-
-            # Update metadata in Redis
-            now = datetime.now().isoformat()
-            meta_updates: dict[str, Any] = {
-                "updated_at": now,
-            }
-
-            if event_id:
-                meta_updates["last_event_id"] = event_id
-
-            # Check if this is first event
-            current_meta = await cache.hash_get_all(meta_key)
-            if not current_meta or "created_at" not in current_meta:
-                meta_updates["created_at"] = now
-
-            # Increment event count
-            current_count = int(current_meta.get("event_count", 0)) if current_meta else 0
-            meta_updates["event_count"] = current_count + 1
-
-            # Save all metadata fields
-            for field, value in meta_updates.items():
-                await cache.hash_set(meta_key, field, str(value), ttl=self.redis_event_ttl)
-
-            logger.debug(
-                f"[EventBuffer] Buffered event to Redis: {thread_id} "
-                f"(id={event_id}, total={meta_updates['event_count']})"
-            )
-
-        except Exception as e:
-            logger.error(
-                f"[EventBuffer] Error buffering event to Redis for {thread_id}: {e}",
-                exc_info=True
-            )
-            # Fallback to in-memory on error
+        if not success:
+            # Regression guard: a Redis blip must not drop events. The SSE stream
+            # keeps flowing via the in-memory deque.
             if self.event_storage_fallback:
-                async with self.task_lock:
-                    task_info = self.tasks.get(thread_id)
-                    if task_info:
-                        task_info.result_buffer.append(event)
-                        if len(task_info.result_buffer) > self.max_stored_messages:
-                            task_info.result_buffer.popleft()
+                logger.warning(
+                    f"[EventBuffer] Redis pipeline failed for {thread_id}, "
+                    "falling back to in-memory"
+                )
+                await self._append_to_in_memory_buffer(thread_id, event)
+            else:
+                logger.error(
+                    f"[EventBuffer] Redis pipeline failed for {thread_id}, "
+                    "fallback disabled"
+                )
+            return
+
+        logger.debug(f"[EventBuffer] Buffered event to Redis: {thread_id} (id={event_id}, seq={seq})")
+
+        # Capacity warning — sample above 90% of max. Uses `seq` from HINCRBY so
+        # no extra round-trip. Strict `==` would silently skip the alert if seq
+        # jumped past threshold (pipeline retry, restart mid-burst). `>=` with
+        # a 1000-event modulo keeps the log quiet but guarantees every thread
+        # near-capacity produces at least one warning per 1000 events over.
+        capacity_threshold = int(self.max_stored_messages * 0.9)
+        if seq >= capacity_threshold and (seq - capacity_threshold) % 1000 == 0:
+            logger.warning(
+                f"[EventBuffer] Buffer near capacity for {thread_id}: "
+                f"{seq}/{self.max_stored_messages} events. "
+                "Oldest events will be dropped (FIFO)."
+            )
+
+    async def _append_to_in_memory_buffer(self, thread_id: str, event: str) -> None:
+        """Append an SSE event to the per-task in-memory deque (fallback path)."""
+        async with self.task_lock:
+            task_info = self.tasks.get(thread_id)
+            if not task_info:
+                return
+            task_info.result_buffer.append(event)
+            if len(task_info.result_buffer) > self.max_stored_messages:
+                task_info.result_buffer.popleft()
 
     async def _collect_subagent_results_for_turn(
         self,
