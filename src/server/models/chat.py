@@ -245,9 +245,11 @@ class ChatRequest(BaseModel):
     )
 
     # Reasoning effort override (optional - defaults to model's configured level)
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
+    # xhigh is honored only by Anthropic adaptive thinking (Opus 4.7+); other
+    # providers clamp it to high in src/llms/reasoning.py.
+    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh"]] = Field(
         default=None,
-        description="Override reasoning effort for this request (low/medium/high)",
+        description="Override reasoning effort for this request (low/medium/high/xhigh)",
     )
 
     fast_mode: Optional[bool] = Field(

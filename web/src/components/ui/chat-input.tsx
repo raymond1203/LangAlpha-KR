@@ -3,7 +3,7 @@ import {
   Plus, ArrowUp, X, FileText, Loader2, Archive, Square,
   ScrollText, ChartCandlestick, Zap, FileStack, ChevronDown, ChevronRight, FolderOpen, TextSelect,
   Terminal, Bot, Shrink, HardDriveDownload, Check, Brain, Flame, Rocket, CircleHelp,
-  Mic, MicOff,
+  Mic, MicOff, Sparkles,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -14,6 +14,7 @@ import {
 } from './dropdown-menu';
 import { usePreferences } from '@/hooks/usePreferences';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { supportsXhighEffort } from '@/lib/modelCapabilities';
 import { getSkills, getModelMetadata } from '../../pages/ChatAgent/utils/api';
 import { useToast } from './use-toast';
 import './chat-input.css';
@@ -298,6 +299,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
   useEffect(() => { getModelMetadata().then((d: Record<string, unknown>) => setModelMetadata(d as typeof modelMetadata)).catch(() => { }); }, []);
 
   const isCodexModel = selectedModel ? modelMetadata[selectedModel]?.sdk === 'codex' : false;
+  const supportsXhigh = supportsXhighEffort(selectedModel);
 
   // @file mention state
   const [mentionedFiles, setMentionedFiles] = useState<MentionedFile[]>([]);
@@ -1370,7 +1372,12 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput
                     <div className="model-effort-section">
                       <span className="model-effort-label">{t('chat.modelSelector.reasoningEffort')}</span>
                       <div className="model-effort-toggle">
-                        {([['low', Zap, t('chat.modelSelector.effortLow')], ['medium', Brain, t('chat.modelSelector.effortMedium')], ['high', Flame, t('chat.modelSelector.effortHigh')]] as const).map(([level, Icon, label]) => (
+                        {([
+                          ['low', Zap, t('chat.modelSelector.effortLow')],
+                          ['medium', Brain, t('chat.modelSelector.effortMedium')],
+                          ['high', Flame, t('chat.modelSelector.effortHigh')],
+                          ...(supportsXhigh ? [['xhigh', Sparkles, t('chat.modelSelector.effortXhigh')]] as const : []),
+                        ] as const).map(([level, Icon, label]) => (
                           <button
                             key={level}
                             className={`model-effort-btn ${level === reasoningEffort ? 'active' : ''}`}

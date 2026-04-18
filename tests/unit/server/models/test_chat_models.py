@@ -196,7 +196,7 @@ class TestChatRequest:
             ChatRequest(agent_mode="turbo")
 
     def test_reasoning_effort_values(self):
-        for level in ("low", "medium", "high"):
+        for level in ("low", "medium", "high", "xhigh"):
             req = ChatRequest(reasoning_effort=level)
             assert req.reasoning_effort == level
 

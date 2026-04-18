@@ -60,11 +60,13 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 128000,
       "thinking": {
-        "type": "adaptive"
+        "type": "adaptive",
+        "display": "summarized"
       },
       "output_config": {
-        "effort": "medium"
+        "effort": "xhigh"
       }
     }
   },
@@ -78,6 +80,7 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 64000,
       "thinking": {
         "type": "adaptive"
       }
@@ -93,6 +96,7 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 64000,
       "thinking": {
         "type": "enabled"
       }
@@ -759,6 +763,7 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 64000,
       "thinking": {
         "type": "adaptive"
       }
@@ -774,11 +779,13 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 128000,
       "thinking": {
-        "type": "adaptive"
+        "type": "adaptive",
+        "display": "summarized"
       },
       "output_config": {
-        "effort": "medium"
+        "effort": "xhigh"
       }
     }
   },
@@ -792,6 +799,7 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 64000,
       "thinking": {
         "type": "enabled",
         "budget_tokens": 8000
@@ -829,11 +837,13 @@
       "pdf"
     ],
     "parameters": {
+      "max_tokens": 128000,
       "thinking": {
-        "type": "adaptive"
+        "type": "adaptive",
+        "display": "summarized"
       },
       "output_config": {
-        "effort": "medium"
+        "effort": "xhigh"
       }
     },
     "context_window": 1000000,

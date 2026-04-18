@@ -45,7 +45,7 @@ class TestReasoningInvalidLevel:
         assert params["reasoning"]["effort"] == "medium"
 
     def test_constants(self):
-        assert REASONING_LEVELS == ("low", "medium", "high")
+        assert REASONING_LEVELS == ("low", "medium", "high", "xhigh")
         assert "low" in _ANTHROPIC_BUDGETS
         assert "low" in _GEMINI_BUDGETS
 
@@ -92,12 +92,19 @@ class TestAnthropicAdaptive:
         apply_reasoning_effort("low", params, extra)
         assert params["output_config"]["effort"] == "low"
 
-    @pytest.mark.parametrize("level", ["low", "medium", "high"])
+    @pytest.mark.parametrize("level", ["low", "medium", "high", "xhigh"])
     def test_all_levels(self, level):
         params = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}
         extra = {}
         apply_reasoning_effort(level, params, extra)
         assert params["output_config"]["effort"] == level
+
+    def test_xhigh_passes_through(self):
+        """Anthropic adaptive natively supports xhigh — must pass through, not clamp."""
+        params = {"thinking": {"type": "adaptive"}}
+        extra = {}
+        apply_reasoning_effort("xhigh", params, extra)
+        assert params["output_config"]["effort"] == "xhigh"
 
 
 # ---------------------------------------------------------------------------
@@ -248,3 +255,35 @@ class TestCombinedPatterns:
         apply_reasoning_effort("high", params, extra)
         assert params == original_params
         assert extra == original_extra
+
+
+# ---------------------------------------------------------------------------
+# xhigh clamping: non-Anthropic-adaptive providers must clamp xhigh → high
+# ---------------------------------------------------------------------------
+
+
+class TestXhighClamping:
+    def test_openai_clamps_to_high(self):
+        params = {"reasoning": {"effort": "medium"}}
+        apply_reasoning_effort("xhigh", params, {})
+        assert params["reasoning"]["effort"] == "high"
+
+    def test_anthropic_enabled_clamps_to_high_budget(self):
+        params = {"thinking": {"type": "enabled", "budget_tokens": 10000}}
+        apply_reasoning_effort("xhigh", params, {})
+        assert params["thinking"]["budget_tokens"] == _ANTHROPIC_BUDGETS["high"]
+
+    def test_gemini_thinking_level_clamps_to_high(self):
+        params = {"thinking_level": "medium"}
+        apply_reasoning_effort("xhigh", params, {})
+        assert params["thinking_level"] == "high"
+
+    def test_gemini_thinking_budget_clamps_to_high(self):
+        params = {"thinking_budget": 4096}
+        apply_reasoning_effort("xhigh", params, {})
+        assert params["thinking_budget"] == _GEMINI_BUDGETS["high"]
+
+    def test_vllm_reasoning_effort_clamps_to_high(self):
+        params = {"reasoning_effort": "medium"}
+        apply_reasoning_effort("xhigh", params, {})
+        assert params["reasoning_effort"] == "high"
