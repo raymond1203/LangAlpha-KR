@@ -15,6 +15,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
 
+from src.config.settings import get_conversation_pool_max
+
 logger = logging.getLogger(__name__)
 
 # Cache key helpers — single source of truth for key format.
@@ -98,11 +100,15 @@ def get_or_create_pool() -> AsyncConnectionPool:
     db_uri = get_db_connection_string()
 
     if db_uri not in _conversation_db_pool_cache:
+        pool_max = get_conversation_pool_max()
+        logger.info(
+            f"Creating PostgreSQL connection pool for conversations (max_size={pool_max})"
+        )
         # Create pool with minimal configuration matching LangGraph pool
         _conversation_db_pool_cache[db_uri] = AsyncConnectionPool(
             conninfo=db_uri,
             min_size=1,
-            max_size=20,
+            max_size=pool_max,
             configure=_configure_postgres_connection,
             check=AsyncConnectionPool.check_connection,
             open=False,

@@ -3,12 +3,20 @@ Crawler backend using Scrapling library.
 
 Implements a three-tier fetching strategy:
   Tier 1 (Fast):    AsyncFetcher.get() -- HTTP-only, TLS impersonation
-  Tier 2 (Dynamic): DynamicFetcher.async_fetch() -- Playwright browser
-  Tier 3 (Stealth): StealthyFetcher.async_fetch() -- anti-bot bypass
+  Tier 2 (Dynamic): AsyncDynamicSession -- Playwright/patchright Chromium
+  Tier 3 (Stealth): AsyncStealthySession -- Camoufox anti-bot bypass
 
 Automatic fallback: Tier 1 -> Tier 2 -> Tier 3
+
+Browser lifecycle: Tier 2/3 use the session classes directly (rather than the
+`DynamicFetcher.async_fetch()` classmethod wrapper) so we can shield
+`session.close()` from cancellation. `asyncio.wait_for` in safe_wrapper.py
+cancels the fetch coroutine on timeout; if close() is not shielded, it gets
+cancelled mid-teardown and orphans Chromium helper processes. See fix plan
+2026-04-18.
 """
 
+import asyncio
 import logging
 
 import html2text
@@ -29,6 +37,16 @@ _BLOCKED_SIGNALS = [
     "403 forbidden",
     "captcha",
 ]
+
+
+def _log_close_task_exception(task: asyncio.Task) -> None:
+    # Observes close_task after outer cancel so asyncio doesn't emit
+    # "Task exception was never retrieved" when close() raises post-cancel.
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(f"Browser session close failed post-cancel: {exc!r}")
 
 
 def _needs_browser(html_body: str, status: int) -> bool:
@@ -155,31 +173,81 @@ class ScraplingCrawler:
         return page, html_body, page.status
 
     async def _tier2_fetch(self, url: str):
-        from scrapling.fetchers import DynamicFetcher
+        # Direct session use (not DynamicFetcher.async_fetch) so we own the
+        # close() path and can shield it from outer cancellation.
+        from scrapling.engines._browsers._controllers import AsyncDynamicSession
 
-        page = await DynamicFetcher.async_fetch(
-            url,
+        session = AsyncDynamicSession(
             headless=True,
             disable_resources=self.disable_resources,
             network_idle=self.network_idle,
             timeout=self.timeout,
         )
-        html_body = page.body.decode(page.encoding or "utf-8", errors="replace")
-        return page, html_body, page.status
+        return await self._fetch_with_session(session, url)
 
     async def _tier3_fetch(self, url: str):
-        from scrapling.fetchers import StealthyFetcher
+        from scrapling.engines._browsers._stealth import AsyncStealthySession
 
-        page = await StealthyFetcher.async_fetch(
-            url,
+        session = AsyncStealthySession(
             headless=True,
-            solve_cloudflare=True,
             network_idle=self.network_idle,
             timeout=self.timeout,
         )
-        html_body = page.body.decode(page.encoding or "utf-8", errors="replace")
-        return page, html_body, page.status
+        return await self._fetch_with_session(session, url, solve_cloudflare=True)
+
+    async def _fetch_with_session(self, session, url: str, **fetch_kwargs):
+        """Start a scrapling session, fetch one URL, shield close() from cancel.
+
+        Prior learnings applied:
+          - CancelledError inherits from BaseException and is NOT caught by
+            `except Exception`. It must be handled explicitly if we want to
+            run teardown before re-raising.
+          - `asyncio.shield(coro)` only protects a Task; wrapping a bare
+            coroutine is a no-op. We create the close task explicitly, then
+            await shield() so the inner task keeps running even if the outer
+            is cancelled.
+          - Scrapling's `AsyncDynamicSession.start()` wraps browser spawn in
+            `except Exception`, which misses CancelledError. On cancellation
+            during start(), `self.playwright` stays set but `_is_alive=False`,
+            and close() early-returns on the `_is_alive` guard. We force
+            `_is_alive=True` before close() so the cleanup path actually runs
+            and stops the playwright driver. Without this, cancel-during-start
+            leaks the node driver process.
+        """
+        try:
+            await session.start()
+            page = await session.fetch(url, **fetch_kwargs)
+            html_body = page.body.decode(page.encoding or "utf-8", errors="replace")
+            return page, html_body, page.status
+        finally:
+            # If start() was cancelled mid-spawn, scrapling's own cleanup was
+            # skipped (CancelledError bypassed its except Exception). Force
+            # close() to run its teardown branches — they're idempotent on
+            # None-valued context/browser, so this is safe even if only
+            # playwright.stop() is needed.
+            if (
+                getattr(session, "playwright", None) is not None
+                and not getattr(session, "_is_alive", True)
+            ):
+                session._is_alive = True  # unblock close()'s guard clause
+            close_task = asyncio.create_task(session.close())
+            try:
+                await asyncio.shield(close_task)
+            except asyncio.CancelledError:
+                # Outer task cancelled. close_task survives (shield) and will
+                # complete in the background, freeing the browser. Attach a
+                # done-callback so its exception (if any) is logged instead of
+                # surfacing as asyncio's "Task exception was never retrieved".
+                close_task.add_done_callback(_log_close_task_exception)
+                pass
+            except Exception as e:
+                # tini (init: true in compose) reaps leaked helpers in prod;
+                # dev/macOS has no init backstop so a failed close leaks until
+                # the Python process exits.
+                logger.warning(
+                    f"Browser session close failed (init will reap if present): {e}"
+                )
 
     async def shutdown(self) -> None:
-        """No persistent resources to clean up (Scrapling manages its own)."""
+        """No persistent resources to clean up (sessions are per-fetch)."""
         pass

@@ -95,7 +95,7 @@ background_execution:
 # Redis is used for caching and background workflow event storage
 redis:
   cache_enabled: true  # Enable/disable caching globally
-  max_connections: 50  # Connection pool size
+  max_connections: 150 # Connection pool size (override via REDIS_MAX_CONNECTIONS env)
   socket_timeout: 5           # Redis socket read/write timeout (seconds)
   socket_connect_timeout: 5   # Redis socket connect timeout (seconds)
 

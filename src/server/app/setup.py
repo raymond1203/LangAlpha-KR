@@ -55,6 +55,40 @@ checkpointer = None  # PTC Agent LangGraph checkpointer for state persistence
 store = None  # LangGraph Store for cross-turn metadata persistence
 graph = None  # Most recently used LangGraph (for persistence snapshots)
 
+# PID 1 process names that correctly reap orphaned subprocesses.
+# `docker-init` is Docker's bundled tini wrapper (what `init: true` in compose
+# launches when no explicit entrypoint uses tini). Must be in the allowlist or
+# the reaper safety guard refuses to run in every standard Docker deployment.
+_ACCEPTABLE_INIT_COMMS = ("tini", "docker-init", "catatonit", "dumb-init")
+
+
+def _log_container_hardening() -> None:
+    """Log PID 1 comm and cgroup PID limits so deploys catch missing tini."""
+    try:
+        with open("/proc/1/comm", encoding="utf-8", errors="replace") as f:
+            pid1 = f.read().strip()
+    except (FileNotFoundError, OSError):
+        return  # Not Linux (macOS dev, etc.) — skip silently
+
+    try:
+        with open("/sys/fs/cgroup/pids.max", encoding="utf-8", errors="replace") as f:
+            pids_max = f.read().strip()
+        with open("/sys/fs/cgroup/pids.current", encoding="utf-8", errors="replace") as f:
+            pids_current = f.read().strip()
+    except (FileNotFoundError, OSError):
+        pids_max = pids_current = "unknown"
+
+    logger.info(
+        f"Container hardening: PID 1 = {pid1!r}, "
+        f"pids.current = {pids_current}, pids.max = {pids_max}"
+    )
+    if pid1 not in _ACCEPTABLE_INIT_COMMS:
+        logger.warning(
+            f"PID 1 is {pid1!r}, not an init process. `init: true` in compose "
+            "may have silently failed — orphaned subprocesses will not be reaped. "
+            "Verify tini is installed in the image."
+        )
+
 
 # ============================================================================
 # Lifespan Context Manager
@@ -66,6 +100,11 @@ async def lifespan(app: FastAPI):
 
     # Configure logging based on environment settings (first thing on startup)
     configure_logging()
+
+    # Container hardening diagnostics: confirm tini is PID 1 and log cgroup PID limit.
+    # If PID 1 is python (not tini), `init: true` in compose silently failed and
+    # orphaned browser subprocesses will accumulate until cgroup exhausts.
+    _log_container_hardening()
 
     # Security warnings (one-time, startup only)
     from src.config.env import HOST_MODE

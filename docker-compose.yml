@@ -47,6 +47,10 @@ services:
       dockerfile: deploy/Dockerfile.dev
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    init: true
+    pids_limit: 8192
+    mem_limit: 8g
+    memswap_limit: 8g
     restart: unless-stopped
     ports:
       - "8000:8000"

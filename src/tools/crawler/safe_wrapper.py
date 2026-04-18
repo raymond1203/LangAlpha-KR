@@ -14,12 +14,31 @@ selectable via `crawler.backend` in agent_config.yaml.
 
 import asyncio
 import logging
+import os
+import signal
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Callable
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# Orphan reaper tunables. Tier 2 (patchright) spawns `chrome*`; Tier 3 (Camoufox)
+# spawns `firefox`/`camoufox`. Both get reparented to PID 1 on cancellation, so
+# the reaper matches both prefixes.
+_INIT_PID = 1
+_BROWSER_COMM_PREFIXES = ("chrome", "firefox", "camoufox")
+_FORK_EXEC_GRACE_SECONDS = 5.0  # Skip procs briefly showing ppid=1 during fork/exec
+_STAT_PPID_IDX = 1       # /proc/[pid]/stat field 4 (1-indexed), 0-indexed after comm
+_STAT_STARTTIME_IDX = 19  # /proc/[pid]/stat field 22, 0-indexed after comm
+# The reaper only runs when PID 1 is one of these, because ppid==1 only reliably
+# means "orphan reaped to init" when init actually reaps. If PID 1 is our python
+# worker (init: true silently failed), ppid==1 matches direct children including
+# LIVE browsers of in-flight workflows — the reaper would then SIGKILL healthy crawls.
+# `docker-init` is Docker's bundled tini wrapper; observed as PID 1 under
+# `init: true` on Docker Desktop and Docker CE without explicit tini install.
+_SAFE_INIT_PROCESSES = ("tini", "docker-init", "catatonit", "dumb-init")
 
 
 class CircuitState(Enum):
@@ -200,6 +219,10 @@ class SafeCrawlerWrapper:
             success_threshold=circuit_success_threshold,
         )
         self._lock = asyncio.Lock()
+        # Serialize reaper runs: circuit-open can trigger many in parallel and a
+        # single /proc walk suffices; N concurrent walks are thundering-herd waste
+        # and widen the PID-reuse window between stat and os.kill.
+        self._reaper_lock = asyncio.Lock()
         self._crawler = None  # Lazy-initialized
         if backend not in _VALID_BACKENDS:
             raise ValueError(f"Unknown crawler backend: {backend!r}. Must be one of {_VALID_BACKENDS}")
@@ -219,8 +242,86 @@ class SafeCrawlerWrapper:
         return self._crawler
 
     async def _trigger_browser_reset(self) -> None:
-        """Reset browser state when circuit opens. Scrapling manages its own lifecycle."""
-        logger.debug(f"Circuit open — backend '{self._backend}' has no persistent browser state to reset")
+        """Reap orphaned browser processes when the circuit opens.
+
+        Belt-and-suspenders to Tier 1 (tini via `init: true` in compose): if a
+        browser fetch was cancelled before scrapling's session.close() ran, its
+        child Chromium/Camoufox/Firefox processes get reparented to PID 1. tini
+        reaps them eventually, but when the circuit trips we actively free RAM +
+        PID slots now instead of waiting.
+
+        Runs the /proc walk in a thread so walking thousands of /proc/*/stat
+        entries does not block the event loop while SSE streams are in flight.
+        A lock serializes concurrent circuit-open events onto one walk at a time.
+        """
+        if self._reaper_lock.locked():
+            logger.debug("Browser reaper already running; skipping concurrent invocation")
+            return
+        async with self._reaper_lock:
+            try:
+                await asyncio.to_thread(self._reap_orphan_browsers_sync)
+            except Exception as e:
+                logger.warning(
+                    f"Browser reset reaper failed (non-Linux? readonly cgroup?): {e}"
+                )
+
+    @staticmethod
+    def _reap_orphan_browsers_sync() -> None:
+        """Sync /proc walk. Runs in a thread via `_trigger_browser_reset`."""
+        proc_root = Path("/proc")
+        if not proc_root.exists():
+            logger.debug("Browser reset skipped: /proc not available (not Linux)")
+            return
+
+        # Abort if PID 1 is not an init process — in that case ppid==1 may
+        # indicate a LIVE child of our python worker, not a reaped orphan.
+        try:
+            pid1_comm = (proc_root / "1" / "comm").read_text().strip()
+        except (OSError, IndexError):
+            logger.warning("Browser reset aborted: could not read /proc/1/comm")
+            return
+        if pid1_comm not in _SAFE_INIT_PROCESSES:
+            logger.error(
+                f"Browser reset aborted: PID 1 is {pid1_comm!r}, not an init "
+                "process. Reaping would risk killing live browsers. Verify "
+                "`init: true` in docker-compose and tini is installed."
+            )
+            return
+
+        try:
+            uptime = float((proc_root / "uptime").read_text().split()[0])
+            clk_tck = os.sysconf("SC_CLK_TCK")
+        except (OSError, ValueError) as e:
+            logger.warning(f"Browser reset: could not read uptime/CLK_TCK: {e}")
+            return
+
+        killed = 0
+        for pid_dir in proc_root.iterdir():
+            if not pid_dir.name.isdigit():
+                continue
+            try:
+                # /proc/[pid]/stat: "pid (comm) state ppid ... starttime ...".
+                # comm is inside parens and can contain spaces, so rsplit(')', 1).
+                stat_fields = (pid_dir / "stat").read_text().rsplit(")", 1)
+                comm = stat_fields[0].split("(", 1)[1]
+                rest = stat_fields[1].split()
+                ppid = int(rest[_STAT_PPID_IDX])
+                start_ticks = int(rest[_STAT_STARTTIME_IDX])
+                if ppid != _INIT_PID or not comm.startswith(_BROWSER_COMM_PREFIXES):
+                    continue
+                age_s = uptime - (start_ticks / clk_tck)
+                if age_s < _FORK_EXEC_GRACE_SECONDS:
+                    continue
+                os.kill(int(pid_dir.name), signal.SIGKILL)
+                killed += 1
+            except (ProcessLookupError, FileNotFoundError, PermissionError, IndexError, ValueError):
+                # Process died mid-scan, stat fields malformed, or PID recycled — expected race.
+                continue
+
+        if killed > 0:
+            logger.warning(
+                f"Circuit reset reaped {killed} orphaned browser processes"
+            )
 
     async def crawl(
         self,

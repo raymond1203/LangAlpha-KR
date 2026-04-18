@@ -15,6 +15,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
+from src.config.settings import get_checkpointer_pool_max
+
 logger = logging.getLogger(__name__)
 
 # Module-level connection pool cache to reuse connections across graph compilations
@@ -88,13 +90,15 @@ def get_checkpointer(memory_type: str = "memory", **kwargs) -> Optional[Any]:
 
         # Cache connection pools by URI to avoid creating new pools on every graph instantiation
         if db_uri not in _postgres_pool_cache:
+            pool_max = get_checkpointer_pool_max()
             logger.info(
-                f"Creating PostgreSQL connection pool for checkpointer: {db_host}:{db_port}/{db_name}"
+                f"Creating PostgreSQL connection pool for checkpointer: "
+                f"{db_host}:{db_port}/{db_name} (max_size={pool_max})"
             )
             _postgres_pool_cache[db_uri] = AsyncConnectionPool(
                 conninfo=db_uri,
                 min_size=1,
-                max_size=10,
+                max_size=pool_max,
                 configure=_configure_postgres_connection,
                 check=AsyncConnectionPool.check_connection,
                 open=False,  # Defer opening until async context is available

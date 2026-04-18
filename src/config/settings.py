@@ -11,6 +11,7 @@ Configuration loading strategy:
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from src.config.core import get_infrastructure_config
@@ -188,13 +189,65 @@ def is_redis_cache_enabled() -> bool:
 
 
 def get_redis_max_connections() -> int:
-    """Get Redis connection pool max connections."""
+    """Get Redis connection pool max connections.
+
+    Env var REDIS_MAX_CONNECTIONS overrides config.yaml so operators can
+    bump the pool size without a redeploy when diagnosing pool exhaustion.
+    """
+    env_override = os.getenv("REDIS_MAX_CONNECTIONS")
+    if env_override:
+        try:
+            parsed = int(env_override)
+        except ValueError:
+            # A typo during incident response would otherwise silently ignore
+            # the operator's intent and use the YAML default — log loudly.
+            logger.warning(
+                "REDIS_MAX_CONNECTIONS=%r is not an integer; "
+                "falling back to config.yaml value",
+                env_override,
+            )
+        else:
+            # Bound-check: 0 is a footgun (redis-py silently coerces to a
+            # 31-bit cap), negatives break the pool, huge values exhaust fds.
+            if 1 <= parsed <= 10000:
+                return parsed
+            logger.warning(
+                "REDIS_MAX_CONNECTIONS=%d is outside the safe range [1, 10000]; "
+                "falling back to config.yaml value",
+                parsed,
+            )
     return get_infrastructure_config().redis.max_connections
 
 
 def get_redis_socket_timeout() -> int:
     """Get Redis socket read/write timeout in seconds."""
     return get_infrastructure_config().redis.socket_timeout
+
+
+def _env_pool_size(env_var: str, default: int, ceiling: int = 500) -> int:
+    """Read a pool-size env var with bounds check; fall back to `default`."""
+    raw = os.getenv(env_var)
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is not an integer; using default=%d", env_var, raw, default)
+        return default
+    if 1 <= parsed <= ceiling:
+        return parsed
+    logger.warning("%s=%d outside [1, %d]; using default=%d", env_var, parsed, ceiling, default)
+    return default
+
+
+def get_checkpointer_pool_max() -> int:
+    """Env POSTGRES_CHECKPOINTER_POOL_MAX, default 25."""
+    return _env_pool_size("POSTGRES_CHECKPOINTER_POOL_MAX", default=25)
+
+
+def get_conversation_pool_max() -> int:
+    """Env POSTGRES_CONVERSATION_POOL_MAX, default 50."""
+    return _env_pool_size("POSTGRES_CONVERSATION_POOL_MAX", default=50)
 
 
 def get_redis_socket_connect_timeout() -> int:
