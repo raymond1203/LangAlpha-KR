@@ -34,8 +34,7 @@
     "welcome": "欢迎",
     "signupCheckEmail": "账号已创建！请查看您的邮箱并点击确认链接。",
     "signupEmailExists": "该邮箱已注册，请直接登录。",
-    "agreeToPrivacy": "使用 LangAlpha 即表示您同意我们的<1>隐私政策</1>。",
-    "privacyPolicy": "隐私政策"
+    "agreeToPrivacy": "使用 LangAlpha 即表示您同意我们的<1>隐私政策</1>。"
   },
   "sidebar": {
     "dashboard": "仪表盘",

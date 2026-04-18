@@ -34,8 +34,7 @@
     "welcome": "Welcome",
     "signupCheckEmail": "Account created! Please check your email for a confirmation link.",
     "signupEmailExists": "An account with this email already exists. Please log in instead.",
-    "agreeToPrivacy": "By using LangAlpha, you agree to our <1>Privacy Policy</1>.",
-    "privacyPolicy": "Privacy Policy"
+    "agreeToPrivacy": "By using LangAlpha, you agree to our <1>Privacy Policy</1>."
   },
   "sidebar": {
     "dashboard": "Dashboard",

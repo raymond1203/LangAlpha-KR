@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 const EFFECTIVE_DATE = 'April 18, 2026';
@@ -288,7 +289,7 @@ function PrivacyPolicy() {
 
 interface SectionProps {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }
 
 function Section({ title, children }: SectionProps) {
