@@ -315,13 +315,15 @@ function handleContextWindowEvent(event: SSEEvent, { getMsgId, nextOrder, setMes
   }
 
   if (action === 'summarize') {
+    // SSE action value "summarize" preserved as wire protocol; the UI surfaces
+    // this as context compaction.
     if (setIsCompacting && event.signal === 'start') {
       setIsCompacting('summarize');
       return;
     }
     if (setIsCompacting) setIsCompacting(false);
     if (event.signal === 'complete') {
-      const text = t('chat.summarizedNotification', { from: event.original_message_count });
+      const text = t('chat.compactedNotification', { from: event.original_message_count });
       const msgId = getMsgId();
       if (msgId) {
         const order = nextOrder();
@@ -512,7 +514,7 @@ export function useChatMessages(
   );
   const [hasActiveSubagents, setHasActiveSubagents] = useState(false);  // Subagent streams open after main agent finished
   const [workspaceStarting, setWorkspaceStarting] = useState(false);  // Workspace is starting up (stopped/archived sandbox)
-  const [isCompacting, setIsCompacting] = useState<string | false>(false);  // Context compaction in progress (summarization/offload)
+  const [isCompacting, setIsCompacting] = useState<string | false>(false);  // Context compaction in progress (summarize/offload)
   const [messageError, setMessageError] = useState<string | StructuredError | null>(null);
   // Steering returned by the server (agent finished before consuming it)
   const [returnedSteering, setReturnedSteering] = useState<string | null>(null);
@@ -1744,7 +1746,7 @@ export function useChatMessages(
                 } else {
                   let text;
                   if (action === 'summarize' && event.signal === 'complete') {
-                    text = t('chat.summarizedNotification', { from: event.original_message_count });
+                    text = t('chat.compactedNotification', { from: event.original_message_count });
                   } else if (action === 'offload' && event.signal === 'complete') {
                     const args = event.offloaded_args || 0;
                     const reads = event.offloaded_reads || 0;
@@ -2681,7 +2683,7 @@ export function useChatMessages(
             const action = event.action;
             let text;
             if (action === 'summarize' && event.signal === 'complete') {
-              text = t('chat.summarizedNotification', { from: event.original_message_count });
+              text = t('chat.compactedNotification', { from: event.original_message_count });
             } else if (action === 'offload' && event.signal === 'complete') {
               const args = event.offloaded_args || 0;
               const reads = event.offloaded_reads || 0;

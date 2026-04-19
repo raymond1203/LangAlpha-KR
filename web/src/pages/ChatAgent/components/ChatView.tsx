@@ -673,22 +673,23 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     handleSendMessage(message, planMode, additionalContext, attachmentMeta, modelOptions);
   }, [handleSendMessage]);
 
-  // Handle action-type slash commands (e.g. /summarize, /compaction, /offload)
+  // Handle action-type slash commands (e.g. /compact, /compaction, /offload)
   const handleAction = useCallback((cmd: ActionCommand) => {
     const tid = currentThreadId || threadId;
     if (!tid || tid === '__default__') return;
 
-    if (cmd.name === 'summarize') {
+    if (cmd.name === 'compact') {
+      // SSE wire action value "summarize" is preserved as a protocol contract.
       setIsCompacting('summarize');
       summarizeThread(tid)
         .then((data: Record<string, unknown>) => {
           setIsCompacting(false);
           insertNotification(
-            t('chat.summarizedNotification', { from: data.original_message_count }),
+            t('chat.compactedNotification', { from: data.original_message_count }),
           );
         })
         .catch((err: unknown) => {
-          console.error('[ChatView] Summarization failed:', err);
+          console.error('[ChatView] Compaction failed:', err);
           const detail = (err as Record<string, unknown>)?.response
             ? ((err as Record<string, unknown>).response as Record<string, unknown>)?.data
               ? (((err as Record<string, unknown>).response as Record<string, unknown>).data as Record<string, unknown>)?.detail as string | undefined
@@ -2026,7 +2027,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
                         style={{ color: 'var(--color-text-tertiary)' }}>
                         <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--color-accent-primary)' }} />
-                        {t(isCompacting === 'offload' ? 'chat.offloading' : 'chat.summarizing')}
+                        {t(isCompacting === 'offload' ? 'chat.offloading' : 'chat.compacting')}
                       </div>
                     )}
                     <ChatInput

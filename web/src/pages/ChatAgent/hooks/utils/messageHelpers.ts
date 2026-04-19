@@ -101,7 +101,7 @@ export function appendMessage<T extends { id: string }>(messages: T[], newMessag
 }
 
 /**
- * Creates a notification message for inline dividers (e.g. summarization, offload)
+ * Creates a notification message for inline dividers (e.g. compaction, offload)
  */
 export function createNotificationMessage(text: string, variant: NotificationVariant = 'info'): NotificationMessage {
   return {

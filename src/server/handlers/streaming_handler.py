@@ -555,7 +555,7 @@ class WorkflowStreamHandler:
                             if event_data.get("action") == "token_usage":
                                 from src.server.app import setup
                                 cw_data["threshold"] = (
-                                    setup.agent_config.summarization.token_threshold
+                                    setup.agent_config.compaction.token_threshold
                                     if setup.agent_config
                                     else 120000
                                 )

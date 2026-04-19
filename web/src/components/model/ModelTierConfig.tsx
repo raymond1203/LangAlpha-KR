@@ -19,16 +19,16 @@ export interface ModelTierConfigProps {
   onFlashModelChange: (model: string) => void
   /** Whether to show the "Two ways to research" explainer */
   showExplainer?: boolean
-  /** Whether to show the Advanced section (summarization, fetch, fallback) */
+  /** Whether to show the Advanced section (compaction, fetch, fallback) */
   showAdvanced?: boolean
   /** Advanced model selections (optional, for Settings page) */
   advancedModels?: {
-    summarizationModel?: string
+    compactionModel?: string
     fetchModel?: string
     fallbackModels?: string[]
   }
   onAdvancedModelsChange?: (models: {
-    summarizationModel?: string
+    compactionModel?: string
     fetchModel?: string
     fallbackModels?: string[]
   }) => void
@@ -36,7 +36,7 @@ export interface ModelTierConfigProps {
   systemDefaults?: {
     default_model?: string
     flash_model?: string
-    summarization_model?: string
+    compaction_model?: string
     fetch_model?: string
     fallback_models?: string[]
   }
@@ -485,10 +485,10 @@ export function ModelTierConfig({
                   style={{ gap: "24px" }}
                 >
                   <ModelSelector
-                    label="Summarization Model"
-                    description="Used for summarizing long content"
-                    value={advancedModels.summarizationModel ?? ""}
-                    onChange={(v) => handleAdvancedChange("summarizationModel", v)}
+                    label="Compaction Model"
+                    description="Used for compacting long conversation context"
+                    value={advancedModels.compactionModel ?? ""}
+                    onChange={(v) => handleAdvancedChange("compactionModel", v)}
                     models={models}
                     filterProviders={filterProviders}
                     placeholder="Defaults to flash model"

@@ -104,7 +104,7 @@ class TestListModelsResponse:
         agent_cfg = _mock_agent_config(
             name="claude-sonnet-4-5",
             flash="claude-haiku-4-5",
-            summarization="claude-haiku-4-5",
+            compaction="claude-haiku-4-5",
             fetch="claude-haiku-4-5",
             fallback=["gpt-4o"],
         )
@@ -119,7 +119,7 @@ class TestListModelsResponse:
         defaults = body["system_defaults"]
         assert defaults["default_model"] == "claude-sonnet-4-5"
         assert defaults["flash_model"] == "claude-haiku-4-5"
-        assert defaults["summarization_model"] == "claude-haiku-4-5"
+        assert defaults["compaction_model"] == "claude-haiku-4-5"
         assert defaults["fetch_model"] == "claude-haiku-4-5"
         assert defaults["fallback_models"] == ["gpt-4o"]
 

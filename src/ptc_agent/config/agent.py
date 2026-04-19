@@ -29,8 +29,12 @@ if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
 
 
-class SummarizationConfig(BaseModel):
-    """Conversation summarization settings."""
+class CompactionConfig(BaseModel):
+    """Context compaction settings.
+
+    Controls the two-tier context window lifecycle: token-threshold-based LLM
+    summarization (Tier 2) and message-count-based tool-arg truncation (Tier 1).
+    """
 
     enabled: bool = True
     token_threshold: int = 120000
@@ -139,7 +143,7 @@ class LLMConfig(BaseModel):
 
     name: str  # Name/alias from src/llms/manifest/models.json
     flash: str | None = None  # LLM for flash agent, defaults to main llm if None
-    summarization: str | None = None  # LLM for conversation summarization
+    compaction: str | None = None  # LLM for context compaction (summarization step)
     fetch: str | None = None  # LLM for web content extraction (fetch tool)
     fallback: list[str] | None = None  # Fallback model names for retry exhaustion
 
@@ -177,8 +181,8 @@ class AgentConfig(BaseModel):
     # Subagent configuration
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
 
-    # Summarization middleware configuration
-    summarization: SummarizationConfig = Field(default_factory=SummarizationConfig)
+    # Compaction middleware configuration
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
 
     # Search API provider (tavily, bocha, serper)
     search_api: str = "tavily"
@@ -188,7 +192,7 @@ class AgentConfig(BaseModel):
     # If False (default), return immediately and show status of running tasks
     background_auto_wait: bool = False
 
-    # Note: deep-agent automatically enables middlewares (TodoList, Summarization, etc.)
+    # Note: deep-agent automatically enables middlewares (TodoList, Compaction, etc.)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

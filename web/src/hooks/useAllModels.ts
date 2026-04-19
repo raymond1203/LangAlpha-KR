@@ -11,7 +11,7 @@ import type { PlatformModelsResponse, ModelAccess } from '@/types/platform';
 interface SystemDefaults {
   default_model?: string;
   flash_model?: string;
-  summarization_model?: string;
+  compaction_model?: string;
   fetch_model?: string;
   fallback_models?: string[];
 }

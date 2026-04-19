@@ -228,7 +228,7 @@ interface NotificationDividerProps {
 
 /**
  * NotificationDivider -- centered inline divider for system events
- * (e.g. summarization, offload). Renders as a muted horizontal rule
+ * (e.g. compaction, offload). Renders as a muted horizontal rule
  * with text, similar to date dividers in chat apps.
  */
 function NotificationDivider({ message, content }: NotificationDividerProps): React.ReactElement {

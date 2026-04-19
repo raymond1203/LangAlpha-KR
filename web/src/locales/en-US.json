@@ -285,7 +285,7 @@
     "letsGo": "Let's Go",
     "skip": "Skip",
     "workspaceStarting": "Starting workspace...",
-    "summarizing": "Summarizing conversation...",
+    "compacting": "Compacting conversation...",
     "offloading": "Offloading context...",
     "placeholderDefault": "Type / for skills, @ for files",
     "placeholderPendingRejection": "Describe how to revise the plan...",
@@ -295,8 +295,8 @@
     "slashCommand": {
       "subagentName": "subagent",
       "subagentDesc": "Use subagents to complete this task",
-      "summarizeName": "summarize",
-      "summarizeDesc": "Compact conversation context to free up token space",
+      "compactName": "compact",
+      "compactDesc": "Compact conversation context to free up token space",
       "offloadDesc": "Offload large tool arguments to sandbox filesystem",
       "noMatching": "No matching commands",
       "comps-analysisDesc": "Comparable company analysis: operating metrics, valuation multiples, peer benchmarking",
@@ -316,7 +316,7 @@
       "initiating-coverageDesc": "Full equity research initiation: company research, financial model, valuation, charts, 30-50 page report",
       "report-issueDesc": "Report issues and propose fixes to improve agent capabilities"
     },
-    "summarizedNotification": "Context compacted · {{from}} messages → summary",
+    "compactedNotification": "Context compacted · {{from}} messages → summary",
     "offloadedArgsNotification": "Tool arguments offloaded · {{count}} tools",
     "offloadedReadsNotification": "Stale read results offloaded · {{count}} reads",
     "offloadedNotification": "Context offloaded · {{args}} tool args, {{reads}} reads",

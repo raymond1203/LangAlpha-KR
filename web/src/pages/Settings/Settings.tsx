@@ -91,7 +91,7 @@ function Settings() {
   const modelPickerRef = useRef<HTMLDivElement>(null);
 
   // Other models state
-  const [summarizationModel, setSummarizationModel] = useState('');
+  const [compactionModel, setCompactionModel] = useState('');
   const [fetchModel, setFetchModel] = useState('');
   const [fallbackModels, setFallbackModels] = useState<string[]>([]);
 
@@ -247,7 +247,7 @@ function Settings() {
       setPreferredFlashModel((otherPref?.preferred_flash_model as string) || '');
       setStarredModels((otherPref?.starred_models as string[]) || []);
       setCustomModels((otherPref?.custom_models as CustomModelEntry[]) || []);
-      setSummarizationModel((otherPref?.summarization_model as string) || '');
+      setCompactionModel((otherPref?.compaction_model as string) || '');
       setFetchModel((otherPref?.fetch_model as string) || '');
       setFallbackModels((otherPref?.fallback_models as string[]) || (hookSystemDefaults?.fallback_models as string[]) || []);
       setCodexOAuthStatus(codexStatus || { connected: false });
@@ -260,11 +260,11 @@ function Settings() {
   // Refs to hold latest model state for the debounced save callback
   const modelStateRef = useRef({
     preferredModel, preferredFlashModel, starredModels, customModels,
-    summarizationModel, fetchModel, fallbackModels, byokProviders,
+    compactionModel, fetchModel, fallbackModels, byokProviders,
   });
   modelStateRef.current = {
     preferredModel, preferredFlashModel, starredModels, customModels,
-    summarizationModel, fetchModel, fallbackModels, byokProviders,
+    compactionModel, fetchModel, fallbackModels, byokProviders,
   };
 
   const saveModelPrefs = useCallback(async () => {
@@ -290,7 +290,7 @@ function Settings() {
         starred_models: cleanStarred.length > 0 ? cleanStarred : null,
         custom_models: cleanCustomModels.length > 0 ? cleanCustomModels : null,
         custom_providers: cleanCustomProviders.length > 0 ? cleanCustomProviders : null,
-        summarization_model: s.summarizationModel ? cleanModelRef(s.summarizationModel) : null,
+        compaction_model: s.compactionModel ? cleanModelRef(s.compactionModel) : null,
         fetch_model: s.fetchModel ? cleanModelRef(s.fetchModel) : null,
         fallback_models: cleanFallback,
       },
@@ -954,12 +954,12 @@ function Settings() {
                   onFlashModelChange={(v) => { setPreferredFlashModel(v); triggerModelSave(); }}
                   showAdvanced
                   advancedModels={{
-                    summarizationModel: summarizationModel,
+                    compactionModel: compactionModel,
                     fetchModel: fetchModel,
                     fallbackModels: fallbackModels,
                   }}
                   onAdvancedModelsChange={(models) => {
-                    if (models.summarizationModel !== undefined) setSummarizationModel(models.summarizationModel);
+                    if (models.compactionModel !== undefined) setCompactionModel(models.compactionModel);
                     if (models.fetchModel !== undefined) setFetchModel(models.fetchModel);
                     if (models.fallbackModels !== undefined) setFallbackModels(models.fallbackModels);
                     triggerModelSave();

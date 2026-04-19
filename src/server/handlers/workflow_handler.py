@@ -305,11 +305,11 @@ async def get_workflow_status(thread_id: str) -> dict:
 async def _resolve_graph_and_state(thread_id: str, verb: str) -> tuple:
     """Validate thread, build graph, get state, build backend.
 
-    Shared setup boilerplate for trigger_summarization and trigger_offload.
+    Shared setup boilerplate for trigger_compaction and trigger_offload.
 
     Args:
         thread_id: Thread to resolve.
-        verb: Operation verb for error messages ("summarize" / "offload").
+        verb: Operation verb for error messages ("compact" / "offload").
 
     Returns:
         (graph, lg_config, state, messages, backend)
@@ -392,51 +392,54 @@ async def _update_graph_state(
         )
 
 
-async def trigger_summarization(thread_id: str, keep_messages: int = 5) -> dict:
+async def trigger_compaction(thread_id: str, keep_messages: int = 5) -> dict:
     """
-    Manually trigger conversation summarization for a thread.
+    Manually trigger context compaction for a thread.
 
     Args:
-        thread_id: The thread/conversation ID to summarize
+        thread_id: The thread/conversation ID to compact
         keep_messages: Number of recent messages to preserve (1-20, default 5)
 
     Returns:
         Dict with success, original_message_count, new_message_count, summary_length
     """
     try:
-        from ptc_agent.agent.middleware.summarization import summarize_messages
+        from ptc_agent.agent.middleware.compaction import compact_messages
         from src.server.app import setup
 
         graph, lg_config, state, messages, backend = await _resolve_graph_and_state(
-            thread_id, "summarize"
+            thread_id, "compact"
         )
 
         original_count = len(messages)
 
         agent_cfg = setup.agent_config
-        summ_cfg = agent_cfg.summarization if agent_cfg else None
-        model_name = (agent_cfg.llm.summarization or "") if agent_cfg and agent_cfg.llm else ""
+        compaction_cfg = agent_cfg.compaction if agent_cfg else None
+        model_name = (agent_cfg.llm.compaction or "") if agent_cfg and agent_cfg.llm else ""
 
-        # Read previous event from state (for chained summarization)
+        # Read previous event from state (for chained compactions).
+        # The state key "_summarization_event" is preserved as a wire/storage
+        # contract (values live in the LangGraph checkpointer DB).
         previous_event = state.values.get("_summarization_event")
 
         try:
-            result = await summarize_messages(
+            result = await compact_messages(
                 messages=messages,
                 keep_messages=keep_messages,
                 model_name=model_name,
                 backend=backend,
                 previous_event=previous_event,
-                summarization_config=summ_cfg,
+                compaction_config=compaction_cfg,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Merge any Tier 1 offloaded IDs from summarize_messages into existing state
+        # Merge any Tier 1 offloaded IDs from compact_messages into existing state
         existing_arg_ids = set(state.values.get("_offloaded_tool_call_ids") or ())
         existing_read_ids = set(state.values.get("_offloaded_read_result_ids") or ())
 
-        # Write SummarizationEvent + offloaded IDs + reset batch counter
+        # Write CompactionEvent + offloaded IDs + reset batch counter.
+        # State key "_summarization_event" preserved for DB compatibility.
         await _update_graph_state(
             graph,
             lg_config,
@@ -451,18 +454,19 @@ async def trigger_summarization(thread_id: str, keep_messages: int = 5) -> dict:
                 ),
             },
             thread_id,
-            "summarize",
+            "compact",
         )
 
         new_message_count = result["preserved_count"]
         summary_length = len(result.get("summary_text", ""))
 
         logger.info(
-            f"Manual summarization completed for thread {thread_id}: "
+            f"Manual compaction completed for thread {thread_id}: "
             f"{original_count} -> {new_message_count} messages"
         )
 
-        # Persist context_window event to last response for replay
+        # Persist context_window event to last response for replay.
+        # Action value "summarize" preserved as SSE wire protocol.
         await _persist_context_window_event(
             thread_id,
             {
@@ -485,9 +489,9 @@ async def trigger_summarization(thread_id: str, keep_messages: int = 5) -> dict:
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error triggering summarization for thread {thread_id}: {e}")
+        logger.exception(f"Error triggering compaction for thread {thread_id}: {e}")
         raise HTTPException(
-            status_code=500, detail=f"Failed to trigger summarization: {str(e)}"
+            status_code=500, detail=f"Failed to trigger compaction: {str(e)}"
         )
 
 
@@ -505,7 +509,7 @@ async def trigger_offload(thread_id: str) -> dict:
         Dict with success, thread_id, message_count, offloaded_args, offloaded_reads
     """
     try:
-        from ptc_agent.agent.middleware.summarization import offload_tool_args
+        from ptc_agent.agent.middleware.compaction import offload_tool_args
 
         graph, lg_config, state, messages, backend = await _resolve_graph_and_state(
             thread_id, "offload"
@@ -525,13 +529,13 @@ async def trigger_offload(thread_id: str) -> dict:
             )
 
         # Call offload_tool_args (Tier 1 only)
-        summ_cfg = setup.agent_config.summarization if setup.agent_config else None
+        compaction_cfg = setup.agent_config.compaction if setup.agent_config else None
         try:
             result = await offload_tool_args(
                 messages=messages,
                 backend=backend,
                 already_offloaded=already_offloaded,
-                summarization_config=summ_cfg,
+                compaction_config=compaction_cfg,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))

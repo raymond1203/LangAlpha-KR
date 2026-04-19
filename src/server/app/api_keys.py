@@ -779,7 +779,7 @@ async def list_models():
         "system_defaults": {
             "default_model": llm_cfg.name if llm_cfg else "",
             "flash_model": (llm_cfg.flash or "") if llm_cfg else "",
-            "summarization_model": (llm_cfg.summarization or "") if llm_cfg else "",
+            "compaction_model": (llm_cfg.compaction or "") if llm_cfg else "",
             "fetch_model": (llm_cfg.fetch or "") if llm_cfg else "",
             "fallback_models": (llm_cfg.fallback or []) if llm_cfg else [],
         },
