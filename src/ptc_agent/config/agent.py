@@ -322,21 +322,39 @@ class AgentConfig(BaseModel):
                 else "docker"
             )
 
-        # Create Daytona config (required for daytona provider, defaults for others)
+        # Create Daytona config (required for daytona provider, defaults for others).
+        # Defaults live on DaytonaConfig (src/ptc_agent/config/core.py) — the
+        # single source of truth for Python-side values. agent_config.yaml is
+        # the runtime SSoT and overrides these.
         if resolved_provider == "daytona":
             api_key = daytona_api_key or os.getenv("DAYTONA_API_KEY", "")
             if not api_key:
                 raise ValueError("DAYTONA_API_KEY must be provided or set in environment")
+            _daytona_defaults = DaytonaConfig()
             daytona_config = DaytonaConfig(
                 api_key=api_key,
                 base_url=daytona_base_url,
-                auto_stop_interval=kwargs.pop("auto_stop_interval", 3600),
-                auto_archive_interval=kwargs.pop("auto_archive_interval", 86400),
-                auto_delete_interval=kwargs.pop("auto_delete_interval", 604800),
-                python_version=kwargs.pop("python_version", "3.12"),
-                snapshot_enabled=kwargs.pop("snapshot_enabled", True),
-                snapshot_name=kwargs.pop("snapshot_name", None),
-                snapshot_auto_create=kwargs.pop("snapshot_auto_create", True),
+                auto_stop_interval=kwargs.pop(
+                    "auto_stop_interval", _daytona_defaults.auto_stop_interval
+                ),
+                auto_archive_interval=kwargs.pop(
+                    "auto_archive_interval", _daytona_defaults.auto_archive_interval
+                ),
+                auto_delete_interval=kwargs.pop(
+                    "auto_delete_interval", _daytona_defaults.auto_delete_interval
+                ),
+                python_version=kwargs.pop(
+                    "python_version", _daytona_defaults.python_version
+                ),
+                snapshot_enabled=kwargs.pop(
+                    "snapshot_enabled", _daytona_defaults.snapshot_enabled
+                ),
+                snapshot_name=kwargs.pop(
+                    "snapshot_name", _daytona_defaults.snapshot_name
+                ),
+                snapshot_auto_create=kwargs.pop(
+                    "snapshot_auto_create", _daytona_defaults.snapshot_auto_create
+                ),
             )
         else:
             # Non-Daytona providers don't need Daytona config; use defaults

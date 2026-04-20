@@ -903,7 +903,7 @@ class TestSandboxRecovery:
 
         # Patch _restart_workspace to return the lazy session directly
         # (simulates the real lazy init path)
-        async def mock_restart(workspace, user_id, lazy_init=True):
+        async def mock_restart(workspace, user_id, lazy_init=True, on_state_observed=None):
             session = lazy_session
             manager._sessions[ws_id] = session
             manager._pending_lazy_sync.add(ws_id)
@@ -915,3 +915,156 @@ class TestSandboxRecovery:
         # Phase 2 caught SandboxGoneError and triggered recovery
         mock_session_mgr.remove_session.assert_called_with(ws_id)
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# on_state_observed forwarding — pin the kwarg threads through every
+# session init branch so a silent typo in any one call site fails CI.
+# ---------------------------------------------------------------------------
+
+
+class TestOnStateObservedForwarding:
+    """Lock in that on_state_observed is passed to session.initialize /
+    initialize_lazy at every call site in workspace_manager.py. A typo
+    or missing kwarg in any branch would silently drop the archived
+    refinement event on the chat SSE stream."""
+
+    def setup_method(self):
+        WorkspaceManager.reset_instance()
+
+    def teardown_method(self):
+        WorkspaceManager.reset_instance()
+
+    def _make_manager(self):
+        manager = WorkspaceManager.get_instance(config=_make_config())
+        manager._sync_sandbox_assets = AsyncMock()
+        manager._maybe_migrate_sandbox = AsyncMock(return_value=None)
+        return manager
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.workspace_manager.db_get_workspace")
+    @patch("src.server.services.workspace_manager.SessionManager")
+    @patch("src.server.services.workspace_manager.update_workspace_activity")
+    async def test_running_path_forwards_callback_to_initialize(
+        self, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        """status=running + no cache → session.initialize(..., on_state_observed=sentinel)."""
+        manager = self._make_manager()
+        ws_id = str(uuid.uuid4())
+        mock_get_ws.return_value = _make_workspace(workspace_id=ws_id, status="running")
+        session = _make_mock_session(initialized=False)
+        mock_session_mgr.get_session.return_value = session
+
+        def sentinel(_s: str) -> None:
+            return None
+
+        await manager.get_session_for_workspace(
+            ws_id, user_id="user-1", on_state_observed=sentinel
+        )
+
+        session.initialize.assert_awaited_once()
+        assert session.initialize.await_args.kwargs.get("on_state_observed") is sentinel
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.workspace_manager.db_get_workspace")
+    @patch("src.server.services.workspace_manager.SessionManager")
+    @patch("src.server.services.workspace_manager.update_workspace_activity")
+    @patch("src.server.services.workspace_manager.update_workspace_status")
+    async def test_stopped_path_forwards_callback_to_initialize_lazy(
+        self, mock_status, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        """status=stopped + matching config hash → _restart_workspace keeps
+        lazy_init=True → session.initialize_lazy(..., on_state_observed=sentinel)."""
+        manager = self._make_manager()
+        ws_id = str(uuid.uuid4())
+        # Make config hash match so _restart_workspace keeps lazy_init=True.
+        manager._compute_sandbox_config_hash = MagicMock(return_value="matching-hash")
+        workspace = _make_workspace(
+            workspace_id=ws_id,
+            status="stopped",
+            config={"sandbox_config_hash": "matching-hash"},
+        )
+        mock_get_ws.return_value = workspace
+        session = _make_mock_session(initialized=False)
+        # Simulate lazy init leaving sandbox ready so Phase 2 doesn't retry.
+        session.sandbox.is_ready = MagicMock(return_value=True)
+        session.sandbox.has_failed = MagicMock(return_value=False)
+        mock_session_mgr.get_session.return_value = session
+
+        def sentinel(_s: str) -> None:
+            return None
+
+        await manager.get_session_for_workspace(
+            ws_id, user_id="user-1", on_state_observed=sentinel
+        )
+
+        session.initialize_lazy.assert_awaited_once()
+        assert (
+            session.initialize_lazy.await_args.kwargs.get("on_state_observed")
+            is sentinel
+        )
+        # Lazy path must not have touched the eager initialize.
+        session.initialize.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.workspace_manager.db_get_workspace")
+    @patch("src.server.services.workspace_manager.SessionManager")
+    @patch("src.server.services.workspace_manager.update_workspace_activity")
+    @patch("src.server.services.workspace_manager.update_workspace_status")
+    async def test_restart_forced_non_lazy_forwards_callback_to_initialize(
+        self, mock_status, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        """Config hash mismatch inside _restart_workspace forces lazy_init=False
+        → session.initialize(..., on_state_observed=sentinel) instead of initialize_lazy."""
+        manager = self._make_manager()
+        ws_id = str(uuid.uuid4())
+        manager._compute_sandbox_config_hash = MagicMock(return_value="new-hash")
+        workspace = _make_workspace(
+            workspace_id=ws_id,
+            status="stopped",
+            config={"sandbox_config_hash": "old-hash"},
+        )
+        mock_get_ws.return_value = workspace
+        session = _make_mock_session(initialized=False)
+        session.sandbox.is_ready = MagicMock(return_value=True)
+        session.sandbox.has_failed = MagicMock(return_value=False)
+        mock_session_mgr.get_session.return_value = session
+
+        def sentinel(_s: str) -> None:
+            return None
+
+        await manager.get_session_for_workspace(
+            ws_id, user_id="user-1", on_state_observed=sentinel
+        )
+
+        session.initialize.assert_awaited_once()
+        assert session.initialize.await_args.kwargs.get("on_state_observed") is sentinel
+        session.initialize_lazy.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("src.server.services.workspace_manager.db_get_workspace")
+    @patch("src.server.services.workspace_manager.SessionManager")
+    @patch("src.server.services.workspace_manager.update_workspace_activity")
+    async def test_warm_cached_session_does_not_call_any_initialize(
+        self, mock_activity, mock_session_mgr, mock_get_ws
+    ):
+        """Initialized cached session → no initialize / initialize_lazy call
+        even when on_state_observed is passed. The callback simply has no
+        path to fire on the warm hit and must not leak into any init path."""
+        manager = self._make_manager()
+        ws_id = str(uuid.uuid4())
+        mock_get_ws.return_value = _make_workspace(workspace_id=ws_id, status="running")
+        cached = _make_mock_session(initialized=True)
+        cached.sandbox.is_ready = MagicMock(return_value=True)
+        cached.sandbox.has_failed = MagicMock(return_value=False)
+        manager._sessions[ws_id] = cached
+
+        def sentinel(_s: str) -> None:
+            return None
+
+        await manager.get_session_for_workspace(
+            ws_id, user_id="user-1", on_state_observed=sentinel
+        )
+
+        cached.initialize.assert_not_awaited()
+        cached.initialize_lazy.assert_not_awaited()

@@ -33,8 +33,8 @@ class DaytonaConfig(BaseModel):
     api_key: str = ""  # Set via DAYTONA_API_KEY env var, validated later
     base_url: str = "https://app.daytona.io/api"
     auto_stop_interval: int = 3600  # 1 hour
-    auto_archive_interval: int = 86400  # 1 day
-    auto_delete_interval: int = 604800  # 7 days
+    auto_archive_interval: int = 604800  # 7 days — keep stopped (fast restart) before cold storage
+    auto_delete_interval: int = 7776000  # 90 days — total dormant lifetime
     python_version: str = "3.12"
 
     # Snapshot configuration for faster sandbox initialization

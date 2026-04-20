@@ -388,8 +388,8 @@ daytona:
   # api_key: set DAYTONA_API_KEY in environment or .env file
   python_version: "3.12"
   auto_stop_interval: 3600  # 1 hour
-  auto_archive_interval: 86400  # 24 hours
-  auto_delete_interval: 604800  # 7 days
+  auto_archive_interval: 604800  # 7 days
+  auto_delete_interval: 7776000  # 90 days
 
 # MCP Servers (optional)
 # ----------------------

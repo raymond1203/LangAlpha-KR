@@ -514,7 +514,9 @@ export function useChatMessages(
     () => !!(initialThreadId && initialThreadId !== '__default__')
   );
   const [hasActiveSubagents, setHasActiveSubagents] = useState(false);  // Subagent streams open after main agent finished
-  const [workspaceStarting, setWorkspaceStarting] = useState(false);  // Workspace is starting up (stopped/archived sandbox)
+  // false | 'starting' (generic cold start) | 'archived' (slow ~90s restore from cold storage).
+  // Widen this union when backend adds a new sandbox_state discriminator.
+  const [workspaceStarting, setWorkspaceStarting] = useState<false | 'starting' | 'archived'>(false);
   const [isCompacting, setIsCompacting] = useState<string | false>(false);  // Context compaction in progress (summarize/offload)
   const [messageError, setMessageError] = useState<string | StructuredError | null>(null);
   // Steering returned by the server (agent finished before consuming it)
@@ -2522,9 +2524,16 @@ export function useChatMessages(
         }
       }
 
-      // Handle workspace_status events (workspace starting/ready)
+      // Handle workspace_status events (workspace starting/ready).
+      // An optional `sandbox_state: "archived"` refinement event follows the
+      // generic `starting` on the slow cold-restore path — branch copy on it.
       if (eventType === 'workspace_status') {
-        setWorkspaceStarting(event.status === 'starting');
+        if (event.status === 'starting') {
+          const state = event.sandbox_state === 'archived' ? 'archived' : 'starting';
+          setWorkspaceStarting(state);
+        } else {
+          setWorkspaceStarting(false);
+        }
         return;
       }
 

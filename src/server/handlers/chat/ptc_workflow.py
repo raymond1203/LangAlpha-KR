@@ -10,6 +10,7 @@ subagent orchestration, completion callback) remain inline.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import datetime
@@ -356,15 +357,64 @@ async def astream_ptc_workflow(
         # Daytona but no session in memory). The extra "starting/ready" SSE
         # pair is harmless — frontend treats it as a brief spinner.
         needs_startup = not workspace_manager.has_ready_session(workspace_id)
-        if needs_startup:
+
+        if not needs_startup:
+            session = await workspace_manager.get_session_for_workspace(
+                workspace_id, user_id=user_id
+            )
+        else:
             yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'starting', 'workspace_id': workspace_id})}\n\n"
 
-        session = await workspace_manager.get_session_for_workspace(
-            workspace_id, user_id=user_id
-        )
+            # Learn the pre-start sandbox state via a callback threaded
+            # through session init → PTCSandbox.reconnect. The callback
+            # fires once with the state string as soon as reconnect reads
+            # it (before runtime.start() is invoked). We coordinate via
+            # asyncio.Event + wait_for — no FIRST_COMPLETED race loop,
+            # session_task is untouched by the wait_for timeout.
+            state_event = asyncio.Event()
+            state_box: dict[str, str | None] = {"value": None}
 
-        if needs_startup:
-            yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'ready', 'workspace_id': workspace_id})}\n\n"
+            def _on_state(state: str) -> None:
+                state_box["value"] = state
+                state_event.set()
+
+            session_task = asyncio.create_task(
+                workspace_manager.get_session_for_workspace(
+                    workspace_id,
+                    user_id=user_id,
+                    on_state_observed=_on_state,
+                )
+            )
+
+            try:
+                # Wait up to 5s for reconnect to observe the sandbox state.
+                # On the recovery path (new sandbox) the callback never fires;
+                # we time out, skip the refinement, and proceed.
+                try:
+                    await asyncio.wait_for(state_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+
+                logger.info(
+                    "[WS_STATUS] state observation",
+                    workspace_id=workspace_id,
+                    sandbox_state=state_box["value"],
+                )
+
+                if state_box["value"] == "archived":
+                    yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'starting', 'workspace_id': workspace_id, 'sandbox_state': 'archived'})}\n\n"
+
+                session = await session_task
+                yield f"id: 0\nevent: workspace_status\ndata: {json.dumps({'status': 'ready', 'workspace_id': workspace_id})}\n\n"
+            except BaseException:
+                # Client disconnect / GeneratorExit / any error during the
+                # yield or await chain above must not leak session_task.
+                # Cancel and drain to surface the outcome (or CancelledError).
+                if not session_task.done():
+                    session_task.cancel()
+                    with contextlib.suppress(BaseException):
+                        await session_task
+                raise
 
         _mark_phase("session")
 

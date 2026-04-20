@@ -245,23 +245,36 @@ class PTCSandbox:
         """
         return self._skills_manifest
 
-    def start_lazy_init(self, sandbox_id: str) -> None:
+    def start_lazy_init(
+        self,
+        sandbox_id: str,
+        on_state_observed: Callable[[str], None] | None = None,
+    ) -> None:
         """Start sandbox initialization in background (non-blocking).
 
         Call this instead of reconnect() for lazy initialization.
         Methods will automatically wait for init to complete.
+
+        ``on_state_observed`` is forwarded to reconnect so callers can
+        learn the pre-start sandbox state asynchronously.
         """
         if self._init_task is not None:
             return  # Already started
 
         self._ready_event = asyncio.Event()
-        self._init_task = asyncio.create_task(self._lazy_reconnect(sandbox_id))
+        self._init_task = asyncio.create_task(
+            self._lazy_reconnect(sandbox_id, on_state_observed=on_state_observed)
+        )
 
-    async def _lazy_reconnect(self, sandbox_id: str) -> None:
+    async def _lazy_reconnect(
+        self,
+        sandbox_id: str,
+        on_state_observed: Callable[[str], None] | None = None,
+    ) -> None:
         """Background task for lazy reconnection."""
         try:
             logger.debug("Starting lazy sandbox init", sandbox_id=sandbox_id)
-            await self.reconnect(sandbox_id)
+            await self.reconnect(sandbox_id, on_state_observed=on_state_observed)
             logger.debug("Lazy sandbox init complete", sandbox_id=sandbox_id)
         except asyncio.CancelledError:
             # CancelledError is BaseException, not Exception — must be
@@ -561,7 +574,11 @@ class PTCSandbox:
         await self.setup_tools_and_mcp(snapshot_name)
         logger.info("Sandbox setup complete", sandbox_id=self.sandbox_id)
 
-    async def reconnect(self, sandbox_id: str) -> None:
+    async def reconnect(
+        self,
+        sandbox_id: str,
+        on_state_observed: Callable[[str], None] | None = None,
+    ) -> None:
         """Reconnect to a stopped sandbox.
 
         This is a fast path for session persistence - it starts a stopped
@@ -570,6 +587,12 @@ class PTCSandbox:
 
         Args:
             sandbox_id: The ID of an existing sandbox
+            on_state_observed: Optional sync callback invoked once with the
+                initial state string (``"archived"``, ``"running"``,
+                ``"stopped"``, ...) right after the first ``get_state``
+                call. Lets upstream callers (e.g. the chat SSE generator)
+                react to the pre-start state without a second SDK probe.
+                Callback must not raise — exceptions are swallowed.
 
         Raises:
             SandboxGoneError: If sandbox cannot be found or is in an unrecoverable state
@@ -609,6 +632,15 @@ class PTCSandbox:
         state = await self.runtime.get_state()
         state_value = state.value
         _mark_rc("get_state")
+
+        if on_state_observed is not None:
+            try:
+                on_state_observed(state_value)
+            except Exception:
+                logger.debug(
+                    "on_state_observed callback raised; ignoring",
+                    sandbox_id=sandbox_id,
+                )
 
         if state_value == "running":
             logger.debug(

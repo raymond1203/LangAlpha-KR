@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from collections.abc import Callable
 from types import TracebackType
 
 import structlog
@@ -64,6 +65,7 @@ class Session:
         sandbox_tokens: dict | None = None,
         user_id: str | None = None,
         workspace_id: str | None = None,
+        on_state_observed: Callable[[str], None] | None = None,
     ) -> None:
         """Initialize the session (connect MCP servers and setup sandbox).
 
@@ -72,6 +74,9 @@ class Session:
             sandbox_tokens: Optional scoped OAuth2 tokens for sandbox ginlix-data access
             user_id: User ID for token tracking in manifest.
             workspace_id: Workspace ID for token tracking in manifest.
+            on_state_observed: Optional sync callback invoked with the initial
+                sandbox state string when reconnecting (ignored on new-sandbox
+                path since state doesn't exist yet). See PTCSandbox.reconnect.
         """
         if self._initialized:
             logger.warning(
@@ -98,7 +103,9 @@ class Session:
             try:
                 await asyncio.gather(
                     self.mcp_registry.connect_all(),
-                    self.sandbox.reconnect(sandbox_id),
+                    self.sandbox.reconnect(
+                        sandbox_id, on_state_observed=on_state_observed
+                    ),
                 )
             except Exception:
                 # Clean up MCP connections to avoid leaks
@@ -150,7 +157,11 @@ class Session:
 
         logger.debug("Session initialized", conversation_id=self.conversation_id)
 
-    async def initialize_lazy(self, sandbox_id: str) -> None:
+    async def initialize_lazy(
+        self,
+        sandbox_id: str,
+        on_state_observed: Callable[[str], None] | None = None,
+    ) -> None:
         """Initialize session with lazy sandbox startup.
 
         MCP registry connects immediately, sandbox starts in background.
@@ -158,6 +169,10 @@ class Session:
 
         Args:
             sandbox_id: Existing sandbox ID to reconnect to
+            on_state_observed: Optional sync callback invoked with the
+                initial sandbox state once the background reconnect task
+                observes it. Called asynchronously (after this method
+                returns) when the background reconnect task reads state.
         """
         if self._initialized:
             logger.warning(
@@ -177,7 +192,7 @@ class Session:
         # reconnect() is pure Daytona API calls, doesn't need the MCP registry.
         # This lets the sandbox start while MCP subprocesses are connecting.
         self.sandbox = PTCSandbox(self.config, mcp_registry=None)
-        self.sandbox.start_lazy_init(sandbox_id)
+        self.sandbox.start_lazy_init(sandbox_id, on_state_observed=on_state_observed)
 
         # Initialize MCP registry (required for system prompt) — runs in
         # parallel with the Daytona sandbox start above.

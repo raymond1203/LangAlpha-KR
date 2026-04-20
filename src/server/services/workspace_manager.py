@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -778,6 +779,7 @@ class WorkspaceManager:
         self,
         workspace_id: str,
         user_id: str | None = None,
+        on_state_observed: Callable[[str], None] | None = None,
     ) -> Session:
         """
         Get or restart session for workspace.
@@ -785,6 +787,13 @@ class WorkspaceManager:
         Args:
             workspace_id: Workspace UUID
             user_id: Optional user ID for syncing user data to sandbox
+            on_state_observed: Optional sync callback invoked with the
+                initial sandbox state ("archived", "running", ...) as
+                soon as the reconnect path observes it. Used by the chat
+                SSE generator to emit a refined "restoring from storage"
+                copy on the archived cold-start path without a separate
+                SDK probe. Ignored on the warm path and when creating a
+                fresh sandbox (no pre-existing state to observe).
 
         Returns:
             Initialized Session instance
@@ -881,7 +890,10 @@ class WorkspaceManager:
                 if status == "stopped":
                     logger.info(f"Restarting stopped workspace {workspace_id}")
                     session = await self._restart_workspace(
-                        workspace, user_id=workspace_user_id, lazy_init=True
+                        workspace,
+                        user_id=workspace_user_id,
+                        lazy_init=True,
+                        on_state_observed=on_state_observed,
                     )
                     # Don't return immediately for lazy init — fall through
                     # to Phase 2 which waits for init and handles SandboxGoneError.
@@ -895,7 +907,10 @@ class WorkspaceManager:
                     if not session._initialized:
                         sandbox_id = workspace.get("sandbox_id")
                         try:
-                            await session.initialize(sandbox_id=sandbox_id)
+                            await session.initialize(
+                                sandbox_id=sandbox_id,
+                                on_state_observed=on_state_observed,
+                            )
                         except SandboxGoneError as e:
                             SessionManager.remove_session(workspace_id)
                             logger.warning(
@@ -946,6 +961,7 @@ class WorkspaceManager:
                                 workspace,
                                 user_id=workspace_user_id,
                                 lazy_init=True,
+                                on_state_observed=on_state_observed,
                             )
                             needs_sync = True
                             needs_deferred_sync = True
@@ -1002,6 +1018,7 @@ class WorkspaceManager:
                                         workspace,
                                         user_id=workspace_user_id,
                                         lazy_init=True,
+                                        on_state_observed=on_state_observed,
                                     )
                                     needs_sync = True
                                     needs_deferred_sync = True
@@ -1013,7 +1030,10 @@ class WorkspaceManager:
                                     core_config = self.config.to_core_config()
                                     session = SessionManager.get_session(workspace_id, core_config)
                                     if not session._initialized:
-                                        await session.initialize(sandbox_id=sandbox_id)
+                                        await session.initialize(
+                                            sandbox_id=sandbox_id,
+                                            on_state_observed=on_state_observed,
+                                        )
                                         await self._sync_sandbox_assets(
                                             workspace_id,
                                             workspace_user_id,
@@ -1135,6 +1155,7 @@ class WorkspaceManager:
         workspace: Dict[str, Any],
         user_id: str | None = None,
         lazy_init: bool = False,
+        on_state_observed: Callable[[str], None] | None = None,
     ) -> Session:
         """
         Restart a stopped workspace.
@@ -1143,6 +1164,9 @@ class WorkspaceManager:
             workspace: Workspace record from DB
             user_id: Optional user ID for syncing user data to sandbox
             lazy_init: If True, start sandbox in background for faster response
+            on_state_observed: Optional callback forwarded to Session.initialize
+                /initialize_lazy; invoked with the initial sandbox state so
+                callers can distinguish ``archived`` from ``stopped`` restarts.
 
         Returns:
             Initialized Session instance
@@ -1183,13 +1207,19 @@ class WorkspaceManager:
             # Try to reconnect to existing sandbox
             try:
                 if lazy_init:
-                    await session.initialize_lazy(sandbox_id=sandbox_id)
+                    await session.initialize_lazy(
+                        sandbox_id=sandbox_id,
+                        on_state_observed=on_state_observed,
+                    )
                     self._pending_lazy_sync.add(workspace_id)
                     logger.debug(
                         f"Session lazy-initialized for workspace {workspace_id}"
                     )
                 else:
-                    await session.initialize(sandbox_id=sandbox_id)
+                    await session.initialize(
+                        sandbox_id=sandbox_id,
+                        on_state_observed=on_state_observed,
+                    )
                     logger.debug(f"Session initialized for workspace {workspace_id}")
             except SandboxGoneError as e:
                 sandbox_gone = True

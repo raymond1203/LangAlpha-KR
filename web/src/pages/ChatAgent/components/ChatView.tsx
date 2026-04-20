@@ -1,7 +1,8 @@
 import React, { Suspense, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, FolderOpen, StopCircle, ScrollText, AlertTriangle, CheckCircle2, Circle, Loader2, TextSelect, Minus, PanelLeftOpen, Menu } from 'lucide-react';
+import { ArrowLeft, FolderOpen, StopCircle, ScrollText, AlertTriangle, CheckCircle2, Circle, Loader2, TextSelect, Minus, PanelLeftOpen, Menu, Info } from 'lucide-react';
+import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { useIsMobile, getIsMobileSnapshot } from '@/hooks/useIsMobile';
 import { ScrollArea } from '../../../components/ui/scroll-area';
 import { usePreferences } from '@/hooks/usePreferences';
@@ -2042,7 +2043,32 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                       <div className="flex items-center gap-2 px-3 py-1.5 text-xs"
                         style={{ color: 'var(--color-text-tertiary)' }}>
                         <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: 'var(--color-accent-primary)' }} />
-                        {t('chat.workspaceStarting')}
+                        <span>{t(workspaceStarting === 'archived' ? 'chat.workspaceRestoring' : 'chat.workspaceStarting')}</span>
+                        <HoverCard openDelay={150} closeDelay={100}>
+                          <HoverCardTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={t('chat.workspaceStateHelp')}
+                              className="inline-flex items-center justify-center rounded-full p-0.5 hover:opacity-80 focus:outline-none focus-visible:ring-1 focus-visible:ring-current"
+                              style={{ color: 'var(--color-text-quaternary)' }}
+                            >
+                              <Info className="h-3 w-3" />
+                            </button>
+                          </HoverCardTrigger>
+                          <HoverCardContent side="top" align="start" className="w-80 text-xs leading-relaxed">
+                            <div className="font-medium mb-1" style={{ color: 'var(--color-text-primary)' }}>
+                              {t(workspaceStarting === 'archived' ? 'chat.workspaceStateArchivedTitle' : 'chat.workspaceStateStartingTitle')}
+                            </div>
+                            <p style={{ color: 'var(--color-text-secondary)' }}>
+                              {t(workspaceStarting === 'archived' ? 'chat.workspaceStateArchivedBody' : 'chat.workspaceStateStartingBody')}
+                            </p>
+                            {workspaceStarting === 'archived' && (
+                              <p className="mt-2" style={{ color: 'var(--color-text-tertiary)' }}>
+                                {t('chat.workspaceStateArchivedFootnote')}
+                              </p>
+                            )}
+                          </HoverCardContent>
+                        </HoverCard>
                       </div>
                     )}
                     {isCompacting && (
