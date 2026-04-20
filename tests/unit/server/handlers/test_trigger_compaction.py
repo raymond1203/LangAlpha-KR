@@ -524,3 +524,87 @@ class TestActiveWorkflowGate:
         assert detail["code"] == "workflow_active"
         assert detail["verb"] == "offload"
         assert offload_mock.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_compact_fails_open_when_tracker_disabled(self, base_config):
+        """Redis outage → tracker.enabled=False → gate bypasses so admin
+        actions stay usable while chat workflows are already degraded."""
+        from src.server.handlers.workflow_handler import trigger_compaction
+
+        stub_resolve = _stub_resolve_graph_and_state()
+        compact_mock = AsyncMock(
+            return_value={
+                "event": {"summary_text": "ok"},
+                "summary_text": "ok",
+                "original_count": 2,
+                "preserved_count": 1,
+                "offloaded_arg_ids": set(),
+                "offloaded_read_ids": set(),
+            }
+        )
+
+        tracker = MagicMock()
+        tracker.enabled = False
+        # If the gate accidentally reads status, this would raise and we'd
+        # want the test to fail loudly rather than pass for the wrong reason.
+        tracker.get_status = AsyncMock(
+            side_effect=AssertionError("get_status must not be called when disabled")
+        )
+
+        with (
+            patch("src.server.app.setup.agent_config", base_config),
+            patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
+            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
+            patch(
+                "ptc_agent.agent.middleware.compaction.compact_messages",
+                new=compact_mock,
+            ),
+            patch(
+                "src.server.services.workflow_tracker.WorkflowTracker.get_instance",
+                return_value=tracker,
+            ),
+        ):
+            await trigger_compaction("thread-1", keep_messages=5)
+
+        assert compact_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_compact_fails_open_on_transient_tracker_error(self, base_config):
+        """Redis blip mid-request → get_status raises → gate fails open with
+        a warning instead of surfacing HTTP 500 via the broad except."""
+        from src.server.handlers.workflow_handler import trigger_compaction
+
+        stub_resolve = _stub_resolve_graph_and_state()
+        compact_mock = AsyncMock(
+            return_value={
+                "event": {"summary_text": "ok"},
+                "summary_text": "ok",
+                "original_count": 2,
+                "preserved_count": 1,
+                "offloaded_arg_ids": set(),
+                "offloaded_read_ids": set(),
+            }
+        )
+
+        tracker = MagicMock()
+        tracker.enabled = True
+        tracker.get_status = AsyncMock(
+            side_effect=RuntimeError("redis: connection reset")
+        )
+
+        with (
+            patch("src.server.app.setup.agent_config", base_config),
+            patch(f"{HANDLER}._resolve_graph_and_state", new=stub_resolve),
+            patch(f"{HANDLER}._persist_context_window_event", new=_noop_persist),
+            patch(
+                "ptc_agent.agent.middleware.compaction.compact_messages",
+                new=compact_mock,
+            ),
+            patch(
+                "src.server.services.workflow_tracker.WorkflowTracker.get_instance",
+                return_value=tracker,
+            ),
+        ):
+            await trigger_compaction("thread-1", keep_messages=5)
+
+        assert compact_mock.await_count == 1

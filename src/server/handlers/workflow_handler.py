@@ -419,7 +419,18 @@ async def _require_no_active_workflow(thread_id: str, verb: str) -> None:
             f"workflow-active gate bypassed for thread {thread_id}"
         )
         return
-    status = await tracker.get_status(thread_id)
+    # Transient Redis errors during a healthy session would otherwise bubble up
+    # through trigger_compaction's broad except and surface as 500. Fail open
+    # (same as tracker.enabled=False) with a warning so admin actions stay
+    # usable and the operator can see that the gate was bypassed.
+    try:
+        status = await tracker.get_status(thread_id)
+    except Exception as e:
+        logger.warning(
+            f"[{verb}] WorkflowTracker.get_status failed for thread {thread_id}: "
+            f"{e}; workflow-active gate bypassed"
+        )
+        return
     if not status:
         return
     raw = status.get("status")
