@@ -164,7 +164,7 @@ class LargeResultEvictionMiddleware(AgentMiddleware):
         # Middleware rewrites by-id paths (same tool_call_id retries overwrite prior eviction);
         # opt out of protocol's create-only default.
         result = await self.backend.awrite(file_path, content_str, overwrite=True)
-        if result.error:
+        if result is None or result.error:
             return message, None
 
         # Create preview showing head and tail of the result

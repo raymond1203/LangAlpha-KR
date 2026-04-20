@@ -138,7 +138,7 @@ def _is_text_file(path: str) -> bool:
 
 
 async def _read_one_file(
-    backend: Any,
+    backend: SandboxBackend,
     path: str,
 ) -> tuple[str, str | bytes | None]:
     """Read a single file from the sandbox, returning (path, content_or_None)."""
@@ -157,7 +157,7 @@ async def _read_one_file(
 
 
 async def _resolve_data_files(
-    backend: Any,
+    backend: SandboxBackend,
     data_files: list[str],
 ) -> dict[str, str]:
     """Read *data_files* via *backend* and return inline data dict.
