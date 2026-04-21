@@ -164,10 +164,17 @@ function ChatAgent(): React.ReactElement | null {
   // Ensure cache entry exists before first paint so chatViews is never empty
   // when threadId is set (same setState-during-render pattern as setResolvedWorkspaceId above).
   if (threadId && workspaceId && !cache.entries.some(e => e.workspaceId === workspaceId && e.threadId === threadId)) {
-    // Don't create a duplicate entry if an existing entry is resolving to this threadId
-    const isPendingResolution = Array.from(resolvingRef.current.values()).some(
-      v => v.workspaceId === workspaceId && v.newThreadId === threadId
-    );
+    // Don't create a duplicate entry if a resolution touches this threadId — either as
+    // the target (we're about to rename into it) or as the source (we just renamed away
+    // from it and the URL hasn't caught up yet). Without the source-side check, the
+    // intermediate render between cache.updateKey committing and navigate() landing
+    // spawns a duplicate __default__ entry, which mounts a fresh ChatView and kicks
+    // off a new backend thread — the root of the __default__ ↔ new-GUID flicker.
+    const isPendingResolution =
+      Array.from(resolvingRef.current.values()).some(
+        v => v.workspaceId === workspaceId && v.newThreadId === threadId
+      ) ||
+      resolvingRef.current.has(`${workspaceId}-${threadId}`);
     if (!isPendingResolution) {
       const cached = queryClient.getQueryData(queryKeys.workspaces.detail(workspaceId)) as Record<string, unknown> | undefined;
       const wsName = (cached?.name as string) || state?.workspaceName || '';
@@ -175,10 +182,13 @@ function ChatAgent(): React.ReactElement | null {
     }
   }
 
-  // Promote to MRU and update metadata (workspace name, taskId) on subsequent renders
+  // Promote to MRU and update metadata (workspace name, taskId) on subsequent renders.
+  // Only the target-side check is needed here: this effect is dep-gated on [threadId,
+  // workspaceId], so it re-fires exactly once after navigate() lands on the new threadId.
+  // The source-side (__default__) branch never re-fires this effect, so it doesn't need
+  // the symmetric check the set-during-render block above has.
   useEffect(() => {
     if (!threadId || !workspaceId) return;
-    // Don't touch if this threadId is pending resolution from an existing entry
     const isPendingResolution = Array.from(resolvingRef.current.values()).some(
       v => v.workspaceId === workspaceId && v.newThreadId === threadId
     );
@@ -306,8 +316,24 @@ function ChatAgent(): React.ReactElement | null {
   // Cached ChatView instances — always rendered, visibility toggled via display
   const chatViews = cache.entries.map(entry => {
     const pendingResolution = resolvingRef.current.get(`${entry.workspaceId}-${entry.threadId}`);
+    // After cache.updateKey renames an entry from oldTid → newTid, its lookup key is
+    // the new one — so the direct pendingResolution above will miss it. Detect the
+    // symmetric case (entry was renamed FROM the URL's threadId) so the renamed entry
+    // stays active during the bridge window until navigate() commits.
+    const wasJustRenamedFromUrl = threadId
+      ? Array.from(resolvingRef.current.entries()).some(
+          ([oldKey, v]) =>
+            v.workspaceId === entry.workspaceId
+            && v.newThreadId === entry.threadId
+            && oldKey === `${workspaceId}-${threadId}`,
+        )
+      : false;
     const isEntryActive = entry.workspaceId === workspaceId
-      && (entry.threadId === threadId || (!!pendingResolution && pendingResolution.newThreadId === threadId))
+      && (
+        entry.threadId === threadId
+        || (!!pendingResolution && pendingResolution.newThreadId === threadId)
+        || wasJustRenamedFromUrl
+      )
       && !!threadId && !accessDenied;
     return (
       <div
