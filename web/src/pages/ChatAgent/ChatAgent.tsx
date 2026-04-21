@@ -327,7 +327,7 @@ function ChatAgent(): React.ReactElement | null {
     // the new one — so the direct pendingResolution above will miss it. Detect the
     // symmetric case (entry was renamed FROM the URL's threadId) so the renamed entry
     // stays active during the bridge window until navigate() commits.
-    const wasJustRenamedFromUrl = threadId
+    const wasJustRenamedFromUrl = threadId && workspaceId
       ? Array.from(resolvingRef.current.entries()).some(
           ([oldKey, v]) =>
             v.workspaceId === entry.workspaceId
