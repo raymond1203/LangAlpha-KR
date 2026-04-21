@@ -20,9 +20,22 @@ class TodoStatus(str, Enum):
 class TodoItem(BaseModel):
     """Individual todo item with tracking metadata."""
 
-    content: str = Field(description="Description of the task (e.g., 'Run the build')")
-    activeForm: str = Field(description="Present continuous form (e.g., 'Running the build')")
-    status: TodoStatus = Field(description="Current status of the todo")
+    content: str = Field(
+        min_length=1,
+        description=(
+            "Imperative task description. Example: 'Fetch Q3 earnings for AAPL'"
+        ),
+    )
+    activeForm: str = Field(
+        min_length=1,
+        description=(
+            "Present-continuous form shown while the task runs. "
+            "Example: 'Fetching Q3 earnings for AAPL'"
+        ),
+    )
+    status: TodoStatus = Field(
+        description="One of: pending, in_progress, completed"
+    )
     id: Optional[str] = Field(default=None, description="Unique identifier for the todo")
     created_at: datetime = Field(default_factory=datetime.now, description="When the todo was created")
     updated_at: datetime = Field(default_factory=datetime.now, description="When the todo was last updated")
