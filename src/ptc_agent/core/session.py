@@ -377,8 +377,12 @@ class SessionManager:
         # replacement in place instead of evicting it.
         if cls._sessions.get(conversation_id) is session:
             cls._sessions.pop(conversation_id, None)
-
-        logger.info("Session removed", conversation_id=conversation_id)
+            logger.info("Session removed", conversation_id=conversation_id)
+        else:
+            logger.info(
+                "Session cleaned up (replacement retained)",
+                conversation_id=conversation_id,
+            )
 
     @classmethod
     async def cleanup_all(cls) -> None:

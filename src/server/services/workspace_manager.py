@@ -176,10 +176,22 @@ class WorkspaceManager:
         """Record that a sync was performed for this workspace."""
         self._last_sync_at[workspace_id] = time.monotonic()
 
-    async def _clear_session(self, workspace_id: str) -> None:
+    async def _clear_session(
+        self,
+        workspace_id: str,
+        *,
+        evict_session: "Session | None" = None,
+    ) -> None:
         """Remove all traces of a broken session and proactively release its
         resources (MCP connections + provider aiohttp client) instead of
         waiting for GC.
+
+        ``cleanup_session`` awaits ``session.cleanup()``, so a concurrent
+        request can install a replacement in ``self._sessions[workspace_id]``
+        while we're yielded. When the caller passes the session object it
+        intended to evict, we identity-check before popping — so the
+        replacement survives. Callers inside the workspace lock can omit
+        ``evict_session`` (the lock already prevents the race).
 
         Safe to call when the workspace is not present — idempotent.
         """
@@ -190,7 +202,8 @@ class WorkspaceManager:
                 "Error during session cleanup (continuing)",
                 extra={"workspace_id": workspace_id, "error": str(e)},
             )
-        self._sessions.pop(workspace_id, None)
+        if evict_session is None or self._sessions.get(workspace_id) is evict_session:
+            self._sessions.pop(workspace_id, None)
         self._pending_lazy_sync.discard(workspace_id)
 
     async def push_vault_secrets(
@@ -1161,8 +1174,10 @@ class WorkspaceManager:
                 # installed a replacement session while we were running
                 # Phase 2 outside the lock. Clearing that healthy session
                 # would tear down its MCP+provider and double-spawn Daytona.
+                # Pass evict_session so the pop inside _clear_session is
+                # also identity-guarded across its own await boundary.
                 if self._sessions.get(workspace_id) is session:
-                    await self._clear_session(workspace_id)
+                    await self._clear_session(workspace_id, evict_session=session)
 
                 async with self._acquire_workspace_lock(workspace_id):
                     # Guard: another request may have recovered while we
@@ -1188,8 +1203,10 @@ class WorkspaceManager:
                     # observed has_failed() in its own Phase 1, cleared this
                     # session, and installed a replacement. Clearing again
                     # would tear down the healthy replacement's MCP+provider.
+                    # Pass evict_session so the pop inside _clear_session is
+                    # also identity-guarded across its own await boundary.
                     if self._sessions.get(workspace_id) is session:
-                        await self._clear_session(workspace_id)
+                        await self._clear_session(workspace_id, evict_session=session)
                     raise
                 logger.warning(
                     f"Phase 2 sync transient for workspace {workspace_id} "
