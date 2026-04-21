@@ -4,9 +4,8 @@ This module provides data structures for tracking agent todos throughout workflo
 Follows Anthropic's Claude Code best practices for todo management.
 """
 
-from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -18,7 +17,7 @@ class TodoStatus(str, Enum):
 
 
 class TodoItem(BaseModel):
-    """Individual todo item with tracking metadata."""
+    """Individual todo item passed by the agent."""
 
     content: str = Field(
         min_length=1,
@@ -36,9 +35,6 @@ class TodoItem(BaseModel):
     status: TodoStatus = Field(
         description="One of: pending, in_progress, completed"
     )
-    id: Optional[str] = Field(default=None, description="Unique identifier for the todo")
-    created_at: datetime = Field(default_factory=datetime.now, description="When the todo was created")
-    updated_at: datetime = Field(default_factory=datetime.now, description="When the todo was last updated")
 
     @field_validator("status", mode="before")
     @classmethod
@@ -47,7 +43,6 @@ class TodoItem(BaseModel):
         if isinstance(v, TodoStatus):
             return v
         if isinstance(v, str):
-            # Handle string values
             status_map = {
                 "pending": TodoStatus.PENDING,
                 "in_progress": TodoStatus.IN_PROGRESS,
@@ -55,26 +50,6 @@ class TodoItem(BaseModel):
             }
             return status_map.get(v.lower(), v)
         return v
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary format for tool calls."""
-        return {
-            "content": self.content,
-            "activeForm": self.activeForm,
-            "status": self.status.value if isinstance(self.status, TodoStatus) else self.status,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TodoItem":
-        """Create TodoItem from dictionary."""
-        return cls(
-            content=data.get("content", ""),
-            activeForm=data.get("activeForm", ""),
-            status=data.get("status", "pending"),
-            id=data.get("id"),
-            created_at=data.get("created_at", datetime.now()),
-            updated_at=data.get("updated_at", datetime.now()),
-        )
 
 
 def validate_single_in_progress(todos: List[TodoItem]) -> tuple[bool, List[str]]:
