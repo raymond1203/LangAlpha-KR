@@ -169,6 +169,25 @@ mcp:
       args: ["mcp"]
       env: {}
 
+    # X (Twitter) API MCP server — read-only post search, user lookup, tweet lookup, thread fetch.
+    # Bearer token flows as a per-call tool argument sourced from the workspace vault
+    # (`from vault import get; get("X_BEARER_TOKEN")`), not from the MCP subprocess env.
+    # Host-env X_BEARER_TOKEN acts as a single-tenant fallback if the arg is omitted.
+    - name: "x_api"
+      enabled: true
+      description: "Search X (Twitter) posts and fetch users, tweets, and reply threads. Read-only."
+      instruction: "Use for X/Twitter search and thread retrieval. Tools: search_posts, search_all_posts, get_conversation, get_user_by_username, get_tweet_by_id. For a single known X post URL, prefer web_fetch — reserve these tools for search, aggregation, and thread traversal. Every call needs bearer_token from the workspace vault: `from vault import get; token = get(\"X_BEARER_TOKEN\")`. Prefer search_posts by default; reach for search_all_posts only when the user needs posts older than ~7 days. See skills/x-api/ for usage and errors."
+      tool_exposure_mode: "summary"
+      transport: "stdio"
+      command: "uv"
+      args: ["run", "python", "mcp_servers/x_mcp_server.py"]
+      # env intentionally empty: in multi-tenant deployments the token MUST come
+      # from the per-workspace vault, not a shared host env. Single-tenant OSS
+      # users who want the convenience of a host-env fallback can uncomment:
+      #   X_BEARER_TOKEN: "${X_BEARER_TOKEN}"
+      # This will make every workspace's MCP subprocess share the same host token.
+      env: {}
+
     # Not enabled in Porduction or maintained by us
     - name: "alphavantage"
       enabled: false
