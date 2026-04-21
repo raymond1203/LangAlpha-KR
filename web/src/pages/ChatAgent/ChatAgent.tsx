@@ -27,6 +27,11 @@ const desktopFadeVariants = {
 const WorkspaceGallery = React.lazy(() => import('./components/WorkspaceGallery'));
 const ThreadGallery = React.lazy(() => import('./components/ThreadGallery'));
 
+// Cache key format used by useChatViewCache — `${workspaceId}-${threadId}`.
+// Only needed by cache.updateKey() calls; the resolvingRef below is keyed by
+// workspaceId alone (one __default__→real resolution per workspace at a time).
+const resolvingKey = (wsId: string, tid: string) => `${wsId}-${tid}`;
+
 interface LocationState {
   workspaceId?: string;
   workspaceName?: string;
@@ -157,26 +162,25 @@ function ChatAgent(): React.ReactElement | null {
 
   const queryClient = useQueryClient();
 
-  // Track in-progress __default__ → real threadId resolutions.
-  // Bridges the gap between async cache.updateKey() and immediate navigate().
-  const resolvingRef = useRef(new Map<string, { workspaceId: string; newThreadId: string }>());
-  const resolvingKey = (wsId: string, tid: string) => `${wsId}-${tid}`;
+  // Track in-progress __default__ → real threadId resolutions. Keyed by workspaceId:
+  // at most one such resolution can be in flight per workspace (a fresh __default__
+  // can't be created while the previous one is still bridging, because the source-side
+  // check below blocks it). Bridges the gap between async cache.updateKey() and
+  // immediate navigate().
+  const resolvingRef = useRef(new Map<string, { oldThreadId: string; newThreadId: string }>());
 
   // Ensure cache entry exists before first paint so chatViews is never empty
   // when threadId is set (same setState-during-render pattern as setResolvedWorkspaceId above).
   if (threadId && workspaceId && !cache.entries.some(e => e.workspaceId === workspaceId && e.threadId === threadId)) {
     // Don't create a duplicate entry if a resolution touches this threadId — either as
-    // the target (we're about to rename into it) or as the source (we just renamed away
-    // from it and the URL hasn't caught up yet). Without the source-side check, the
+    // the target (URL is ahead, cache hasn't renamed yet) or as the source (cache is
+    // ahead, URL still points at the old __default__). Without this check, the
     // intermediate render between cache.updateKey committing and navigate() landing
     // spawns a duplicate __default__ entry, which mounts a fresh ChatView and kicks
     // off a new backend thread — the root of the __default__ ↔ new-GUID flicker.
-    const isPendingResolution =
-      Array.from(resolvingRef.current.values()).some(
-        v => v.workspaceId === workspaceId && v.newThreadId === threadId
-      ) ||
-      resolvingRef.current.has(resolvingKey(workspaceId, threadId));
-    if (!isPendingResolution) {
+    const pending = resolvingRef.current.get(workspaceId);
+    const isBridging = !!pending && (pending.oldThreadId === threadId || pending.newThreadId === threadId);
+    if (!isBridging) {
       const cached = queryClient.getQueryData(queryKeys.workspaces.detail(workspaceId)) as Record<string, unknown> | undefined;
       const wsName = (cached?.name as string) || state?.workspaceName || '';
       cache.touch({ workspaceId, threadId, workspaceName: wsName, initialTaskId: taskId });
@@ -186,14 +190,11 @@ function ChatAgent(): React.ReactElement | null {
   // Promote to MRU and update metadata (workspace name, taskId) on subsequent renders.
   // Only the target-side check is needed here: this effect is dep-gated on [threadId,
   // workspaceId], so it re-fires exactly once after navigate() lands on the new threadId.
-  // The source-side (__default__) branch never re-fires this effect, so it doesn't need
-  // the symmetric check the set-during-render block above has.
+  // Before that fire, the set-during-render block above already handles the bridge window.
   useEffect(() => {
     if (!threadId || !workspaceId) return;
-    const isPendingResolution = Array.from(resolvingRef.current.values()).some(
-      v => v.workspaceId === workspaceId && v.newThreadId === threadId
-    );
-    if (isPendingResolution) return;
+    const pending = resolvingRef.current.get(workspaceId);
+    if (pending && pending.newThreadId === threadId) return;
     const cached = queryClient.getQueryData(queryKeys.workspaces.detail(workspaceId)) as Record<string, unknown> | undefined;
     const wsName = (cached?.name as string) || state?.workspaceName || '';
     cache.touch({ workspaceId, threadId, workspaceName: wsName, initialTaskId: taskId });
@@ -207,11 +208,11 @@ function ChatAgent(): React.ReactElement | null {
   useEffect(() => {
     if (resolvingRef.current.size === 0) return;
     const resolved: string[] = [];
-    for (const [oldKey, { workspaceId: wsId, newThreadId }] of resolvingRef.current) {
+    for (const [wsId, { oldThreadId, newThreadId }] of resolvingRef.current) {
       const targetExists = cache.entries.some(e => e.workspaceId === wsId && e.threadId === newThreadId);
-      const sourceExists = cache.entries.some(e => e.key === oldKey);
+      const sourceExists = cache.entries.some(e => e.workspaceId === wsId && e.threadId === oldThreadId);
       if (targetExists || !sourceExists) {
-        resolved.push(oldKey);
+        resolved.push(wsId);
       }
     }
     for (const key of resolved) {
@@ -322,26 +323,19 @@ function ChatAgent(): React.ReactElement | null {
 
   // Cached ChatView instances — always rendered, visibility toggled via display
   const chatViews = cache.entries.map(entry => {
-    const pendingResolution = resolvingRef.current.get(resolvingKey(entry.workspaceId, entry.threadId));
-    // After cache.updateKey renames an entry from oldTid → newTid, its lookup key is
-    // the new one — so the direct pendingResolution above will miss it. Detect the
-    // symmetric case (entry was renamed FROM the URL's threadId) so the renamed entry
-    // stays active during the bridge window until navigate() commits.
-    const wasJustRenamedFromUrl = threadId && workspaceId
-      ? Array.from(resolvingRef.current.entries()).some(
-          ([oldKey, v]) =>
-            v.workspaceId === entry.workspaceId
-            && v.newThreadId === entry.threadId
-            && oldKey === resolvingKey(workspaceId, threadId),
-        )
-      : false;
+    const pending = resolvingRef.current.get(entry.workspaceId);
+    // Bridge window: cache.updateKey and navigate commit in separate renders.
+    // In the intermediate render, either the cache is ahead (entry.threadId is new,
+    // URL still old) or the URL is ahead (URL is new, entry.threadId still old).
+    // Both symmetric branches keep the entry active until both commit.
+    const isBridging = !!pending && (
+      (pending.oldThreadId === entry.threadId && pending.newThreadId === threadId)
+      || (pending.newThreadId === entry.threadId && pending.oldThreadId === threadId)
+    );
     const isEntryActive = entry.workspaceId === workspaceId
-      && (
-        entry.threadId === threadId
-        || (!!pendingResolution && pendingResolution.newThreadId === threadId)
-        || wasJustRenamedFromUrl
-      )
-      && !!threadId && !accessDenied;
+      && (entry.threadId === threadId || isBridging)
+      && !!threadId
+      && !accessDenied;
     return (
       <div
         key={entry.instanceId}
@@ -359,10 +353,10 @@ function ChatAgent(): React.ReactElement | null {
           workspaceName={entry.workspaceName}
           isActive={isEntryActive}
           onThreadResolved={(oldTid, newTid) => {
-            resolvingRef.current.set(
-              resolvingKey(entry.workspaceId, oldTid),
-              { workspaceId: entry.workspaceId, newThreadId: newTid },
-            );
+            if (import.meta.env.DEV && resolvingRef.current.has(entry.workspaceId)) {
+              console.warn('[ChatAgent] overlapping thread resolution for workspace', entry.workspaceId);
+            }
+            resolvingRef.current.set(entry.workspaceId, { oldThreadId: oldTid, newThreadId: newTid });
             cache.updateKey(
               resolvingKey(entry.workspaceId, oldTid),
               resolvingKey(entry.workspaceId, newTid),
