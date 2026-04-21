@@ -8,10 +8,11 @@ This module defines pure data classes for core configuration:
 - Logging settings
 """
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Default security lists — used by SecurityConfig defaults and create_default_security_config()
 DEFAULT_ALLOWED_IMPORTS = [
@@ -61,6 +62,42 @@ class SecurityConfig(BaseModel):
     )
 
 
+class VaultBlueprint(BaseModel):
+    """Credential an MCP server expects users to set in the workspace vault.
+
+    Pure metadata — never touches actual values. Surfaced via
+    GET /api/v1/workspaces/{id}/vault/blueprints as a 'recommended but not set'
+    list in the UI's Vault tab, so users don't have to read docs to learn the
+    exact secret name for each integration.
+    """
+
+    # Same regex as CreateSecretRequest in src/server/app/vault.py:37.
+    # Blueprint name becomes a vault key, so it must satisfy the same rule.
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$", max_length=64)
+    label: str = Field(..., min_length=1, max_length=80)
+    # max_length matches CreateSecretRequest.description in src/server/app/vault.py
+    # so that pre-filling the add-secret form from a blueprint never produces a
+    # description that the create endpoint would reject with a 422.
+    description: str = Field("", max_length=256)
+    docs_url: str | None = None
+    # Optional client-side hint for the secret *value*. Stored as a string (not
+    # compiled at runtime on the value) because it ships to the frontend for
+    # validation. The backend never runs it against values — keeps secrets opaque.
+    regex: str | None = None
+
+    @field_validator("regex")
+    @classmethod
+    def _validate_regex_compiles(cls, v: str | None) -> str | None:
+        """Fail-fast at config-load time if an operator typos the pattern."""
+        if v is None:
+            return v
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"vault_blueprint regex is not a valid pattern: {exc}")
+        return v
+
+
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
@@ -74,6 +111,7 @@ class MCPServerConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     url: str | None = None  # For SSE/HTTP transports
     tool_exposure_mode: Literal["summary", "detailed"] | None = None  # Per-server override
+    vault_blueprints: list[VaultBlueprint] = Field(default_factory=list)
 
 
 class MCPConfig(BaseModel):
