@@ -18,7 +18,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUser } from '@/hooks/useUser';
 import { sendChatMessageStream, replayThreadHistory, getWorkflowStatus, reconnectToWorkflowStream, sendHitlResponse, streamSubagentTaskEvents, fetchThreadTurns, submitFeedback, removeFeedback, getThreadFeedback, watchThread } from '../utils/api';
-import { buildRateLimitError, type StructuredError } from '@/utils/rateLimitError';
+import { buildRateLimitError, isUpstreamHint, type StructuredError } from '@/utils/rateLimitError';
 import { getStoredThreadId, setStoredThreadId } from './utils/threadStorage';
 export { removeStoredThreadId } from './utils/threadStorage';
 import { createUserMessage, createAssistantMessage, createNotificationMessage, appendMessage, updateMessage, type AttachmentMeta } from './utils/messageHelpers';
@@ -2918,13 +2918,7 @@ export function useChatMessages(
                 kind,
                 statusCode: typeof event.status_code === 'number' ? event.status_code : undefined,
                 hints: Array.isArray(event.hints)
-                  ? (event.hints.filter(
-                      (h: unknown) =>
-                        h === 'api_key'
-                        || h === 'model_access'
-                        || h === 'provider_status'
-                        || h === 'try_another_model',
-                    ) as StructuredError['hints'])
+                  ? (event.hints.filter(isUpstreamHint) as StructuredError['hints'])
                   : undefined,
               }
             : undefined;
@@ -3694,28 +3688,35 @@ export function useChatMessages(
           } else {
             console.error('Error sending message:', err);
             // Build structured error with link when backend provides one
+            // (byok_key_required, oauth_required, 403, ...). When a banner
+            // with a CTA renders, drop the optimistic assistant bubble so
+            // the transcript stays clean — matches the 429 pattern and the
+            // `internal` SSE error pattern. Leaving a content-less "Failed
+            // to send message" bubble under the banner looks broken.
             const errorInfo = errObj.errorInfo as Record<string, unknown> | undefined;
             if (errorInfo?.link) {
               setMessageError({
                 message: (errorInfo.message as string) || (err as Error).message || 'An error occurred.',
                 link: errorInfo.link as { url: string; label: string },
               });
+              setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
             } else if (errObj.status === 403) {
               setMessageError({
                 message: (err as Error).message || 'Access denied.',
                 link: { url: '/setup/method', label: 'Configure providers' },
               });
+              setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
             } else {
               setMessageError((err as Error).message || 'Failed to send message');
+              setMessages((prev) =>
+                updateMessage(prev, assistantMessageId, (msg) => ({
+                  ...msg,
+                  content: msg.content || 'Failed to send message. Please try again.',
+                  isStreaming: false,
+                  error: true,
+                }))
+              );
             }
-            setMessages((prev) =>
-              updateMessage(prev,assistantMessageId, (msg) => ({
-                ...msg,
-                content: msg.content || 'Failed to send message. Please try again.',
-                isStreaming: false,
-                error: true,
-              }))
-            );
           }
         } finally {
           if (!wasDisconnected && !wasInterruptedRef.current) {

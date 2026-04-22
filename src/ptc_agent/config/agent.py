@@ -483,17 +483,10 @@ class AgentConfig(BaseModel):
         # custom model without a resolvable BYOK key, or because the name
         # is a typo. Raise a neutral error instead of the generic factory one.
         from src.llms import create_llm
-        from src.llms.llm import LLM as LLMFactory
+        from src.llms.llm import ensure_model_in_manifest
 
-        name = self.llm.name
-        if LLMFactory.get_model_config().get_model_config(name) is None:
-            raise ValueError(
-                f"Model '{name}' is not defined in models.json. "
-                "If this is a custom model, configure it in Settings with a valid API key. "
-                "If it's a built-in, check for typos."
-            )
-
-        return create_llm(name)
+        ensure_model_in_manifest(self.llm.name)
+        return create_llm(self.llm.name)
 
     def to_core_config(self) -> CoreConfig:
         """Convert to CoreConfig for use with SessionManager.

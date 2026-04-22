@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import Markdown from './Markdown';
 import { useAnimatedText } from '@/components/ui/animated-text';
 import { parseErrorMessage, type ParsedError } from '../utils/parseErrorMessage';
-import type { StructuredError } from '@/utils/rateLimitError';
+import { UPSTREAM_HINT_I18N_KEY, type StructuredError } from '@/utils/rateLimitError';
 
 interface TextMessageContentProps {
   content: string;
@@ -112,12 +112,6 @@ function StructuredErrorDisplay({ err, fallbackText }: StructuredErrorDisplayPro
   const headline = err.statusCode
     ? t('chat.errorUpstreamHeadlineStatus', { status: err.statusCode })
     : t('chat.errorUpstreamHeadline');
-  const hintKeyMap: Record<string, string> = {
-    api_key: 'chat.errorHintApiKey',
-    model_access: 'chat.errorHintModelAccess',
-    provider_status: 'chat.errorHintProviderStatus',
-    try_another_model: 'chat.errorHintTryAnotherModel',
-  };
   const body = err.message || fallbackText;
   return (
     <div
@@ -141,7 +135,7 @@ function StructuredErrorDisplay({ err, fallbackText }: StructuredErrorDisplayPro
         {err.hints && err.hints.length > 0 && (
           <ul className="mt-1 list-disc pl-4 flex flex-col gap-0.5 text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
             {err.hints.map((h) => (
-              <li key={h}>{t(hintKeyMap[h] ?? h)}</li>
+              <li key={h}>{t(UPSTREAM_HINT_I18N_KEY[h] ?? h)}</li>
             ))}
           </ul>
         )}

@@ -29,7 +29,7 @@ import { WorkspaceProvider } from '../contexts/WorkspaceContext';
 import SubagentStatusBar from './SubagentStatusBar';
 import TodoDrawer from './TodoDrawer';
 import { parseErrorMessage } from '../utils/parseErrorMessage';
-import type { StructuredError } from '@/utils/rateLimitError';
+import { UPSTREAM_HINT_I18N_KEY, type StructuredError } from '@/utils/rateLimitError';
 import { motion, AnimatePresence, type PanInfo } from 'framer-motion';
 import { MobileBottomSheet } from '@/components/ui/mobile-bottom-sheet';
 
@@ -1999,12 +1999,6 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                           : isInternal
                             ? t('chat.errorInternalHeadline')
                             : null;
-                        const hintKeyMap: Record<string, string> = {
-                          api_key: 'chat.errorHintApiKey',
-                          model_access: 'chat.errorHintModelAccess',
-                          provider_status: 'chat.errorHintProviderStatus',
-                          try_another_model: 'chat.errorHintTryAnotherModel',
-                        };
                         const hasHints = isUpstream && err.hints && err.hints.length > 0;
                         return (
                           <div
@@ -2040,7 +2034,7 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
                               {hasHints && (
                                 <ul className="mt-1 list-disc pl-4 flex flex-col gap-0.5 text-xs opacity-90">
                                   {err.hints!.map((h) => (
-                                    <li key={h}>{t(hintKeyMap[h] ?? h)}</li>
+                                    <li key={h}>{t(UPSTREAM_HINT_I18N_KEY[h] ?? h)}</li>
                                   ))}
                                 </ul>
                               )}

@@ -80,10 +80,21 @@ _UPSTREAM_MODULE_PREFIXES: tuple[str, ...] = (
 
 _STATUS_CODE_RE = re.compile(r"\b([45]\d{2})\b")
 
+# Strip basic-auth credentials out of any URL that leaks into an exception
+# message (httpx will include the request URL in ``str(exc)``; a user who
+# configured a BYOK base_url as ``https://user:pass@host`` would otherwise
+# ship that secret to the SSE client and the replay log).
+_URL_USERINFO_RE = re.compile(r"(https?://)[^@/\s]+@")
+
 
 def _parse_status_from_message(text: str) -> Optional[int]:
     match = _STATUS_CODE_RE.search(text)
     return int(match.group(1)) if match else None
+
+
+def _sanitize_error_text(text: str) -> str:
+    """Scrub credentials out of the raw exception text before we send it."""
+    return _URL_USERINFO_RE.sub(r"\1", text)
 
 
 def classify_stream_exception(exc: BaseException) -> Dict[str, Any]:
@@ -1534,7 +1545,7 @@ class WorkflowStreamHandler:
         """
         data: Dict[str, Any] = {
             "thread_id": self.thread_id,
-            "error": error_message,
+            "error": _sanitize_error_text(error_message),
             "message": "An error occurred during processing",
         }
         if exc is not None:

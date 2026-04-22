@@ -25,6 +25,34 @@ export type UpstreamErrorHint =
   | 'provider_status'
   | 'try_another_model';
 
+/** The allowlist used to sanitize ``hints`` coming off the SSE wire. Any hint
+ *  not in this set is dropped — protects renderers from rendering unknown
+ *  strings as i18n keys. */
+export const UPSTREAM_HINT_KEYS: readonly UpstreamErrorHint[] = [
+  'api_key',
+  'model_access',
+  'provider_status',
+  'try_another_model',
+];
+
+/** i18n key lookup for each hint. Keep renderers in sync by importing this
+ *  rather than re-declaring the map at each call site. */
+export const UPSTREAM_HINT_I18N_KEY: Record<UpstreamErrorHint, string> = {
+  api_key: 'chat.errorHintApiKey',
+  model_access: 'chat.errorHintModelAccess',
+  provider_status: 'chat.errorHintProviderStatus',
+  try_another_model: 'chat.errorHintTryAnotherModel',
+};
+
+export function isUpstreamHint(value: unknown): value is UpstreamErrorHint {
+  return (
+    value === 'api_key'
+    || value === 'model_access'
+    || value === 'provider_status'
+    || value === 'try_another_model'
+  );
+}
+
 export interface StructuredError {
   message: string;
   link?: { url: string; label: string };

@@ -35,9 +35,14 @@ async def _resolve_custom_model_byok(
     Resolve BYOK key + base_url for a user-defined custom model.
 
     Key lookup order:
-    1. model name as a custom sub-provider (model and provider share a name)
-    2. custom model's provider field as a custom sub-provider
-    3. parent of the custom model's provider (system provider)
+    1. Model name as a custom sub-provider (model and provider share a name).
+    2. Custom model's provider field as a custom sub-provider.
+    3. System provider fan-out: the provider's own slug, then its parent, then
+       every non-platform sibling variant of the parent. The sibling step
+       handles the mirror case where the custom model is tagged with the
+       parent slug (e.g. ``moonshot``) but the user only configured a variant
+       (e.g. ``moonshot-coding``) so the key lives under that variant.
+       Platform-only variants are excluded (BYOK keys are never stored there).
     """
     from src.server.database.api_keys import get_byok_config_for_provider
 
@@ -124,7 +129,10 @@ async def resolve_byok_llm_client(
 ):
     """
     If BYOK is active, build an LLM client for ``model_name``. Returns None
-    if BYOK isn't applicable or no key is configured.
+    if BYOK isn't applicable or no key is configured. ``resolve_llm_config``
+    converts a None result into a user-facing ``byok_key_required``
+    HTTPException for custom models on the main-model path — this function
+    stays at debug log level so the user sees one error, not two.
 
     - System model: look up BYOK key under the model's parent provider,
       resolving variants to the parent's endpoint.
@@ -156,9 +164,10 @@ async def resolve_byok_llm_client(
             user_id, model_name, config_entry, mc, _pref_cache=_pref_cache,
         )
         if not byok_config:
-            # Main path raises a user-facing HTTPException; fallback path
-            # logs its own warning. Keep this at debug so there's at most
-            # one log line per event.
+            # ``resolve_llm_config`` converts this None into an HTTPException
+            # for the main-model path, and logs its own warning for custom
+            # fallback models. Keep this at debug so the chat-level error
+            # (with CTA) is the single user-visible signal.
             logger.debug(
                 f"[CHAT] No BYOK key found for custom model={model_name} "
                 f"provider={custom_config['provider']}."
