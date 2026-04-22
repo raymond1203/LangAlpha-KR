@@ -18,6 +18,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, cast
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
@@ -46,6 +47,72 @@ SSE_KEEPALIVE_INTERVAL = get_sse_keepalive_interval()  # seconds
 SSE_EVENT_LOG_ENABLED = is_sse_event_log_enabled()
 
 MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT = get_merged_chunk_max_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Stream error classification
+# ---------------------------------------------------------------------------
+#
+# Chat-stream failures fall into two buckets and the user-facing remedy is
+# different for each:
+#
+#   - ``upstream``  — the LLM provider we called returned an error (their
+#                     server 500'd, the key is rejected, rate-limited, etc).
+#                     User should check their key / plan / provider status.
+#   - ``internal``  — our own pipeline failed (middleware bug, our DB, a
+#                     schema mismatch in the payload we built). User can't
+#                     do anything; we should log loudly and show a generic
+#                     retry message.
+#
+# Classification is a module-prefix check with exception-chain walking — any
+# exception in the chain sourced from a known provider SDK flips the whole
+# failure to ``upstream``.
+
+_UPSTREAM_MODULE_PREFIXES: tuple[str, ...] = (
+    "anthropic",
+    "openai",
+    "google.api_core",
+    "google.genai",
+    "google.generativeai",
+    "cohere",
+    "httpx",
+)
+
+_STATUS_CODE_RE = re.compile(r"\b([45]\d{2})\b")
+
+
+def _parse_status_from_message(text: str) -> Optional[int]:
+    match = _STATUS_CODE_RE.search(text)
+    return int(match.group(1)) if match else None
+
+
+def classify_stream_exception(exc: BaseException) -> Dict[str, Any]:
+    """Classify a chat-stream exception as ``upstream`` or ``internal``.
+
+    Walks ``__cause__`` / ``__context__`` so a wrapped provider error (e.g.
+    a LangChain exception caused by ``anthropic.InternalServerError``) is
+    still recognized as upstream. Returns a dict with ``kind``,
+    ``status_code`` (when carried on the exception or parseable from its
+    message), and ``provider_module`` (the matched SDK prefix, or None).
+    """
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        module = getattr(type(current), "__module__", "") or ""
+        for prefix in _UPSTREAM_MODULE_PREFIXES:
+            if module == prefix or module.startswith(prefix + "."):
+                status = getattr(current, "status_code", None)
+                if not isinstance(status, int):
+                    status = _parse_status_from_message(str(current))
+                return {
+                    "kind": "upstream",
+                    "status_code": status if isinstance(status, int) else None,
+                    "provider_module": prefix,
+                }
+        current = current.__cause__ or current.__context__
+
+    return {"kind": "internal", "status_code": None, "provider_module": None}
 
 
 class StreamEventAccumulator:
@@ -774,7 +841,7 @@ class WorkflowStreamHandler:
             raise
         except Exception as e:
             logger.exception(f"Error in stream generator for thread_id={self.thread_id}: {e}")
-            yield self.format_error_event(str(e))
+            yield self.format_error_event(str(e), exc=e)
             raise  # Re-raise so background_task_manager calls _mark_failed()
         finally:
             # Stop keepalive task
@@ -1443,24 +1510,49 @@ class WorkflowStreamHandler:
 
         return result
 
-    def format_error_event(self, error_message: str) -> str:
-        """
-        Format an error event as SSE string.
+    def format_error_event(
+        self,
+        error_message: str,
+        *,
+        exc: Optional[BaseException] = None,
+    ) -> str:
+        """Format an error event as SSE string.
+
+        When ``exc`` is passed the event carries ``error_kind`` (``upstream``
+        or ``internal``), ``status_code`` (when available), and ``hints`` for
+        the frontend to render user-actionable guidance. The legacy ``error``
+        and ``message`` fields stay so older clients keep working.
 
         Args:
-            error_message: Error message to send
+            error_message: Raw error text (usually ``str(exc)``).
+            exc: The exception itself — enables classification. Optional to
+                keep the legacy signature working for paths that only have
+                a prebuilt message.
 
         Returns:
-            SSE-formatted error event
+            SSE-formatted error event.
         """
-        return self._format_sse_event(
-            "error",
-            {
-                "thread_id": self.thread_id,
-                "error": error_message,
-                "message": "An error occurred during processing",
-            }
-        )
+        data: Dict[str, Any] = {
+            "thread_id": self.thread_id,
+            "error": error_message,
+            "message": "An error occurred during processing",
+        }
+        if exc is not None:
+            info = classify_stream_exception(exc)
+            data["error_kind"] = info["kind"]
+            if info["status_code"] is not None:
+                data["status_code"] = info["status_code"]
+            if info["provider_module"]:
+                data["provider_module"] = info["provider_module"]
+            if info["kind"] == "upstream":
+                # Order matters — frontend renders the hints as a list.
+                data["hints"] = [
+                    "api_key",
+                    "model_access",
+                    "provider_status",
+                    "try_another_model",
+                ]
+        return self._format_sse_event("error", data)
 
     def _format_credit_usage_event(
         self,
