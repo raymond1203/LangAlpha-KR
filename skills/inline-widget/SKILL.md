@@ -201,11 +201,13 @@ Use `data_files` to load data from sandbox files instead of inlining everything 
 3. Access data in the widget via `window.__WIDGET_DATA__["filename"]`
 
 ```python
-# Step 1: Generate data (small inline example via ExecuteCode)
+# Step 1: Generate data inline via ExecuteCode (small one-shot)
+execute_code("""
 import json
 data = {"labels": ["Q1", "Q2", "Q3"], "values": [100, 150, 200]}
 with open("work/<task_name>/chart_data.json", "w") as f:
     json.dump(data, f)
+""")
 
 # Step 2: Agent calls ShowWidget with data_files
 ShowWidget(
