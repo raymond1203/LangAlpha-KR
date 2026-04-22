@@ -32,7 +32,8 @@ def create_execute_bash_tool(backend: SandboxBackend, thread_id: str = "") -> Ba
     ) -> str:
         """Execute bash commands in a persistent shell session.
 
-        Use for: git, npm, docker, system commands, directory operations
+        Use for: git, npm, docker, system commands, directory operations,
+        and running Python scripts written to files.
         NOT for: reading/writing/editing files - use Read/Write/Edit tools instead
 
         Args:

@@ -27,9 +27,10 @@ def create_execute_code_tool(backend: SandboxBackend, mcp_registry: Any, thread_
         code: str,
         description: str | None = None,
     ) -> str:
-        """Execute Python code in the sandbox.
+        """Execute Python code directly.
 
-        Use for: Complex operations, data processing, MCP tool calls
+        Use for: disposable one-shots — quick MCP calls, small transforms, sanity checks.
+        Do not use for iterative or reusable code - write to a file and run via Bash instead.
         Import MCP tools: from tools.{server} import {tool}
 
         Args:
