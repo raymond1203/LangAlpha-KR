@@ -206,6 +206,17 @@ mcp:
       transport: "http"
       url: "https://mcp.alphavantage.co/mcp?apikey=${ALPHA_VANTAGE_API_KEY}"
 
+    # FORK: 한국 시장 MCP 서버
+    - name: "kr_price"
+      enabled: true
+      description: "Korean stock market data (KOSPI/KOSDAQ) — OHLCV, market cap, fundamentals (PER/PBR/DIV), ticker search via pykrx"
+      instruction: "Use for Korean stock prices, market cap, valuation multiples, and ticker lookup. Tickers are 6-digit numbers (e.g. 005930 for Samsung Electronics)."
+      tool_exposure_mode: "detailed"
+      transport: "stdio"
+      command: "uv"
+      args: ["run", "python", "mcp_servers/korean/kr_price_mcp_server.py"]
+      env: {}
+
   # Tool discovery settings
   tool_discovery_enabled: true
   lazy_load: true # Load tools on-demand
