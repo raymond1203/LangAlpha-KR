@@ -73,6 +73,13 @@ MERGED_STREAM_CHUNK_MAX_BYTES_DEFAULT = get_merged_chunk_max_bytes()
 # failure to ``upstream``. Keep in sync with the SDKs wired up in
 # ``src/llms/llm.py`` — missing a prefix means the user sees "our service
 # failed" for what's really a provider error.
+#
+# ``httpx`` is in this list as a last-resort catch: a bare httpx exception
+# that reaches the stream error handler has almost always come from the
+# LangChain call path (SDKs raise via httpx). If our own service calls
+# (credit checks, workspace manager) ever start raising bare httpx errors to
+# the stream path we should wrap them in a distinct exception type before
+# they bubble; classification is a UI hint, not a diagnostic source of truth.
 _UPSTREAM_MODULE_PREFIXES: tuple[str, ...] = (
     # Raw provider SDKs
     "anthropic",
