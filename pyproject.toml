@@ -55,7 +55,7 @@ dependencies = [
     "plotly",
     "alibabacloud_oss_v2",
     "aiofiles==24.1.0",
-    "setuptools<82",  # FORK: pykrx requires pkg_resources (removed in setuptools 82)
+    "setuptools",
     "rich>=14.2.0",
     "redis>=5.0.0",
     "langchain-qwq>=0.3.0",

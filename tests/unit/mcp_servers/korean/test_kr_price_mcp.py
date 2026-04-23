@@ -1,14 +1,18 @@
 """Tests for kr_price_mcp_server tools.
 
-Tests all tools using mocked pykrx responses: success, empty data, and exceptions.
+Tests all tools using mocked pykrx responses: success, empty data, NaN handling,
+and exceptions.
 """
 
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from mcp_servers.korean.kr_price_mcp_server import (
+    _ticker_cache,
+    _ticker_cache_ts,
     get_kr_fundamental,
     get_kr_market_cap,
     get_kr_market_snapshot,
@@ -20,6 +24,13 @@ from mcp_servers.korean.kr_price_mcp_server import (
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _clear_ticker_cache():
+    """Clear ticker cache before each test."""
+    _ticker_cache.clear()
+    _ticker_cache_ts.clear()
 
 
 @pytest.fixture
@@ -35,6 +46,24 @@ def mock_ohlcv_df():
             "거래량": [10000000, 12000000, 11000000],
             "거래대금": [750000000000, 912000000000, 841500000000],
             "등락률": [0.67, 0.66, 0.66],
+        },
+        index=dates,
+    )
+
+
+@pytest.fixture
+def mock_ohlcv_with_nan_df():
+    """OHLCV DataFrame with NaN values."""
+    dates = pd.DatetimeIndex(["2024-01-02", "2024-01-03"])
+    return pd.DataFrame(
+        {
+            "시가": [75000, np.nan],
+            "고가": [76000, np.nan],
+            "저가": [74500, np.nan],
+            "종가": [75500, np.nan],
+            "거래량": [10000000, 0],
+            "거래대금": [750000000000, np.nan],
+            "등락률": [0.67, np.nan],
         },
         index=dates,
     )
@@ -128,12 +157,15 @@ class TestGetKrStockOhlcv:
         )
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
-    def test_empty_data(self, mock_stock):
+    def test_empty_data_returns_success(self, mock_stock):
         mock_stock.get_market_ohlcv.return_value = pd.DataFrame()
 
         result = get_kr_stock_ohlcv("999999", "2024-01-02", "2024-01-04")
 
-        assert "error" in result
+        assert "error" not in result
+        assert result["data_type"] == "kr_stock_ohlcv"
+        assert result["data"] == []
+        assert result["count"] == 0
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
     def test_exception(self, mock_stock):
@@ -153,6 +185,22 @@ class TestGetKrStockOhlcv:
         mock_stock.get_market_ohlcv.assert_called_once_with(
             "20240101", "20240401", "005930", adjusted=True, freq="m"
         )
+
+    @patch("mcp_servers.korean.kr_price_mcp_server.stock")
+    def test_nan_values_handled(self, mock_stock, mock_ohlcv_with_nan_df):
+        mock_stock.get_market_ohlcv.return_value = mock_ohlcv_with_nan_df
+
+        result = get_kr_stock_ohlcv("005930", "2024-01-02", "2024-01-03")
+
+        assert result["count"] == 2
+        first = result["data"][0]
+        assert first["open"] == 75000
+
+        second = result["data"][1]
+        assert second["open"] is None
+        assert second["close"] is None
+        assert second["trading_value"] is None
+        assert second["change_pct"] is None
 
 
 # ============================================================================
@@ -175,12 +223,14 @@ class TestGetKrMarketCap:
         assert first["listed_shares"] == 5969782550
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
-    def test_empty_data(self, mock_stock):
+    def test_empty_data_returns_success(self, mock_stock):
         mock_stock.get_market_cap.return_value = pd.DataFrame()
 
         result = get_kr_market_cap("999999", "2024-01-02", "2024-01-03")
 
-        assert "error" in result
+        assert "error" not in result
+        assert result["data"] == []
+        assert result["count"] == 0
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
     def test_exception(self, mock_stock):
@@ -213,12 +263,14 @@ class TestGetKrFundamental:
         assert first["div"] == 1.71
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
-    def test_empty_data(self, mock_stock):
+    def test_empty_data_returns_success(self, mock_stock):
         mock_stock.get_market_fundamental.return_value = pd.DataFrame()
 
         result = get_kr_fundamental("999999", "2024-01-02", "2024-01-03")
 
-        assert "error" in result
+        assert "error" not in result
+        assert result["data"] == []
+        assert result["count"] == 0
 
 
 # ============================================================================
@@ -287,6 +339,28 @@ class TestSearchKrTicker:
 
         assert "error" in result
 
+    @patch("mcp_servers.korean.kr_price_mcp_server.stock")
+    def test_limit(self, mock_stock):
+        mock_stock.get_market_ticker_list.return_value = [
+            f"{i:06d}" for i in range(100)
+        ]
+        mock_stock.get_market_ticker_name.side_effect = lambda t: f"종목{t}"
+
+        result = search_kr_ticker("*", limit=10)
+
+        assert result["count"] == 10
+
+    @patch("mcp_servers.korean.kr_price_mcp_server.stock")
+    def test_cache_reuse(self, mock_stock):
+        mock_stock.get_market_ticker_list.return_value = ["005930"]
+        mock_stock.get_market_ticker_name.return_value = "삼성전자"
+
+        search_kr_ticker("삼성", market="KOSPI")
+        search_kr_ticker("카카오", market="KOSPI")
+
+        # get_market_ticker_list should be called only once due to cache
+        mock_stock.get_market_ticker_list.assert_called_once()
+
 
 # ============================================================================
 # get_kr_market_snapshot
@@ -309,12 +383,14 @@ class TestGetKrMarketSnapshot:
         assert first["close"] == 75500
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
-    def test_empty_market(self, mock_stock):
+    def test_empty_market_returns_success(self, mock_stock):
         mock_stock.get_market_ohlcv.return_value = pd.DataFrame()
 
         result = get_kr_market_snapshot("2024-12-25")
 
-        assert "error" in result
+        assert "error" not in result
+        assert result["data"] == []
+        assert result["count"] == 0
 
     @patch("mcp_servers.korean.kr_price_mcp_server.stock")
     def test_exception(self, mock_stock):

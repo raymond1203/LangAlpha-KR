@@ -3523,7 +3523,7 @@ requires-dist = [
     { name = "scipy" },
     { name = "scrapling", extras = ["fetchers"], specifier = "==0.4.7" },
     { name = "seaborn" },
-    { name = "setuptools", specifier = "<82" },
+    { name = "setuptools" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "statsmodels" },
     { name = "structlog" },

@@ -13,6 +13,7 @@ Tools:
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 import pandas as pd
@@ -21,13 +22,48 @@ from pykrx import stock
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — NaN-safe conversions
 # ---------------------------------------------------------------------------
+
+
+def _to_int(value: Any) -> int | None:
+    """Convert to int, returning None for NaN/invalid values."""
+    if pd.isna(value):
+        return None
+    return int(value)
+
+
+def _to_float(value: Any, ndigits: int = 4) -> float | None:
+    """Convert to rounded float, returning None for NaN/invalid values."""
+    if pd.isna(value):
+        return None
+    return round(float(value), ndigits)
 
 
 def _normalize_date(date_str: str) -> str:
     """Accept both YYYYMMDD and YYYY-MM-DD, return YYYYMMDD."""
     return date_str.replace("-", "")
+
+
+def _row_to_ohlcv(row: Any, columns: Any, *, ticker: str | None = None) -> dict[str, Any]:
+    """Convert a single pykrx OHLCV row to a normalized dict.
+
+    Shared by _serialize_ohlcv (date-indexed) and get_kr_market_snapshot
+    (ticker-indexed) to avoid duplicating column mapping and NaN handling.
+    """
+    record: dict[str, Any] = {}
+    if ticker is not None:
+        record["ticker"] = ticker
+    record["open"] = _to_int(row["시가"])
+    record["high"] = _to_int(row["고가"])
+    record["low"] = _to_int(row["저가"])
+    record["close"] = _to_int(row["종가"])
+    record["volume"] = _to_int(row["거래량"])
+    if "거래대금" in columns:
+        record["trading_value"] = _to_int(row["거래대금"])
+    if "등락률" in columns:
+        record["change_pct"] = _to_float(row["등락률"], 2)
+    return record
 
 
 def _serialize_ohlcv(df: pd.DataFrame) -> list[dict]:
@@ -37,18 +73,8 @@ def _serialize_ohlcv(df: pd.DataFrame) -> list[dict]:
 
     records = []
     for idx, row in df.iterrows():
-        record: dict[str, Any] = {
-            "date": idx.strftime("%Y-%m-%d"),
-            "open": int(row["시가"]),
-            "high": int(row["고가"]),
-            "low": int(row["저가"]),
-            "close": int(row["종가"]),
-            "volume": int(row["거래량"]),
-        }
-        if "거래대금" in df.columns:
-            record["trading_value"] = int(row["거래대금"])
-        if "등락률" in df.columns:
-            record["change_pct"] = round(float(row["등락률"]), 2)
+        record = _row_to_ohlcv(row, df.columns)
+        record["date"] = idx.strftime("%Y-%m-%d")
         records.append(record)
 
     return records
@@ -63,10 +89,10 @@ def _serialize_market_cap(df: pd.DataFrame) -> list[dict]:
     for idx, row in df.iterrows():
         records.append({
             "date": idx.strftime("%Y-%m-%d"),
-            "market_cap": int(row["시가총액"]),
-            "volume": int(row["거래량"]),
-            "trading_value": int(row["거래대금"]),
-            "listed_shares": int(row["상장주식수"]),
+            "market_cap": _to_int(row["시가총액"]),
+            "volume": _to_int(row["거래량"]),
+            "trading_value": _to_int(row["거래대금"]),
+            "listed_shares": _to_int(row["상장주식수"]),
         })
 
     return records
@@ -82,7 +108,7 @@ def _serialize_fundamental(df: pd.DataFrame) -> list[dict]:
         record: dict[str, Any] = {"date": idx.strftime("%Y-%m-%d")}
         for col in ("BPS", "PER", "PBR", "EPS", "DIV", "DPS"):
             if col in df.columns:
-                record[col.lower()] = round(float(row[col]), 4)
+                record[col.lower()] = _to_float(row[col], 4)
         records.append(record)
 
     return records
@@ -106,6 +132,38 @@ def _make_response(
 
 def _make_error(msg: str) -> dict:
     return {"error": msg}
+
+
+# ---------------------------------------------------------------------------
+# Ticker name cache — avoids per-ticker HTTP calls in search_kr_ticker
+# ---------------------------------------------------------------------------
+
+_ticker_cache: dict[str, list[dict[str, str]]] = {}
+_ticker_cache_ts: dict[str, float] = {}
+_TICKER_CACHE_TTL = 3600  # 1 hour
+
+
+def _get_ticker_list(market: str, ref_date: str | None) -> list[dict[str, str]]:
+    """Return [{ticker, name}, ...] for a market, using a TTL cache."""
+    cache_key = f"{market}:{ref_date or 'latest'}"
+    now = time.monotonic()
+
+    if cache_key in _ticker_cache and (now - _ticker_cache_ts[cache_key]) < _TICKER_CACHE_TTL:
+        return _ticker_cache[cache_key]
+
+    if ref_date:
+        tickers = stock.get_market_ticker_list(ref_date, market=market)
+    else:
+        tickers = stock.get_market_ticker_list(market=market)
+
+    entries = [
+        {"ticker": t, "name": stock.get_market_ticker_name(t)}
+        for t in tickers
+    ]
+
+    _ticker_cache[cache_key] = entries
+    _ticker_cache_ts[cache_key] = now
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +196,6 @@ def get_kr_stock_ohlcv(
     Returns:
         dict: OHLCV records with date, open, high, low, close, volume,
         trading_value, change_pct.
-
-    HIGH PTC USAGE: Use when the user asks about Korean stock prices,
-    charts, or technical data. Import as:
-        from tools.kr_price import get_kr_stock_ohlcv
     """
     try:
         start = _normalize_date(from_date)
@@ -149,12 +203,6 @@ def get_kr_stock_ohlcv(
 
         df = stock.get_market_ohlcv(start, end, ticker, adjusted=adjusted, freq=freq)
         records = _serialize_ohlcv(df)
-
-        if not records:
-            return _make_error(
-                f"No OHLCV data for ticker {ticker} "
-                f"from {from_date} to {to_date}"
-            )
 
         return _make_response(
             "kr_stock_ohlcv",
@@ -193,12 +241,6 @@ def get_kr_market_cap(
         df = stock.get_market_cap(start, end, ticker, freq=freq)
         records = _serialize_market_cap(df)
 
-        if not records:
-            return _make_error(
-                f"No market cap data for ticker {ticker} "
-                f"from {from_date} to {to_date}"
-            )
-
         return _make_response(
             "kr_market_cap",
             records,
@@ -235,12 +277,6 @@ def get_kr_fundamental(
         df = stock.get_market_fundamental(start, end, ticker, freq=freq)
         records = _serialize_fundamental(df)
 
-        if not records:
-            return _make_error(
-                f"No fundamental data for ticker {ticker} "
-                f"from {from_date} to {to_date}"
-            )
-
         return _make_response(
             "kr_fundamental",
             records,
@@ -257,34 +293,34 @@ def search_kr_ticker(
     query: str,
     market: str = "ALL",
     date: Optional[str] = None,
+    limit: int = 50,
 ) -> dict:
     """Search for Korean stock tickers by company name, or list all tickers in a market.
 
     If query is provided, filters tickers whose name contains the query string.
     If query is empty or "*", returns all tickers for the given market.
 
+    Results are cached for 1 hour to avoid repeated HTTP calls to KRX.
+
     Args:
         query: Company name to search (e.g. "삼성", "카카오"). Use "*" for all.
         market: Market filter — "KOSPI", "KOSDAQ", "KONEX", or "ALL" (default)
         date: Reference date for ticker list — YYYYMMDD or YYYY-MM-DD (default: latest)
+        limit: Maximum number of results to return (default 50)
 
     Returns:
         dict: List of {ticker, name} objects matching the query.
     """
     try:
         ref_date = _normalize_date(date) if date else None
+        all_tickers = _get_ticker_list(market, ref_date)
 
-        if ref_date:
-            tickers = stock.get_market_ticker_list(ref_date, market=market)
+        if query and query != "*":
+            results = [t for t in all_tickers if query in t["name"]]
         else:
-            tickers = stock.get_market_ticker_list(market=market)
+            results = list(all_tickers)
 
-        results = []
-        for t in tickers:
-            name = stock.get_market_ticker_name(t)
-            if query and query != "*" and query not in name:
-                continue
-            results.append({"ticker": t, "name": name})
+        results = results[:limit]
 
         return _make_response(
             "kr_ticker_search",
@@ -319,22 +355,11 @@ def get_kr_market_snapshot(
         df = stock.get_market_ohlcv(ref_date, market=market)
 
         if df is None or df.empty:
-            return _make_error(f"No market data for {date} ({market})")
+            return _make_response("kr_market_snapshot", [], date=date, market=market)
 
         records = []
         for ticker_code, row in df.iterrows():
-            record: dict[str, Any] = {
-                "ticker": str(ticker_code),
-                "open": int(row["시가"]),
-                "high": int(row["고가"]),
-                "low": int(row["저가"]),
-                "close": int(row["종가"]),
-                "volume": int(row["거래량"]),
-            }
-            if "거래대금" in df.columns:
-                record["trading_value"] = int(row["거래대금"])
-            if "등락률" in df.columns:
-                record["change_pct"] = round(float(row["등락률"]), 2)
+            record = _row_to_ohlcv(row, df.columns, ticker=str(ticker_code))
             records.append(record)
 
         return _make_response(
