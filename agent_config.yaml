@@ -217,6 +217,17 @@ mcp:
       args: ["run", "python", "mcp_servers/korean/kr_price_mcp_server.py"]
       env: {}
 
+    - name: "kr_dart"
+      enabled: true
+      description: "DART electronic disclosure system — K-IFRS financial statements, disclosure lists, company search, major shareholder reports via OpenDartReader"
+      instruction: "Use for Korean company financials (K-IFRS), DART disclosures, company profiles, and major shareholder (5% rule) reports. Accepts company name, stock code (005930), or DART corp_code."
+      tool_exposure_mode: "detailed"
+      transport: "stdio"
+      command: "uv"
+      args: ["run", "python", "mcp_servers/korean/kr_dart_mcp_server.py"]
+      env:
+        DART_API_KEY: "${DART_API_KEY}"
+
   # Tool discovery settings
   tool_discovery_enabled: true
   lazy_load: true # Load tools on-demand

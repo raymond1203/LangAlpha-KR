@@ -73,6 +73,7 @@ dependencies = [
     "croniter>=2.0.0",
     "aiodocker>=0.23.0",
     "pykrx>=1.0.45",  # FORK: 한국 시장 데이터 (KOSPI/KOSDAQ)
+    "opendartreader>=0.2.2",  # FORK: DART 전자공시
 ]
 
 [tool.uv.sources]
