@@ -46,6 +46,16 @@ def _yfinance_available() -> bool:
         return False
 
 
+# FORK: 한국 시장 데이터 소스
+def _korean_available() -> bool:
+    try:
+        import pykrx  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Async source constructors
 # ---------------------------------------------------------------------------
@@ -85,6 +95,13 @@ async def _build_yfinance_source() -> MarketDataSource:
     return YFinanceDataSource()
 
 
+# FORK: 한국 시장 데이터 소스
+async def _build_korean_source() -> MarketDataSource:
+    from .korean.data_source import KoreanDataSource
+
+    return KoreanDataSource()
+
+
 async def _build_yfinance_news_source() -> NewsDataSource:
     from .yfinance.news_source import YFinanceNewsSource
 
@@ -99,6 +116,7 @@ _SOURCE_REGISTRY: dict[str, tuple[Any, Any]] = {
     "ginlix-data": (_ginlix_data_available, _build_ginlix_data_source),
     "fmp": (_fmp_available, _build_fmp_source),
     "yfinance": (_yfinance_available, _build_yfinance_source),
+    "korean": (_korean_available, _build_korean_source),  # FORK: 한국 시장 (pykrx)
 }
 
 _NEWS_SOURCE_REGISTRY: dict[str, tuple[Any, Any]] = {
