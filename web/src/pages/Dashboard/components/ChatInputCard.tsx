@@ -65,6 +65,7 @@ function ChatInputCard() {
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
             placeholder={t('dashboard.chatPlaceholder')}
+            minRows={2}
           />
         </div>
       </MobileFabChat>
@@ -114,6 +115,7 @@ function ChatInputCard() {
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
             placeholder={t('dashboard.chatPlaceholderFull')}
+            minRows={2}
           />
         </div>
       </div>

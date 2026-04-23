@@ -152,7 +152,7 @@ function MarketViewInner() {
   const isMobile = useIsMobile();
 
   const [prefillMessage, setPrefillMessage] = useState<string>('');
-  const [mode, setMode] = useState<'fast' | 'deep'>('fast');
+  const [mode, setMode] = useState<'fast' | 'ptc'>('fast');
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
 
@@ -256,7 +256,7 @@ function MarketViewInner() {
     ? krPollPrice
     : wsPrices.get(selectedStock) || realTimePriceMatch;
 
-  // Fetch workspaces for the workspace selector (deep mode)
+  // Fetch workspaces for the workspace selector (PTC mode)
   useEffect(() => {
     let cancelled = false;
     getWorkspaces(50, 0)
@@ -371,14 +371,14 @@ function MarketViewInner() {
     if (mode === 'fast') {
       handleFastModeSend(message, imageContext, attachmentMeta, model);
     } else {
-      // Deep mode: use selected workspace or fall back to default
+      // PTC mode: use selected workspace or fall back to default
       try {
         let workspaceId = selectedWorkspaceId;
         if (!workspaceId) {
           toast({
             variant: 'destructive',
             title: 'No workspace selected',
-            description: 'Please create a workspace first to use deep mode.',
+            description: 'Please create a workspace first to use PTC mode.',
           });
           return;
         }
@@ -395,11 +395,11 @@ function MarketViewInner() {
           },
         });
       } catch (error) {
-        console.error('Error setting up deep mode:', error);
+        console.error('Error setting up PTC mode:', error);
         toast({
           variant: 'destructive',
           title: 'Error',
-          description: 'Failed to set up deep mode. Please try again.',
+          description: 'Failed to set up PTC mode. Please try again.',
         });
       }
     }
