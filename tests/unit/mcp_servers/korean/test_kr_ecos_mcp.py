@@ -239,3 +239,57 @@ class TestGetKrTreasuryYield:
         result = get_kr_treasury_yield("10Y", "2024-01-01", "2024-12-31")
 
         assert "error" in result
+
+    def test_empty_dates(self):
+        result = get_kr_treasury_yield("10Y", from_date="", to_date="")
+
+        assert "error" in result
+        assert "필수" in result["error"]
+
+
+# ============================================================================
+# Empty date validation
+# ============================================================================
+
+
+class TestEmptyDateValidation:
+    def test_exchange_rate_empty_dates(self):
+        result = get_kr_exchange_rate("USD")
+
+        assert "error" in result
+        assert "필수" in result["error"]
+
+    def test_exchange_rate_missing_to_date(self):
+        result = get_kr_exchange_rate("USD", from_date="2024-01-01")
+
+        assert "error" in result
+
+    def test_treasury_empty_dates(self):
+        result = get_kr_treasury_yield("10Y")
+
+        assert "error" in result
+        assert "필수" in result["error"]
+
+
+# ============================================================================
+# API key masking
+# ============================================================================
+
+
+class TestApiKeyMasking:
+    @patch("mcp_servers.korean.kr_ecos_mcp_server.httpx.Client")
+    def test_key_not_in_error_message(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        # Simulate error containing the API key in the URL
+        mock_client.get.side_effect = httpx.HTTPError(
+            "GET https://ecos.bok.or.kr/api/StatisticSearch/test-key/json/kr/... failed"
+        )
+        mock_client_cls.return_value = mock_client
+
+        result = get_kr_base_rate("2024-01-01", "2024-12-31")
+
+        assert "error" in result
+        assert "test-key" not in result["error"]
+        assert "***" in result["error"]

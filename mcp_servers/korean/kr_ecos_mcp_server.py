@@ -77,6 +77,15 @@ def _get_api_key() -> str:
     return api_key
 
 
+def _sanitize_error(error: Exception) -> str:
+    """Remove API key from error messages to prevent leakage."""
+    msg = str(error)
+    api_key = os.getenv("ECOS_API_KEY", "")
+    if api_key and api_key in msg:
+        msg = msg.replace(api_key, "***")
+    return msg
+
+
 def _fetch_ecos(
     stat_code: str,
     item_code: str,
@@ -97,10 +106,13 @@ def _fetch_ecos(
         f"/{stat_code}/{cycle}/{start}/{end}/{item_code}"
     )
 
-    with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
-        resp = client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        raise RuntimeError(_sanitize_error(exc)) from exc
 
     if "RESULT" in data:
         code = data["RESULT"].get("CODE", "")
@@ -155,6 +167,13 @@ def _make_error(msg: str) -> dict:
     return {"error": msg}
 
 
+def _require_dates(from_date: str, to_date: str) -> str | None:
+    """Return error message if dates are missing, else None."""
+    if not from_date or not to_date:
+        return "from_date와 to_date는 필수입니다."
+    return None
+
+
 # ---------------------------------------------------------------------------
 # MCP server + tools
 # ---------------------------------------------------------------------------
@@ -187,7 +206,7 @@ def get_kr_base_rate(
             "kr_base_rate", records, from_date=from_date, to_date=to_date,
         )
     except Exception as e:  # noqa: BLE001
-        return _make_error(f"한은 기준금리 조회 실패: {e}")
+        return _make_error(f"한은 기준금리 조회 실패: {_sanitize_error(e)}")
 
 
 @mcp.tool()
@@ -235,7 +254,7 @@ def get_kr_economic_indicator(
             indicator=indicator, from_date=from_date, to_date=to_date,
         )
     except Exception as e:  # noqa: BLE001
-        return _make_error(f"경제지표 조회 실패 '{indicator}': {e}")
+        return _make_error(f"경제지표 조회 실패 '{indicator}': {_sanitize_error(e)}")
 
 
 @mcp.tool()
@@ -250,14 +269,18 @@ def get_kr_exchange_rate(
     Args:
         currency: Target currency — "USD", "JPY" (100엔), "EUR", "GBP",
                   "CAD", "CHF", "AUD", "CNY"
-        from_date: Start date — YYYYMMDD or YYYY-MM-DD
-        to_date: End date — YYYYMMDD or YYYY-MM-DD
+        from_date: Start date — YYYYMMDD or YYYY-MM-DD (required)
+        to_date: End date — YYYYMMDD or YYYY-MM-DD (required)
         cycle: Frequency — "D" (daily), "M" (monthly), "A" (annual)
 
     Returns:
         dict: Exchange rate time series (KRW per unit of foreign currency).
     """
     try:
+        date_err = _require_dates(from_date, to_date)
+        if date_err:
+            return _make_error(date_err)
+
         item_code = _EXCHANGE_RATE_CODES.get(currency.upper())
         if not item_code:
             available = ", ".join(sorted(_EXCHANGE_RATE_CODES.keys()))
@@ -272,7 +295,7 @@ def get_kr_exchange_rate(
             currency=currency.upper(), from_date=from_date, to_date=to_date,
         )
     except Exception as e:  # noqa: BLE001
-        return _make_error(f"환율 조회 실패 '{currency}': {e}")
+        return _make_error(f"환율 조회 실패 '{currency}': {_sanitize_error(e)}")
 
 
 @mcp.tool()
@@ -289,14 +312,18 @@ def get_kr_treasury_yield(
     Args:
         maturity: Bond maturity — "1Y", "2Y", "3Y", "5Y", "10Y",
                   "20Y", "30Y", "50Y"
-        from_date: Start date — YYYYMMDD or YYYY-MM-DD
-        to_date: End date — YYYYMMDD or YYYY-MM-DD
+        from_date: Start date — YYYYMMDD or YYYY-MM-DD (required)
+        to_date: End date — YYYYMMDD or YYYY-MM-DD (required)
         cycle: Frequency — "D" (daily), "M" (monthly), "A" (annual)
 
     Returns:
         dict: Treasury yield time series (%).
     """
     try:
+        date_err = _require_dates(from_date, to_date)
+        if date_err:
+            return _make_error(date_err)
+
         item_code = _TREASURY_CODES.get(maturity.upper())
         if not item_code:
             available = ", ".join(sorted(_TREASURY_CODES.keys()))
@@ -311,7 +338,7 @@ def get_kr_treasury_yield(
             maturity=maturity.upper(), from_date=from_date, to_date=to_date,
         )
     except Exception as e:  # noqa: BLE001
-        return _make_error(f"국고채 수익률 조회 실패 '{maturity}': {e}")
+        return _make_error(f"국고채 수익률 조회 실패 '{maturity}': {_sanitize_error(e)}")
 
 
 if __name__ == "__main__":
