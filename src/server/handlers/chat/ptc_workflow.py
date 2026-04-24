@@ -37,7 +37,7 @@ from src.server.utils.directive_context import (
     build_directive_reminder,
     parse_directive_contexts,
 )
-from src.llms.callbacks import init_cost_tracker  # FORK: Stage A
+from src.llms.callbacks import init_cost_tracker  # FORK: 비용 관측 콜백
 from src.llms.llm import get_input_modalities
 from src.server.utils.multimodal_context import (
     build_attachment_metadata,
@@ -325,7 +325,7 @@ async def astream_ptc_workflow(
         # =====================================================================
 
         token_callback, tool_tracker = init_tracking(thread_id)
-        # FORK: Stage A — 비용/지연 관측 콜백 (PTC 메인 루프 태그)
+        # FORK: 비용/지연 관측 콜백 (PTC 메인 루프 태그)
         cost_callback = init_cost_tracker(thread_id, default_tag="ptc")
 
         _mark_phase("db_setup")
@@ -665,7 +665,7 @@ async def astream_ptc_workflow(
             is_byok=is_byok,
             recursion_limit=get_ptc_recursion_limit(),
             plan_mode=effective_plan_mode,
-            cost_callback=cost_callback,  # FORK: Stage A
+            cost_callback=cost_callback,  # FORK
         )
 
         # Extract background task registry from orchestrator (single source of truth for SSE events)

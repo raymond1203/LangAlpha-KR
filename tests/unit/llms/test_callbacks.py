@@ -1,4 +1,4 @@
-# FORK: Stage A 단위 테스트 — CostTrackingCallback 동작 검증
+# FORK: CostTrackingCallback 단위 테스트
 """Tests for src.llms.callbacks.CostTrackingCallback."""
 
 from __future__ import annotations

@@ -6,9 +6,8 @@
 # For non agent related config, see config.yaml
 
 llm:
-  # FORK: Stage A — Claude 단일 생태계로 전환 (DEPLOYMENT_STRATEGY.md v3.1 §3.1)
+  # FORK: Claude 단일 벤더 라우팅
   # 역할 분리: Sonnet = PTC 메인 + Research, Haiku = Flash + 보조 경로 + fallback
-  # 프로바이더 다각화는 S2 트리거(월 LLM > $250 3개월) 시 별도 Issue로 진행.
   # Model name from src/llms/manifest/models.json
   name: "claude-sonnet-4-6"
   flash: "claude-haiku-4-5"

@@ -1,4 +1,4 @@
-# FORK: Stage A 관측 레이어 — 토큰/비용/지연을 구조화 로깅하는 LangChain 콜백
+# FORK: LLM 호출의 비용/지연을 구조화해 기록하는 LangChain 콜백
 """Cost and latency tracking callback for LLM calls.
 
 이 콜백은 기존 ``PerCallTokenTracker`` 와 **병행** 사용된다. 역할 구분:
@@ -6,8 +6,6 @@
 - ``PerCallTokenTracker`` (업스트림): per-call 토큰 기록 + billing_type 추적
 - ``CostTrackingCallback`` (FORK): 각 호출의 **비용 / 지연 / 역할 태그**를 계산해서
   stdout + JSONL 파일로 적재, 나중에 CloudWatch 로 내보낼 수 있게 구조화
-
-DEPLOYMENT_STRATEGY.md v3.1 §3.1, §6 Stage A 참조.
 """
 
 from __future__ import annotations
@@ -55,7 +53,7 @@ class CostTrackingCallback(BaseCallbackHandler):
       4자리를 사용 (짧은 윈도우 내 충돌 확률 낮음). ``COST_LOG_DIR`` 환경변수로
       디렉토리 오버라이드.
     - ``AWS_CLOUDWATCH_METRICS=true`` 시 ``boto3`` 로 custom metric 발행
-      (Stage D 에서 실제 연결; 여기서는 stub 만 제공).
+      (현재는 디버그 로그만 찍는 stub; 실제 연결은 배포 인프라 구축 시 추가).
 
     태그 전파는 LLM 인스턴스의 ``metadata`` 를 통해 일어난다. 호출자가
     ``llm.bind(metadata={"tag": "flash"})`` 또는 ``chain.with_config(
@@ -270,7 +268,7 @@ class CostTrackingCallback(BaseCallbackHandler):
             )
 
     def _emit_cloudwatch(self, record: Dict[str, Any]) -> None:
-        """Stage D 에서 실제 boto3 호출로 채운다. 현재는 디버그 로그만."""
+        """CloudWatch custom metric 발행 훅. 현재는 디버그 로그만 찍는 stub."""
         logger.debug(
             "cloudwatch_stub namespace=%s record=%s",
             self.cloudwatch_namespace,
@@ -346,7 +344,7 @@ def init_cost_tracker(
     thread_id: str,
     default_tag: str = "unknown",
 ) -> CostTrackingCallback:
-    """Stage A 표준 진입점. 워크플로우 핸들러에서 호출."""
+    """표준 진입점. 워크플로우 핸들러가 thread 시작 시 한 번 호출."""
     return CostTrackingCallback(thread_id=thread_id, default_tag=default_tag)
 
 
