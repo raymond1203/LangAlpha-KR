@@ -9,8 +9,11 @@ import pandas as pd
 import pytest
 
 from src.data_client.korean.rag_ingest import (
+    DART_FILING_URL_TEMPLATE,
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
+    DEFAULT_EMBEDDING_DIM,
+    KNOWN_EMBEDDING_DIMS,
     IngestConfig,
     IngestStats,
     chunk_text,
@@ -36,8 +39,31 @@ class TestCleanDartText:
     def test_normalizes_whitespace(self):
         assert clean_dart_text("  a\n\n\nb\t\tc  ") == "a b c"
 
-    def test_strips_html_entities(self):
-        assert clean_dart_text("foo&nbsp;bar") == "foo bar"
+    def test_strips_named_entities(self):
+        # html.unescape: &nbsp; → non-breaking space (U+00A0) 이후 공백 정규화
+        assert clean_dart_text("foo&nbsp;bar").replace("\xa0", " ").strip() \
+            in {"foo bar", "foo  bar"}
+        # &amp; 같은 일반 엔티티도 디코드
+        assert clean_dart_text("A &amp; B") == "A & B"
+
+    def test_strips_numeric_entities(self):
+        # &#33; = "!", &#x41; = "A"
+        assert clean_dart_text("hi&#33;") == "hi!"
+        assert clean_dart_text("&#x41;&#x42;C") == "ABC"
+
+    def test_removes_script_style_content(self):
+        # naive 태그 strip 과 달리 script / style 내부 텍스트까지 제거해야 함
+        html_in = (
+            "<p>본문</p>"
+            "<script>var secret='xxx'; alert(1);</script>"
+            "<style>.cls{color:red}</style>"
+            "끝"
+        )
+        out = clean_dart_text(html_in)
+        assert "secret" not in out
+        assert "alert" not in out
+        assert "color" not in out
+        assert "본문" in out and "끝" in out
 
     def test_empty_input(self):
         assert clean_dart_text(None) == ""
@@ -198,6 +224,44 @@ class TestEnsureCollection:
 # ==========================================================================
 
 
+class TestIngestConfigPostInit:
+    def test_known_model_auto_sets_dim(self):
+        cfg = IngestConfig(embedding_model="text-embedding-3-large")
+        assert cfg.embedding_dim == 3072
+
+    def test_known_model_default_dim_passthrough(self):
+        cfg = IngestConfig(embedding_model="text-embedding-3-small")
+        assert cfg.embedding_dim == 1536
+
+    def test_explicit_matching_dim_ok(self):
+        cfg = IngestConfig(
+            embedding_model="text-embedding-3-large", embedding_dim=3072,
+        )
+        assert cfg.embedding_dim == 3072
+
+    def test_explicit_mismatching_dim_raises(self):
+        # 9999 는 DEFAULT_EMBEDDING_DIM (1536) 이 아니고 어떤 known 모델과도 안
+        # 맞는 값 → passthrough 로 치지 않고 명시 충돌로 판단해서 raise.
+        with pytest.raises(ValueError) as exc:
+            IngestConfig(
+                embedding_model="text-embedding-3-large", embedding_dim=9999,
+            )
+        assert "text-embedding-3-large" in str(exc.value)
+
+    def test_unknown_model_dim_passthrough(self):
+        # 알 수 없는 모델은 dim 강제 변경/검증 안 함
+        cfg = IngestConfig(
+            embedding_model="custom-embedding-v1", embedding_dim=2048,
+        )
+        assert cfg.embedding_dim == 2048
+
+    def test_registry_has_known_models(self):
+        # 하드코딩 매핑이 최소한 두 OpenAI 모델을 포함
+        assert KNOWN_EMBEDDING_DIMS["text-embedding-3-small"] == 1536
+        assert KNOWN_EMBEDDING_DIMS["text-embedding-3-large"] == 3072
+        _ = DEFAULT_EMBEDDING_DIM  # 심볼 존재 확인
+
+
 class TestIngestDisclosure:
     def _build_mocks(self, body: str, n_chunks: int = 2):
         dart = MagicMock()
@@ -259,6 +323,10 @@ class TestIngestDisclosure:
         assert first.payload["rcept_no"] == "r1"
         assert first.payload["ticker"] == "005930"
         assert first.payload["chunk_index"] == 0
+        assert first.payload["source_url"] == (
+            DART_FILING_URL_TEMPLATE.format(rcept_no="r1")
+        )
+        assert first.payload["section"] is None
 
 
 # ==========================================================================
@@ -348,3 +416,113 @@ class TestIngestCorp:
         assert stats.disclosures_ingested == 0
         assert stats.disclosures_skipped_empty == 1
         assert stats.chunks_uploaded == 0
+
+    def test_max_per_corp_counts_attempts_not_successes(self):
+        """Empty / failing disclosure 도 max_per_corp 한도에 포함돼야 함.
+
+        안 그러면 계속 빈 공시가 오면 드라이버가 영원히 돌 수 있음.
+        """
+        dart = MagicMock()
+        dart.list.return_value = pd.DataFrame(
+            [
+                {
+                    "rcept_no": f"r{i}",
+                    "corp_name": "X",
+                    "stock_code": "000000",
+                    "rcept_dt": "20240101",
+                    "report_nm": "사업보고서",
+                }
+                for i in range(5)
+            ]
+        )
+        cfg = IngestConfig()
+        stats = IngestStats()
+
+        # 모든 공시가 empty body 로 skip → 그래도 max=2 에서 멈춰야 함
+        with patch(
+            "src.data_client.korean.rag_ingest.ingest_disclosure", return_value=0,
+        ):
+            ingest_corp(
+                dart=dart,
+                openai_client=MagicMock(),
+                qclient=MagicMock(),
+                corp="X",
+                config=cfg,
+                stats=stats,
+                max_per_corp=2,
+            )
+
+        assert stats.disclosures_seen == 2
+        assert stats.disclosures_skipped_empty == 2
+
+    def test_failure_appended_to_stats(self):
+        """ingest_disclosure 에서 예외 발생 → stats.failures 에 기록."""
+        dart = MagicMock()
+        dart.list.return_value = pd.DataFrame(
+            [
+                {
+                    "rcept_no": "r_boom",
+                    "corp_name": "X",
+                    "stock_code": "000000",
+                    "rcept_dt": "20240101",
+                    "report_nm": "사업보고서",
+                }
+            ]
+        )
+        cfg = IngestConfig()
+        stats = IngestStats()
+
+        with patch(
+            "src.data_client.korean.rag_ingest.ingest_disclosure",
+            side_effect=RuntimeError("boom"),
+        ):
+            ingest_corp(
+                dart=dart,
+                openai_client=MagicMock(),
+                qclient=MagicMock(),
+                corp="X",
+                config=cfg,
+                stats=stats,
+            )
+
+        assert stats.corps_processed == 1
+        assert stats.disclosures_seen == 1
+        assert stats.disclosures_ingested == 0
+        assert len(stats.failures) == 1
+        assert "r_boom" in stats.failures[0]
+        assert "boom" in stats.failures[0]
+
+    def test_iter_disclosures_to_dict_exception_logged_not_silent(
+        self, caplog,
+    ):
+        """df.to_dict 가 실패해도 silent swallow 가 아니라 로그 출력돼야 함."""
+        import logging
+
+        class _BadDf:
+            def to_dict(self, orient="records"):
+                raise RuntimeError("bad df")
+
+            # Truthy 로 만들어 `is None` 검사 통과
+            def __bool__(self):
+                return True
+
+        dart = MagicMock()
+        dart.list.return_value = _BadDf()
+        cfg = IngestConfig()
+        stats = IngestStats()
+
+        with caplog.at_level(
+            logging.ERROR, logger="src.data_client.korean.rag_ingest",
+        ):
+            ingest_corp(
+                dart=dart,
+                openai_client=MagicMock(),
+                qclient=MagicMock(),
+                corp="X",
+                config=cfg,
+                stats=stats,
+            )
+
+        assert stats.disclosures_seen == 0
+        # 로그 메시지에 exception 정보가 포함돼야 함
+        assert any("bad df" in r.getMessage() or r.exc_info for r in caplog.records)

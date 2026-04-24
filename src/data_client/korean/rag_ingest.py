@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
@@ -33,6 +34,17 @@ DEFAULT_EMBEDDING_DIM = 1536
 DEFAULT_CHUNK_SIZE = 500   # 문자 수 (한국어 기준 대략 150~250 토큰)
 DEFAULT_CHUNK_OVERLAP = 50
 DEFAULT_BATCH_SIZE = 64    # OpenAI 배치당 청크 수
+
+# OpenAI 임베딩 모델별 기본 출력 차원.
+# IngestConfig.__post_init__ 에서 model → dim 정합성 자동 조정에 사용.
+KNOWN_EMBEDDING_DIMS: dict[str, int] = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+}
+
+# DART 공시 원문 URL 템플릿. payload 에 담아 에이전트 응답에서 출처 링크로 사용.
+DART_FILING_URL_TEMPLATE = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
 
 # 청킹 경계 우선순위 — 자연스러운 단락·문장 경계 선호
 CHUNK_SEPARATORS = ("\n\n", "\n", "。 ", ". ", "! ", "? ", " ")
@@ -59,6 +71,22 @@ class IngestConfig:
     qdrant_url: Optional[str] = None
     qdrant_api_key: Optional[str] = None
     dart_api_key: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """알려진 OpenAI 모델이면 embedding_dim 자동 정합 / 충돌 검증."""
+        known = KNOWN_EMBEDDING_DIMS.get(self.embedding_model)
+        if known is None:
+            return  # 알 수 없는 모델 — 사용자 설정 그대로 사용
+        if self.embedding_dim == DEFAULT_EMBEDDING_DIM and known != DEFAULT_EMBEDDING_DIM:
+            # 사용자가 기본값을 두고 모델만 변경한 경우 — dim 자동 조정
+            self.embedding_dim = known
+        elif self.embedding_dim != known:
+            # 사용자가 명시한 dim 이 모델 기본값과 다름 — 실수 가능성
+            raise ValueError(
+                f"embedding_dim={self.embedding_dim} 이 {self.embedding_model} "
+                f"의 기본 출력 차원 {known} 과 다릅니다. 모델을 바꾸거나 "
+                f"embedding_dim 을 {known} 으로 설정하세요."
+            )
 
 
 @dataclass
@@ -87,12 +115,28 @@ class IngestStats:
 
 
 def clean_dart_text(raw: str | None) -> str:
-    """DART 원문에서 HTML 태그 / 과도한 공백 제거."""
+    """DART 원문에서 script/style 블록 제거, HTML 태그 제거, 엔티티 디코드.
+
+    BeautifulSoup 의존성 추가 대신 정규식 기반으로 처리하되,
+    naive 버전 대비 두 가지를 보완:
+    1. ``<script>``/``<style>`` 태그와 **내부 텍스트** 까지 제거
+    2. ``html.unescape`` 로 named + numeric HTML entity 모두 디코드
+    """
     if not raw:
         return ""
-    text = re.sub(r"<[^>]+>", " ", raw)   # HTML 태그
-    text = re.sub(r"&[a-zA-Z]+;", " ", text)  # HTML entity
-    text = re.sub(r"\s+", " ", text)      # 공백 정규화
+    # script/style 블록 자체 제거 (태그 사이 내용 포함)
+    text = re.sub(
+        r"<(script|style)[^>]*>.*?</\1>",
+        " ",
+        raw,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # 나머지 HTML 태그 제거
+    text = re.sub(r"<[^>]+>", " ", text)
+    # HTML entity 디코드 (named: &nbsp; numeric: &#123; &#x7B;)
+    text = html.unescape(text)
+    # 공백 정규화
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
@@ -215,6 +259,9 @@ def ensure_collection(qclient, collection: str, dim: int) -> bool:
         ("ticker", "keyword"),
         ("corp_name", "keyword"),
         ("filing_type", "keyword"),
+        # rcept_no 는 get_filing_chunks 의 equality 필터에 사용 — 인덱스 없이
+        # 전체 스캔이면 청크 수가 늘수록 비용 선형 증가.
+        ("rcept_no", "keyword"),
         # ISO-8601 (YYYY-MM-DD) 을 datetime 인덱스로 올려 DatetimeRange 필터 지원.
         ("filing_date", "datetime"),
     )
@@ -319,6 +366,7 @@ def ingest_disclosure(
     for batch in _batches(chunks, config.batch_size):
         vectors.extend(embed_batch(openai_client, batch, config.embedding_model))
 
+    source_url = DART_FILING_URL_TEMPLATE.format(rcept_no=rcept_no)
     points = []
     for idx, (chunk, vec) in enumerate(zip(chunks, vectors)):
         points.append(
@@ -333,6 +381,10 @@ def ingest_disclosure(
                     "filing_type": filing_type,
                     "chunk_index": idx,
                     "text": chunk,
+                    # 에이전트 응답에서 출처 링크로 바로 사용 가능.
+                    "source_url": source_url,
+                    # 섹션 파싱은 추후 확장. 스키마 고정용 placeholder.
+                    "section": None,
                 },
             )
         )
@@ -361,7 +413,12 @@ def _iter_disclosures(dart, corp: str, start: Optional[str], end: Optional[str],
         return
     try:
         rows = df.to_dict(orient="records")
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        # DataFrame 변환 실패 — DART 응답 포맷 변경 / 비정상 타입일 가능성.
+        # 조용히 무시하지 않고 로그 + 스택으로 원인 추적 가능하게.
+        logger.exception(
+            "dart.list 결과 DataFrame 변환 실패 corp=%s err=%s", corp, e,
+        )
         return
     for row in rows:
         yield {
@@ -386,11 +443,17 @@ def ingest_corp(
     stats: IngestStats,
     max_per_corp: Optional[int] = None,
 ) -> None:
-    """한 기업의 공시 목록을 순회하며 색인."""
-    count = 0
+    """한 기업의 공시 목록을 순회하며 색인.
+
+    ``max_per_corp`` 는 **시도한 공시 수** 상한이다. 본문이 비어서 skip 된
+    것도 한도에 포함해, 연속으로 빈 공시가 와도 드라이버가 영원히 돌지 않게
+    한다.
+    """
+    attempts = 0
     for meta in _iter_disclosures(dart, corp, start, end, kind):
-        if max_per_corp is not None and count >= max_per_corp:
+        if max_per_corp is not None and attempts >= max_per_corp:
             break
+        attempts += 1
         stats.disclosures_seen += 1
         rcept_no = meta["rcept_no"]
         if not rcept_no:
@@ -417,7 +480,6 @@ def ingest_corp(
         else:
             stats.disclosures_ingested += 1
             stats.chunks_uploaded += uploaded
-            count += 1
     stats.corps_processed += 1
 
 
@@ -472,6 +534,7 @@ def ingest_corpus(
 
 __all__ = [
     "CHUNK_SEPARATORS",
+    "DART_FILING_URL_TEMPLATE",
     "DEFAULT_BATCH_SIZE",
     "DEFAULT_CHUNK_OVERLAP",
     "DEFAULT_CHUNK_SIZE",
@@ -480,6 +543,7 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
     "IngestConfig",
     "IngestStats",
+    "KNOWN_EMBEDDING_DIMS",
     "chunk_text",
     "clean_dart_text",
     "embed_batch",

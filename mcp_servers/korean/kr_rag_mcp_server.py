@@ -16,14 +16,23 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
 
+logger = logging.getLogger(__name__)
+
+
 DEFAULT_COLLECTION = "dart_filings"
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+# 임베딩 모델은 인제스트 시 사용한 값과 반드시 일치해야 한다
+# (차원 / 벡터 공간이 달라지면 cosine 거리 의미가 없음).
+# 호출자 / 운영자가 EMBEDDING_MODEL 환경변수로 명시하면 그것을, 아니면
+# 기본값을 쓴다. `rag_ingest.IngestConfig.embedding_model` 과 같은 변수를
+# 공유할 것을 권장.
+DEFAULT_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 DEFAULT_TOP_K = 10
 MAX_TOP_K = 50
 
@@ -60,9 +69,11 @@ def _get_qdrant():
     return QdrantClient(url=url, api_key=api_key, prefer_grpc=False, timeout=30)
 
 
-def _embed_query(text: str, model: str = DEFAULT_EMBEDDING_MODEL) -> list[float]:
+def _embed_query(text: str, model: Optional[str] = None) -> list[float]:
+    """쿼리 임베딩. ``model`` 이 None 이면 모듈 기본값(환경변수 반영)을 사용."""
+    effective_model = model or DEFAULT_EMBEDDING_MODEL
     client = _get_openai()
-    resp = client.embeddings.create(model=model, input=[text])
+    resp = client.embeddings.create(model=effective_model, input=[text])
     return resp.data[0].embedding
 
 
@@ -137,6 +148,7 @@ def search_korean_filings(
     date_to: Optional[str] = None,
     top_k: int = DEFAULT_TOP_K,
     collection: str = DEFAULT_COLLECTION,
+    embedding_model: Optional[str] = None,
 ) -> dict:
     """자연어 쿼리로 DART 공시 청크를 의미 검색한다.
 
@@ -149,10 +161,12 @@ def search_korean_filings(
         date_to: 접수일 상한 YYYY-MM-DD
         top_k: 반환 청크 수 (기본 10, 최대 50)
         collection: Qdrant 컬렉션명
+        embedding_model: None 이면 EMBEDDING_MODEL 환경변수 / 모듈 기본값.
+            인제스트 시 사용된 모델과 **반드시 동일**해야 한다.
 
     Returns:
         관련 청크 리스트. 각 요소에 점수, corp_name, ticker, filing_date,
-        filing_type, rcept_no, chunk_index, text 포함.
+        filing_type, rcept_no, chunk_index, text, source_url, section 포함.
     """
     try:
         if not query or not query.strip():
@@ -160,7 +174,7 @@ def search_korean_filings(
         k = max(1, min(int(top_k), MAX_TOP_K))
 
         qdrant = _get_qdrant()
-        vector = _embed_query(query.strip())
+        vector = _embed_query(query.strip(), model=embedding_model)
         qfilter = _build_filter(
             ticker=ticker,
             corp_name=corp_name,
@@ -169,13 +183,15 @@ def search_korean_filings(
             date_to=date_to,
         )
 
-        hits = qdrant.search(
+        # query_points 는 qdrant-client 1.10+ 표준 API. search 는 deprecated.
+        resp = qdrant.query_points(
             collection_name=collection,
-            query_vector=vector,
+            query=vector,
             query_filter=qfilter,
             limit=k,
             with_payload=True,
         )
+        hits = resp.points
 
         data = []
         for h in hits:
@@ -190,6 +206,8 @@ def search_korean_filings(
                     "filing_type": payload.get("filing_type"),
                     "chunk_index": payload.get("chunk_index"),
                     "text": payload.get("text"),
+                    "source_url": payload.get("source_url"),
+                    "section": payload.get("section"),
                 }
             )
         return _make_response(
@@ -200,7 +218,10 @@ def search_korean_filings(
             collection=collection,
         )
     except Exception as e:  # noqa: BLE001
-        return _make_error(f"DART RAG 검색 실패: {e}")
+        # 전체 스택은 로그로 남기고, 사용자에겐 예외 타입만 노출해
+        # 내부 경로 / 키 등 민감 정보 leak 차단.
+        logger.exception("search_korean_filings 실패 query=%r", query)
+        return _make_error(f"DART RAG 검색 실패 ({type(e).__name__})")
 
 
 @mcp.tool()
@@ -252,12 +273,16 @@ def get_filing_chunks(
                     "corp_name": payload.get("corp_name"),
                     "filing_type": payload.get("filing_type"),
                     "text": payload.get("text"),
+                    "source_url": payload.get("source_url"),
+                    "section": payload.get("section"),
                 }
             )
         data.sort(key=lambda x: (x.get("chunk_index") or 0))
         return _make_response("dart_rag_chunks", data, rcept_no=rcept_no)
     except Exception as e:  # noqa: BLE001
-        return _make_error(f"공시 청크 조회 실패: {e}")
+        # 사용자 응답엔 타입만, 상세 스택은 로그로.
+        logger.exception("get_filing_chunks 실패 rcept_no=%r", rcept_no)
+        return _make_error(f"공시 청크 조회 실패 ({type(e).__name__})")
 
 
 # ---------------------------------------------------------------------------

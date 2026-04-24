@@ -61,6 +61,11 @@ result = search_korean_filings(
 - 점수 0.6 ~ 0.75: 주변부 — 원문 보강 확인 후 판단
 - 점수 0.6 미만: 잘못 매칭된 가능성 ↑ → 쿼리 재작성
 
+> **점수 기준 주의**: 위 수치는 `text-embedding-3-small` 기준 초기 권장값.
+> 모델 / 도메인 / 언어에 따라 적절한 임계가 달라지므로, 실제 운영 시 상위
+> K 결과의 점수 분포를 관찰하며 임계값을 조정할 것. 임베딩 모델을 교체한
+> 경우 반드시 재측정.
+
 특정 공시의 **전체 맥락**이 필요하면:
 
 ```python
@@ -88,6 +93,12 @@ chunks = get_filing_chunks(rcept_no="20240814000123")
   `get_dart_disclosures` 로 당일 공시 목록을 병행 조회
 - 임베딩 품질: 일반 한국어 임베딩 사용 — 금융/회계 전문 용어의 뉘앙스가
   완전히 반영되지 않을 수 있음. 중요 의사결정엔 반드시 원문 검토
+- **payload 스키마 제약** (`src/data_client/korean/rag_ingest.py` 인제스트 기준):
+  - `source_url` 은 `rcept_no` 로부터 `https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}`
+    템플릿으로 계산된 값. DART 원문 URL 이 바뀌면 재색인 필요.
+  - `section` 은 현재 `None` 으로 고정 — 공시 문서 내부 섹션(목차 레벨)은
+    아직 파싱하지 않는다. 문서 레벨 보다 좁은 단위가 필요하면 `get_filing_chunks`
+    로 전체 청크를 받아 `chunk_index` 근접 항목을 묶어 사용.
 
 ## 출력 예시
 
