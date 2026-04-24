@@ -262,6 +262,14 @@ class TestIngestConfigPostInit:
         assert KNOWN_EMBEDDING_DIMS["text-embedding-3-large"] == 3072
         _ = DEFAULT_EMBEDDING_DIM  # 심볼 존재 확인
 
+    def test_invalid_upsert_batch_size_zero_raises(self):
+        with pytest.raises(ValueError, match="upsert_batch_size"):
+            IngestConfig(upsert_batch_size=0)
+
+    def test_invalid_upsert_batch_size_negative_raises(self):
+        with pytest.raises(ValueError, match="upsert_batch_size"):
+            IngestConfig(upsert_batch_size=-10)
+
 
 class TestIngestDisclosure:
     def _build_mocks(self, body: str, n_chunks: int = 2):
@@ -377,6 +385,46 @@ class TestIngestDisclosure:
         """upsert_batch_size 를 지정 안 하면 DEFAULT_UPSERT_BATCH_SIZE 를 쓴다."""
         cfg = IngestConfig()
         assert cfg.upsert_batch_size == DEFAULT_UPSERT_BATCH_SIZE
+
+    def test_upsert_batch_progress_logged(self, caplog):
+        """각 upsert 배치마다 디버그 로그 — 실패 시 어디서 멈췄는지 추적용."""
+        import logging
+
+        body = "문장. " * 2000
+        dart, openai_client, _qclient = self._build_mocks(body=body)
+        openai_client.embeddings.create.side_effect = lambda model, input: MagicMock(
+            data=[MagicMock(embedding=[0.1] * 4) for _ in input],
+        )
+        qclient = MagicMock()
+
+        cfg = IngestConfig(
+            chunk_size=80, chunk_overlap=10, batch_size=64, upsert_batch_size=30,
+        )
+        with caplog.at_level(
+            logging.DEBUG, logger="src.data_client.korean.rag_ingest",
+        ):
+            ingest_disclosure(
+                dart=dart,
+                openai_client=openai_client,
+                qclient=qclient,
+                rcept_no="r_log",
+                corp_name="X",
+                ticker="000000",
+                filing_date="2024-01-01",
+                filing_type="사업보고서",
+                config=cfg,
+            )
+
+        upsert_logs = [
+            r for r in caplog.records
+            if "qdrant upsert batch" in r.getMessage()
+        ]
+        # 여러 배치가 찍혔어야 함
+        assert len(upsert_logs) >= 2
+        # 각 로그에 rcept_no 포함
+        assert all("r_log" in r.getMessage() for r in upsert_logs)
+        # 마지막 로그 배치 index 가 qclient.upsert 호출 수와 일치
+        assert len(upsert_logs) == qclient.upsert.call_count
 
 
 # ==========================================================================

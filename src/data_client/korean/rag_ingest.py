@@ -79,7 +79,18 @@ class IngestConfig:
     dart_api_key: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """알려진 OpenAI 모델이면 embedding_dim 자동 정합 / 충돌 검증."""
+        """Config 정합성 검증.
+
+        1. upsert_batch_size > 0 (0 또는 음수면 `_batches` 가 range(...,0) 으로
+           ValueError 를 던지는 지점까지 가기 전에 fail-fast)
+        2. 알려진 OpenAI 임베딩 모델이면 embedding_dim 자동 정합 / 충돌 검증
+        """
+        if not isinstance(self.upsert_batch_size, int) or self.upsert_batch_size <= 0:
+            raise ValueError(
+                f"upsert_batch_size 는 양의 정수여야 합니다 (현재: "
+                f"{self.upsert_batch_size!r})"
+            )
+
         known = KNOWN_EMBEDDING_DIMS.get(self.embedding_model)
         if known is None:
             return  # 알 수 없는 모델 — 사용자 설정 그대로 사용
@@ -398,7 +409,17 @@ def ingest_disclosure(
     # Qdrant 기본 HTTP payload 한도(32MB)를 넘지 않도록 upsert 도 배치로 쪼갠다.
     # 단일 대형 사업보고서가 수천 청크를 만들 때 payload 가 40MB+ 되어 실패한 사례
     # (Issue #18) 방지.
-    for upsert_chunk in _batches(points, config.upsert_batch_size):
+    total_batches = (
+        len(points) + config.upsert_batch_size - 1
+    ) // config.upsert_batch_size
+    for idx, upsert_chunk in enumerate(_batches(points, config.upsert_batch_size), 1):
+        logger.debug(
+            "qdrant upsert batch %d/%d (rcept_no=%s, size=%d)",
+            idx,
+            total_batches,
+            rcept_no,
+            len(upsert_chunk),
+        )
         qclient.upsert(collection_name=config.collection, points=upsert_chunk)
     return len(points)
 
