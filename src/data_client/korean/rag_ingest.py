@@ -34,6 +34,11 @@ DEFAULT_EMBEDDING_DIM = 1536
 DEFAULT_CHUNK_SIZE = 500   # 문자 수 (한국어 기준 대략 150~250 토큰)
 DEFAULT_CHUNK_OVERLAP = 50
 DEFAULT_BATCH_SIZE = 64    # OpenAI 배치당 청크 수
+# Qdrant 는 기본적으로 단일 HTTP 요청 payload 를 32MB 로 제한한다.
+# 1536-dim float32 × 4bytes + payload metadata ≈ 8KB/point 기준으로
+# 256 points = ~2MB → 한도 대비 15배 여유. 대량 사업보고서 (수천 청크) 도
+# 여러 upsert call 로 쪼개져 안전하게 적재.
+DEFAULT_UPSERT_BATCH_SIZE = 256
 
 # OpenAI 임베딩 모델별 기본 출력 차원.
 # IngestConfig.__post_init__ 에서 model → dim 정합성 자동 조정에 사용.
@@ -67,6 +72,7 @@ class IngestConfig:
     chunk_size: int = DEFAULT_CHUNK_SIZE
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
     batch_size: int = DEFAULT_BATCH_SIZE
+    upsert_batch_size: int = DEFAULT_UPSERT_BATCH_SIZE
     openai_api_key: Optional[str] = None
     qdrant_url: Optional[str] = None
     qdrant_api_key: Optional[str] = None
@@ -389,7 +395,11 @@ def ingest_disclosure(
             )
         )
 
-    qclient.upsert(collection_name=config.collection, points=points)
+    # Qdrant 기본 HTTP payload 한도(32MB)를 넘지 않도록 upsert 도 배치로 쪼갠다.
+    # 단일 대형 사업보고서가 수천 청크를 만들 때 payload 가 40MB+ 되어 실패한 사례
+    # (Issue #18) 방지.
+    for upsert_chunk in _batches(points, config.upsert_batch_size):
+        qclient.upsert(collection_name=config.collection, points=upsert_chunk)
     return len(points)
 
 
@@ -541,6 +551,7 @@ __all__ = [
     "DEFAULT_COLLECTION",
     "DEFAULT_EMBEDDING_DIM",
     "DEFAULT_EMBEDDING_MODEL",
+    "DEFAULT_UPSERT_BATCH_SIZE",
     "IngestConfig",
     "IngestStats",
     "KNOWN_EMBEDDING_DIMS",

@@ -91,3 +91,6 @@ docs/api/environments/production.yml
 .superpowers/
 .gstack/
 TODO.md
+
+# FORK: OpenDartReader 가 DART corp code 를 pickle 로 캐시 (~10MB, 주기 갱신)
+docs_cache/
