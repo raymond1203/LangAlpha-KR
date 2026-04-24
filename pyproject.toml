@@ -122,4 +122,5 @@ addopts = "-m 'not integration and not slow'"
 dev = [
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.11",
 ]
