@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { cn, utcMsToChartSec, utcMsToETDate, utcMsToETTime } from '../utils';
+import {
+  cn,
+  utcMsToChartSec,
+  utcMsToETDate,
+  utcMsToETTime,
+  utcMsToTzDate,
+  utcMsToTzTime,
+} from '../utils';
 
 describe('cn', () => {
   it('merges simple class names', () => {
@@ -66,5 +73,40 @@ describe('utcMsToETTime', () => {
     const utcMs = Date.UTC(2024, 5, 15, 18, 30, 0); // June 15, 2024 18:30 UTC
     const result = utcMsToETTime(utcMs);
     expect(result).toMatch(/^\d{2}:\d{2}$/);
+  });
+});
+
+describe('utcMsToTzDate', () => {
+  it('returns YYYY-MM-DD in the given timezone (Asia/Seoul)', () => {
+    // 2024-06-15 18:00 UTC → KST 03:00 다음날 (KST = UTC+9)
+    const utcMs = Date.UTC(2024, 5, 15, 18, 0, 0);
+    expect(utcMsToTzDate(utcMs, 'Asia/Seoul')).toBe('2024-06-16');
+  });
+
+  it('matches utcMsToETDate when given America/New_York', () => {
+    const utcMs = Date.UTC(2024, 5, 15, 20, 0, 0);
+    expect(utcMsToTzDate(utcMs, 'America/New_York')).toBe(utcMsToETDate(utcMs));
+  });
+});
+
+describe('utcMsToTzTime', () => {
+  it('returns HH:MM 24h in the given timezone (Asia/Seoul)', () => {
+    // 2024-06-15 03:00 UTC → KST 12:00 (UTC+9, no DST)
+    const utcMs = Date.UTC(2024, 5, 15, 3, 0, 0);
+    expect(utcMsToTzTime(utcMs, 'Asia/Seoul')).toBe('12:00');
+  });
+
+  it('correctly identifies KRX regular hours (KST 09:00-15:30) for a June timestamp', () => {
+    // 2024-06-17 (월) 00:00 UTC = 09:00 KST → 정규장 시작
+    const openMs = Date.UTC(2024, 5, 17, 0, 0, 0);
+    expect(utcMsToTzTime(openMs, 'Asia/Seoul')).toBe('09:00');
+    // 06:30 UTC = 15:30 KST → 정규장 종료
+    const closeMs = Date.UTC(2024, 5, 17, 6, 30, 0);
+    expect(utcMsToTzTime(closeMs, 'Asia/Seoul')).toBe('15:30');
+  });
+
+  it('matches utcMsToETTime when given America/New_York', () => {
+    const utcMs = Date.UTC(2024, 5, 15, 18, 30, 0);
+    expect(utcMsToTzTime(utcMs, 'America/New_York')).toBe(utcMsToETTime(utcMs));
   });
 });

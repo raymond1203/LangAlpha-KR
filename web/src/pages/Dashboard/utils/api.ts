@@ -3,7 +3,7 @@
  * All backend endpoints used by the Dashboard page
  */
 import { api } from '@/api/client';
-import { utcMsToETDate, utcMsToETTime } from '@/lib/utils';
+import { utcMsToTzDate, utcMsToTzTime } from '@/lib/utils';
 import * as portfolioApi from './portfolio';
 import * as watchlistApi from './watchlist';
 import * as watchlistItemsApi from './watchlistItems';
@@ -104,14 +104,59 @@ interface InfoFlowResponse {
 const INDEX_SYMBOLS: string[] = ['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX'];
 const INDEX_NAMES: Record<string, string> = { GSPC: 'S&P 500', IXIC: 'NASDAQ', DJI: 'Dow Jones', RUT: 'Russell 2000', VIX: 'VIX' };
 
+// FORK: 한국 시장 인덱스 set — yfinance ^KS11/^KQ11/^KS200 로 자동 prefix 됨.
+// 백엔드 yfinance source 가 indices asset_type 일 때 ^ prefix 를 자동 추가하므로 여기서는 bare 심볼만 둠.
+// V-KOSPI(^VKOSPI) 는 yfinance 내부 PriceHistory 버그로 현재 fetch 불가 — 별도 데이터 소스 도입 후 추가 예정.
+const KR_INDEX_SYMBOLS: string[] = ['KS11', 'KQ11', 'KS200'];
+const KR_INDEX_NAMES: Record<string, string> = {
+  KS11: '코스피',
+  KQ11: '코스닥',
+  KS200: '코스피 200',
+};
+
+const _KR_INDEX_SET = new Set(KR_INDEX_SYMBOLS);
+
+/**
+ * 정규화된 심볼 기반으로 거래소 시간대를 도출. locale 에 의존하지 않음 —
+ * 심볼이 KR set 에 속하면 KST, 아니면 ET (NYSE/NASDAQ).
+ */
+function getIndexTimezone(norm: string): string {
+  return _KR_INDEX_SET.has(norm) ? 'Asia/Seoul' : 'America/New_York';
+}
+
+/** 정규장 시간 (HH:MM 24h, 거래소 로컬). KRX 09:00-15:30, NYSE/NASDAQ 09:30-16:00. */
+function getIndexMarketHours(norm: string): { open: string; close: string } {
+  return _KR_INDEX_SET.has(norm)
+    ? { open: '09:00', close: '15:30' }
+    : { open: '09:30', close: '16:00' };
+}
+
+/**
+ * locale 에 맞는 인덱스 ticker set + 표시명 반환.
+ * ko 로 시작하는 locale → KR set, 그 외 → US set.
+ */
+export function getIndexSetForLocale(locale: string | undefined | null): { symbols: string[]; names: Record<string, string> } {
+  if (locale && locale.toLowerCase().startsWith('ko')) {
+    return { symbols: KR_INDEX_SYMBOLS, names: KR_INDEX_NAMES };
+  }
+  return { symbols: INDEX_SYMBOLS, names: INDEX_NAMES };
+}
+
 function normalizeIndexSymbol(s: string): string {
   return String(s).replace(/^\^/, '').toUpperCase();
+}
+
+/**
+ * 정규화된 심볼의 표시명 도출. US set → KR set → 호출자 fallback (예: snapshot.name) → 심볼 자체 순서로 resolve.
+ */
+function getIndexDisplayName(norm: string, fallback?: string | null): string {
+  return INDEX_NAMES[norm] ?? KR_INDEX_NAMES[norm] ?? fallback ?? norm;
 }
 
 function fallbackIndex(norm: string): IndexData {
   return {
     symbol: norm,
-    name: INDEX_NAMES[norm] ?? norm,
+    name: getIndexDisplayName(norm),
     price: 0,
     change: 0,
     changePercent: 0,
@@ -139,12 +184,14 @@ export async function getIndex(symbol: string, _opts: Record<string, unknown> = 
     // Sort ascending by time (Unix ms)
     const sorted = [...pts].sort((a: IntradayPoint, b: IntradayPoint) => a.time - b.time);
 
-    // Isolate the most recent trading day, regular hours only (9:30–16:00)
-    const latestDate = utcMsToETDate(sorted[sorted.length - 1].time);
+    // FORK: 심볼별 거래소 시간대로 정규장 시간 필터링 (KR: KST 09:00-15:30, US: ET 09:30-16:00).
+    const tz = getIndexTimezone(norm);
+    const hours = getIndexMarketHours(norm);
+    const latestDate = utcMsToTzDate(sorted[sorted.length - 1].time, tz);
     const todayPoints = sorted.filter((p: IntradayPoint) => {
-      if (utcMsToETDate(p.time) !== latestDate) return false;
-      const t = utcMsToETTime(p.time);
-      return t >= '09:30' && t <= '16:00';
+      if (utcMsToTzDate(p.time, tz) !== latestDate) return false;
+      const t = utcMsToTzTime(p.time, tz);
+      return t >= hours.open && t <= hours.close;
     });
 
     const oldest = todayPoints[0];
@@ -157,14 +204,14 @@ export async function getIndex(symbol: string, _opts: Record<string, unknown> = 
 
     const result: IndexData = {
       symbol: norm,
-      name: INDEX_NAMES[norm] ?? norm,
+      name: getIndexDisplayName(norm),
       price: Math.round(close * 100) / 100,
       change: Math.round(change * 100) / 100,
       changePercent: Math.round(changePercent * 100) / 100,
       isPositive: change >= 0,
       sparklineData: todayPoints
         .filter((p: IntradayPoint) => Number(p.close) > 0)
-        .map((p: IntradayPoint) => ({ time: utcMsToETTime(p.time), val: Number(p.close) })),
+        .map((p: IntradayPoint) => ({ time: utcMsToTzTime(p.time, tz), val: Number(p.close) })),
     };
 
     return result;
@@ -210,7 +257,7 @@ export async function getIndices(symbols: string[] = INDEX_SYMBOLS, _opts: Recor
       const changePct = snap.change_percent ?? (snap.previous_close ? ((change / snap.previous_close) * 100) : 0);
       return {
         symbol: norm,
-        name: INDEX_NAMES[norm] ?? snap.name ?? norm,
+        name: getIndexDisplayName(norm, snap.name),
         price: Math.round(snap.price * 100) / 100,
         change: Math.round(change * 100) / 100,
         changePercent: Math.round(changePct * 100) / 100,
@@ -226,7 +273,14 @@ export async function getIndices(symbols: string[] = INDEX_SYMBOLS, _opts: Recor
   return { indices, failedCount };
 }
 
-export { INDEX_NAMES, INDEX_SYMBOLS, fallbackIndex, normalizeIndexSymbol };
+export {
+  INDEX_NAMES,
+  INDEX_SYMBOLS,
+  KR_INDEX_NAMES,
+  KR_INDEX_SYMBOLS,
+  fallbackIndex,
+  normalizeIndexSymbol,
+};
 
 // --- Hello ---
 

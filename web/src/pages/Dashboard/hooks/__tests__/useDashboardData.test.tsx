@@ -2,16 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { renderHookWithProviders } from '../../../../test/utils';
 import { useDashboardData } from '../useDashboardData';
-import { waitFor } from '@testing-library/react';
+import { act, waitFor } from '@testing-library/react';
+import i18n from '../../../../i18n';
 
 vi.mock('../../utils/api', () => ({
   getNews: vi.fn(),
   getIndices: vi.fn(),
   INDEX_SYMBOLS: ['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX'],
+  KR_INDEX_SYMBOLS: ['KS11', 'KQ11', 'KS200'],
   fallbackIndex: vi.fn((s: string) => ({
     symbol: s, name: s, price: 0, change: 0, changePercent: 0, isPositive: true, sparklineData: [],
   })),
   normalizeIndexSymbol: vi.fn((s: string) => String(s).replace(/^\^/, '').toUpperCase()),
+  getIndexSetForLocale: vi.fn((locale?: string | null) => {
+    if (locale && locale.toLowerCase().startsWith('ko')) {
+      return { symbols: ['KS11', 'KQ11', 'KS200'], names: { KS11: '코스피', KQ11: '코스닥', KS200: '코스피 200' } };
+    }
+    return { symbols: ['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX'], names: { GSPC: 'S&P 500', IXIC: 'NASDAQ', DJI: 'Dow Jones', RUT: 'Russell 2000', VIX: 'VIX' } };
+  }),
 }));
 
 vi.mock('@/lib/marketUtils', () => ({
@@ -26,8 +34,10 @@ const mockGetIndices = getIndices as Mock;
 const mockGetNews = getNews as Mock;
 
 describe('useDashboardData', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // 다른 테스트로부터의 locale leakage 방지 — 각 테스트가 en-US 에서 시작
+    await i18n.changeLanguage('en-US');
     mockFetchMarketStatus.mockResolvedValue({ market: 'open', afterHours: false, earlyHours: false });
     mockGetIndices.mockResolvedValue({
       indices: [
@@ -95,5 +105,30 @@ describe('useDashboardData', () => {
     await waitFor(() => expect(result.current.marketStatus).not.toBeNull());
     expect(result.current.marketStatusRef).toBeDefined();
     expect(result.current.marketStatusRef.current).toEqual(result.current.marketStatus);
+  });
+
+  it('refetches indices with KR ticker set when locale changes to ko-KR', async () => {
+    // en-US 초기 상태 — getIndices 가 US 심볼로 호출됐는지 확인
+    renderHookWithProviders(() => useDashboardData());
+    await waitFor(() => {
+      expect(mockGetIndices).toHaveBeenCalledWith(['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX']);
+    });
+
+    const usCallCount = mockGetIndices.mock.calls.length;
+
+    // locale 을 ko-KR 로 전환 — useTranslation 구독자가 리렌더 → useMemo dep 변경 → queryKey 갱신 → 자동 refetch
+    await act(async () => {
+      await i18n.changeLanguage('ko-KR');
+    });
+
+    await waitFor(() => {
+      const krCall = mockGetIndices.mock.calls.find((args) =>
+        Array.isArray(args[0]) && args[0][0] === 'KS11',
+      );
+      expect(krCall).toBeDefined();
+      expect(krCall![0]).toEqual(['KS11', 'KQ11', 'KS200']);
+    });
+    // locale 변경 이후에 추가 호출이 발생했는지 확인 — 캐시가 분리되어 새 fetch 가 트리거됨
+    expect(mockGetIndices.mock.calls.length).toBeGreaterThan(usCallCount);
   });
 });

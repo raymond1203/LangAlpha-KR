@@ -20,15 +20,23 @@ const _etParts = new Intl.DateTimeFormat('en-US', {
   hour12: false,
 });
 
+/** Convert UTC Unix ms to a timezone-local date string (YYYY-MM-DD). */
+export const utcMsToTzDate = (ms: number, timeZone: string): string =>
+  new Date(ms).toLocaleDateString('en-CA', { timeZone });
+
+/** Convert UTC Unix ms to a timezone-local time string (HH:MM, 24h). */
+export const utcMsToTzTime = (ms: number, timeZone: string): string =>
+  new Date(ms).toLocaleTimeString('en-US', {
+    timeZone, hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+
 /** Convert UTC Unix ms to ET date string (YYYY-MM-DD). */
 export const utcMsToETDate = (ms: number): string =>
-  new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  utcMsToTzDate(ms, 'America/New_York');
 
 /** Convert UTC Unix ms to ET time string (HH:MM, 24h). */
 export const utcMsToETTime = (ms: number): string =>
-  new Date(ms).toLocaleTimeString('en-US', {
-    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-  });
+  utcMsToTzTime(ms, 'America/New_York');
 
 export function utcMsToChartSec(utcMs: number | null | undefined): number {
   if (utcMs == null || isNaN(utcMs)) return 0;

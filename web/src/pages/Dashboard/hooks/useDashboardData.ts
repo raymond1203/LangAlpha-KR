@@ -1,5 +1,13 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getNews, getIndices, INDEX_SYMBOLS, fallbackIndex, normalizeIndexSymbol } from '../utils/api';
+import { useTranslation } from 'react-i18next';
+import {
+  getNews,
+  getIndices,
+  fallbackIndex,
+  normalizeIndexSymbol,
+  getIndexSetForLocale,
+} from '../utils/api';
 import { fetchMarketStatus } from '@/lib/marketUtils';
 import type { IndexData } from '@/types/market';
 
@@ -54,6 +62,10 @@ function formatRelativeTime(timestamp: string | number | null | undefined): stri
  * Eliminates race conditions and reduces boilerplate of manual useEffects.
  */
 export function useDashboardData(): DashboardData {
+  // FORK: locale-aware 인덱스 set 선택 (ko-* → KOSPI/KOSDAQ/KOSPI 200, 그 외 → US 5종)
+  const { i18n } = useTranslation();
+  const indexSet = useMemo(() => getIndexSetForLocale(i18n.language), [i18n.language]);
+
   // 1. Market Status (Polls every 60s, cached globally)
   const { data: marketStatus = null } = useQuery<MarketStatusData | null>({
     queryKey: ['dashboard', 'marketStatus'],
@@ -68,14 +80,15 @@ export function useDashboardData(): DashboardData {
     (marketStatus && !marketStatus.afterHours && !marketStatus.earlyHours && marketStatus.market !== 'closed');
 
   const { data: indices, isLoading: indicesLoading } = useQuery<IndexData[]>({
-    queryKey: ['dashboard', 'indices', INDEX_SYMBOLS],
+    // queryKey 에 indexSet.symbols 를 포함 → locale 변경 시 자동 refetch + 별도 캐시 분리
+    queryKey: ['dashboard', 'indices', indexSet.symbols],
     queryFn: async () => {
-      const { indices: next } = await getIndices(INDEX_SYMBOLS);
+      const { indices: next } = await getIndices(indexSet.symbols);
       return next;
     },
-    // Using placeholderData provides standard fallback values instantly 
+    // Using placeholderData provides standard fallback values instantly
     // without populating the cache as "fresh", thereby triggering an immediate background fetch
-    placeholderData: (): IndexData[] => INDEX_SYMBOLS.map((s) => fallbackIndex(normalizeIndexSymbol(s))),
+    placeholderData: (): IndexData[] => indexSet.symbols.map((s) => fallbackIndex(normalizeIndexSymbol(s))),
     refetchInterval: isMarketOpen ? 30000 : 60000,
     refetchIntervalInBackground: false,
     staleTime: 10000,
