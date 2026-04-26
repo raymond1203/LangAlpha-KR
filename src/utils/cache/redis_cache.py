@@ -105,17 +105,26 @@ class RedisCacheClient:
             return
 
         try:
-            # health_check_interval: redis-py sends PING on idle connections before
-            # handing them out, so poisoned connections (dropped by the server or
-            # network) get detected and discarded instead of lingering in the pool.
-            self.pool = ConnectionPool.from_url(
-                self.url,
-                max_connections=self.max_connections,
-                socket_timeout=self.socket_timeout,
-                socket_connect_timeout=self.socket_connect_timeout,
-                decode_responses=False,
-                health_check_interval=30,
-            )
+            # FORK (#34): URL 에 인증 정보가 없을 때 REDIS_PASSWORD env var 를 fallback
+            # 으로 주입. docker-compose 는 URL 자체에 password 를 박아주지만, 로컬
+            # 실행 (`uv run python server.py`) 시에는 URL fallback 이 password 없는
+            # `redis://localhost:6379/0` 라 인증 실패. URL 에 password 가 있으면
+            # redis-py from_url 동작상 그게 우선이라 docker 환경에는 영향 없음.
+            pool_kwargs: dict[str, Any] = {
+                "max_connections": self.max_connections,
+                "socket_timeout": self.socket_timeout,
+                "socket_connect_timeout": self.socket_connect_timeout,
+                "decode_responses": False,
+                # health_check_interval: redis-py sends PING on idle connections before
+                # handing them out, so poisoned connections (dropped by the server or
+                # network) get detected and discarded instead of lingering in the pool.
+                "health_check_interval": 30,
+            }
+            redis_password = os.getenv("REDIS_PASSWORD")
+            if redis_password:
+                pool_kwargs["password"] = redis_password
+
+            self.pool = ConnectionPool.from_url(self.url, **pool_kwargs)
 
             self.client = redis.Redis(connection_pool=self.pool)
 
