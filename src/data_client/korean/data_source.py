@@ -1,7 +1,13 @@
 """MarketDataSource implementation backed by pykrx.
 
-Provides KOSPI/KOSDAQ daily OHLCV data. Intraday intervals are not
-supported — raises ValueError so the chain falls back to the next source.
+Provides KOSPI/KOSDAQ daily OHLCV data and stock snapshots only.
+
+Unsupported requests raise to trigger ``MarketDataProvider`` fallback to the
+next source in the chain (silent empty results would be mistaken for success):
+- Intraday intervals → ``ValueError`` (pykrx is daily-only).
+- ``get_snapshots`` with ``asset_type != "stocks"`` (e.g. ``"indices"``) →
+  ``NotImplementedError`` (pykrx exposes index OHLCV via a separate API not
+  wired up here; index snapshots route to yfinance instead).
 
 Symbols are expected in Yahoo-style format (e.g. ``005930.KS`` for KOSPI,
 ``263750.KQ`` for KOSDAQ). The ``.KS``/``.KQ`` suffix is stripped before
