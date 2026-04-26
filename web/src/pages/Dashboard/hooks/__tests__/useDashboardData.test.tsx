@@ -58,6 +58,36 @@ describe('useDashboardData', () => {
     expect(result.current.marketStatus!.market).toBe('open');
   });
 
+  it('passes region=us to fetchMarketStatus by default (en-US locale, auto market)', async () => {
+    renderHookWithProviders(() => useDashboardData());
+    await waitFor(() => {
+      expect(mockFetchMarketStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ region: 'us' }),
+      );
+    });
+  });
+
+  it('refetches marketStatus with region=kr when locale changes to ko-KR', async () => {
+    // FORK (#37): marketStatus useQuery 의 queryKey 에 region 포함 → market=kr 전환 시 자동 refetch
+    renderHookWithProviders(() => useDashboardData());
+    await waitFor(() => {
+      expect(mockFetchMarketStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ region: 'us' }),
+      );
+    });
+
+    await act(async () => {
+      await i18n.changeLanguage('ko-KR');
+    });
+
+    await waitFor(() => {
+      const krCall = mockFetchMarketStatus.mock.calls.find(
+        (args) => (args[0] as { region?: string })?.region === 'kr',
+      );
+      expect(krCall).toBeDefined();
+    });
+  });
+
   it('returns indices data', async () => {
     const { result } = renderHookWithProviders(() => useDashboardData());
 

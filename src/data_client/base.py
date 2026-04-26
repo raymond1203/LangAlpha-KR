@@ -75,8 +75,13 @@ class MarketDataSource(Protocol):
     async def get_market_status(
         self,
         user_id: str | None = None,
+        region: str | None = None,
     ) -> dict[str, Any]:
-        """Return current market status."""
+        """Return current market status. ``region`` 이 명시되면 source 는 자기가
+        지원하지 않는 region 일 때 ``NotImplementedError`` 를 raise — Provider
+        는 chain 의 다음 candidate 로 fallback. ``region=None`` 은 backward-compat
+        으로 source 의 기본 (자기 default region) status 반환.
+        """
         ...
 
     async def close(self) -> None:

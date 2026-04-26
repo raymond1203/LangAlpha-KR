@@ -100,10 +100,15 @@ export async function searchStocks(query: string, limit = 50): Promise<StockSear
 /**
  * GET /api/v1/market-data/market-status
  * Returns { market, afterHours, earlyHours, serverTime, exchanges }
+ *
+ * FORK (#37): region 파라미터 — backend 가 region 별로 응답 (KR/US). 미지정 시 backend default ('us').
  */
-export async function fetchMarketStatus({ signal }: { signal?: AbortSignal } = {}): Promise<MarketStatusData> {
+export async function fetchMarketStatus(
+  { signal, region }: { signal?: AbortSignal; region?: string } = {},
+): Promise<MarketStatusData> {
   try {
-    const { data } = await api.get('/api/v1/market-data/market-status', { signal });
+    const params = region ? { region } : undefined;
+    const { data } = await api.get('/api/v1/market-data/market-status', { signal, params });
     return data || {};
   } catch (e: unknown) {
     const err = e as { name?: string; message?: string };

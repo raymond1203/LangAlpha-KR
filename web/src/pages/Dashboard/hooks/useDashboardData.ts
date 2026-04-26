@@ -69,10 +69,12 @@ export function useDashboardData(): DashboardData {
   const indexSet = useMemo(() => getIndexSetForMarket(region), [region]);
   const newsRegion = useMemo(() => getNewsRegionForMarket(region), [region]);
 
-  // 1. Market Status (Polls every 60s, cached globally)
+  // 1. Market Status (Polls every 60s, cached per region)
+  // FORK (#37): queryKey 에 region 포함 → 시장 전환 시 자동 refetch + KR/US 캐시 분리.
+  // KR 사용자가 KST 09:00-15:30 에 'open' 보고, US 사용자가 ET 09:30-16:00 에 'open' 보도록.
   const { data: marketStatus = null } = useQuery<MarketStatusData | null>({
-    queryKey: ['dashboard', 'marketStatus'],
-    queryFn: fetchMarketStatus,
+    queryKey: ['dashboard', 'marketStatus', region],
+    queryFn: ({ signal }) => fetchMarketStatus({ signal, region }),
     refetchInterval: 60000,
     refetchIntervalInBackground: false,
     staleTime: 30000,

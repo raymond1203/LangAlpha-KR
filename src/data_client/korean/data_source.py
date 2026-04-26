@@ -201,7 +201,14 @@ class KoreanDataSource:
     async def get_market_status(
         self,
         user_id: str | None = None,
+        region: str | None = None,
     ) -> dict[str, Any]:
+        # FORK (#37): KR 만 지원. region 명시 시 'kr' 외에는 chain 의 다음 source 로
+        # fallback 하도록 NotImplementedError. region=None 은 KR 으로 응답 (기본 동작).
+        if region is not None and region != "kr":
+            raise NotImplementedError(
+                f"KoreanDataSource only supports region='kr', got {region!r}"
+            )
         now = datetime.now(_KST)
         hour = now.hour
         minute = now.minute

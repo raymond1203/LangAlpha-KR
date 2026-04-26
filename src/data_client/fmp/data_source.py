@@ -121,8 +121,16 @@ class FMPDataSource:
     async def get_market_status(
         self,
         user_id: str | None = None,
+        region: str | None = None,
     ) -> dict[str, Any]:
-        """Derive market status from current time (FMP has no dedicated endpoint)."""
+        """Derive market status from current time (FMP has no dedicated endpoint).
+
+        FORK (#37): NYSE 시간 기반이라 region='us' 또는 None 에만 응답.
+        """
+        if region is not None and region != "us":
+            raise NotImplementedError(
+                f"FMPDataSource market_status only supports region='us', got {region!r}"
+            )
         from src.utils.market_hours import current_market_phase
 
         phase = current_market_phase()

@@ -219,6 +219,103 @@ class TestMarketDataProvider:
 
 
 # ---------------------------------------------------------------------------
+# get_market_status region routing (issue #37)
+# ---------------------------------------------------------------------------
+
+
+class _RegionAwareSource:
+    """get_market_status 만 가진 fake. region 인자를 받아 자기가 안 다루는 region
+    이면 NotImplementedError 를 raise — 실제 KoreanDataSource / YfinanceDataSource
+    가 이슈 #37 fix 후 동작하는 방식과 동일.
+    """
+
+    def __init__(self, name: str, supports: set[str]):
+        self.name = name
+        self.supports = supports
+        self.calls: list[dict] = []
+
+    async def get_market_status(self, user_id=None, region=None):
+        self.calls.append({"user_id": user_id, "region": region})
+        if region is not None and region not in self.supports:
+            raise NotImplementedError(
+                f"{self.name} only supports {self.supports}, got {region!r}"
+            )
+        return {"market": "open" if "open" in self.supports else "closed", "_source": self.name}
+
+    async def close(self):
+        pass
+
+
+class TestMarketStatusRegionRouting:
+    @pytest.mark.asyncio
+    async def test_kr_region_routes_to_korean_source(self):
+        """region='kr' → KR source 응답. US source 는 NotImplementedError 로 skip."""
+        kr_src = _RegionAwareSource("korean", supports={"kr", "open"})
+        us_src = _RegionAwareSource("yfinance", supports={"us"})
+        provider = MarketDataProvider([
+            ProviderEntry("yfinance", us_src, {"all"}),  # 'all' 마킹이지만 region='kr' 거절
+            ProviderEntry("korean", kr_src, {"kr"}),
+        ])
+        result = await provider.get_market_status(region="kr")
+        assert result["_source"] == "korean"
+        # us_src 가 먼저 시도됐으나 NotImplementedError 로 skip 됐는지 확인
+        assert us_src.calls == [{"user_id": None, "region": "kr"}]
+        assert kr_src.calls == [{"user_id": None, "region": "kr"}]
+
+    @pytest.mark.asyncio
+    async def test_us_region_routes_to_us_source(self):
+        kr_src = _RegionAwareSource("korean", supports={"kr"})
+        us_src = _RegionAwareSource("yfinance", supports={"us", "open"})
+        provider = MarketDataProvider([
+            ProviderEntry("korean", kr_src, {"kr"}),
+            ProviderEntry("yfinance", us_src, {"all"}),
+        ])
+        result = await provider.get_market_status(region="us")
+        assert result["_source"] == "yfinance"
+        # KR 은 region='us' 매칭에서 제외 (markets={'kr'} 만, 'all' 없음)
+        assert kr_src.calls == []
+        assert us_src.calls == [{"user_id": None, "region": "us"}]
+
+    @pytest.mark.asyncio
+    async def test_region_none_backward_compat(self):
+        """region=None 은 기존 동작 — chain 의 첫 번째 source 가 응답."""
+        kr_src = _RegionAwareSource("korean", supports={"kr"})
+        us_src = _RegionAwareSource("yfinance", supports={"us", "open"})
+        provider = MarketDataProvider([
+            ProviderEntry("korean", kr_src, {"kr"}),
+            ProviderEntry("yfinance", us_src, {"all"}),
+        ])
+        # region=None 은 모든 candidates. korean 이 첫 호출 — region=None 이라 거절 안 함.
+        result = await provider.get_market_status()
+        # kr source 가 region=None 을 받아 KR status 반환
+        assert result["_source"] == "korean"
+
+    @pytest.mark.asyncio
+    async def test_unsupported_region_raises(self):
+        """어떤 source 도 region 을 지원 안 하면 마지막 NotImplementedError 가 raise."""
+        us_src = _RegionAwareSource("yfinance", supports={"us"})
+        provider = MarketDataProvider([
+            ProviderEntry("yfinance", us_src, {"all"}),
+        ])
+        with pytest.raises(NotImplementedError):
+            await provider.get_market_status(region="kr")
+
+    @pytest.mark.asyncio
+    async def test_korean_source_unit_rejects_non_kr_region(self):
+        """KoreanDataSource 자체가 region='us' 호출에 NotImplementedError."""
+        from src.data_client.korean.data_source import KoreanDataSource
+
+        source = KoreanDataSource()
+        with pytest.raises(NotImplementedError, match="region='kr'"):
+            await source.get_market_status(region="us")
+        # region='kr' 또는 None 은 정상
+        result = await source.get_market_status(region="kr")
+        assert "market" in result
+        result2 = await source.get_market_status(region=None)
+        assert "market" in result2
+
+
+# ---------------------------------------------------------------------------
 # FMPDataSource interval guard tests
 # ---------------------------------------------------------------------------
 

@@ -729,9 +729,16 @@ async def get_single_stock_snapshot(symbol: str, user_id: CurrentUserId) -> Snap
     summary="Get current market status (alias)",
     description="Alias for /market-status for backward compatibility.",
 )
-async def get_market_status_alias(user_id: CurrentUserId) -> MarketStatusResponse:
+async def get_market_status_alias(
+    user_id: CurrentUserId,
+    region: Optional[str] = Query(
+        None,
+        description="Market region (e.g. 'us', 'kr'). Defaults to 'us' if omitted.",
+        pattern=r"^[a-z]{2}$",
+    ),
+) -> MarketStatusResponse:
     """Alias for get_market_status."""
-    return await get_market_status(user_id)
+    return await get_market_status(user_id, region)
 
 
 @router.get(
@@ -740,21 +747,33 @@ async def get_market_status_alias(user_id: CurrentUserId) -> MarketStatusRespons
     summary="Get current market status",
     description="Retrieve the current market status (open, closed, extended hours).",
 )
-async def get_market_status(user_id: CurrentUserId) -> MarketStatusResponse:
-    """Get current market status."""
+async def get_market_status(
+    user_id: CurrentUserId,
+    region: Optional[str] = Query(
+        None,
+        description="Market region (e.g. 'us', 'kr'). Defaults to 'us' if omitted.",
+        pattern=r"^[a-z]{2}$",
+    ),
+) -> MarketStatusResponse:
+    """Get current market status. FORK (#37): region 별 분리 — KR/US 사용자가
+    각자 자기 시장 상태를 보도록. region 미지정 시 'us' (backward-compat).
+    """
     try:
         from src.utils.cache.redis_cache import get_cache_client
         from src.data_client import get_market_data_provider
 
+        effective_region = region or "us"
+
         cache = get_cache_client()
-        cache_key = "market:status"
+        # FORK (#37): cache key 에 region 포함 — KR/US status 가 동시에 캐시되도록.
+        cache_key = f"market:status:{effective_region}"
 
         cached = await cache.get(cache_key)
         if cached is not None:
             return MarketStatusResponse(**cached)
 
         provider = await get_market_data_provider()
-        raw = await provider.get_market_status(user_id=user_id)
+        raw = await provider.get_market_status(user_id=user_id, region=effective_region)
 
         response = MarketStatusResponse(
             market=raw.get("market"),

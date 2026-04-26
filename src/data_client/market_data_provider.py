@@ -240,24 +240,50 @@ class MarketDataProvider:
     async def get_market_status(
         self,
         user_id: str | None = None,
+        region: str | None = None,
     ) -> dict[str, Any]:
-        """Fetch market status, trying providers in order."""
+        """Fetch market status, optionally scoped to a region.
+
+        FORK (#37): region 명시 시 markets 에 region 포함된 source 우선 + 'all'
+        source 도 후보 (chain 순서 유지). 각 source 는 자기가 region 을 지원하지
+        않으면 ``NotImplementedError`` 를 raise — 자연스럽게 다음 candidate 로
+        fallback. 'all' 마킹된 source (fmp/yfinance) 도 실제로는 NYSE 시간만 알아서
+        region='kr' 호출 시 NotImplementedError 로 거절하고 KoreanDataSource 로 흘러감.
+        region=None 은 기존 동작 유지 (chain 순서대로 첫 성공 응답).
+        """
+        if region:
+            candidates = [
+                e for e in self.entries
+                if region in e.markets or "all" in e.markets
+            ]
+        else:
+            candidates = list(self.entries)
+
         last_exc: Exception | None = None
-        for entry in self.entries:
+        for entry in candidates:
             fn = getattr(entry.source, "get_market_status", None)
             if fn is None:
                 continue
             try:
-                return await fn(user_id=user_id)
+                return await fn(user_id=user_id, region=region)
+            except NotImplementedError as exc:
+                # source 가 region 을 지원 안 함 — 정상적인 fallback 신호. 로그 noise 줄이기 위해 debug.
+                logger.debug(
+                    "market_data.market_status.skip | source=%s region=%s reason=%s",
+                    entry.name, region, exc,
+                )
+                last_exc = exc
             except Exception as exc:
                 logger.warning(
-                    "market_data.market_status.fallback | source=%s error=%s",
-                    entry.name, exc,
+                    "market_data.market_status.fallback | source=%s region=%s error=%s",
+                    entry.name, region, exc,
                 )
                 last_exc = exc
         if last_exc:
             raise last_exc
-        raise RuntimeError("No data source supports get_market_status")
+        raise RuntimeError(
+            f"No data source supports get_market_status for region={region!r}"
+        )
 
     async def close(self) -> None:
         """Close all underlying sources, catching errors independently."""

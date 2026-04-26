@@ -166,7 +166,14 @@ class YFinanceDataSource:
     async def get_market_status(
         self,
         user_id: str | None = None,
+        region: str | None = None,
     ) -> dict[str, Any]:
+        # FORK (#37): yfinance 는 NYSE 시간 기반이라 region='us' 또는 None 에만 응답.
+        # region='kr' 같은 다른 시장 요청은 잘못된 (US 시간) 정보를 줄 수 있어 거부.
+        if region is not None and region != "us":
+            raise NotImplementedError(
+                f"YfinanceDataSource market_status only supports region='us', got {region!r}"
+            )
         from src.utils.market_hours import current_market_phase
 
         phase = current_market_phase()
