@@ -163,6 +163,9 @@ def get_locale_config(locale: str, prompt_language: str) -> Dict[str, str]:
         timezone = "America/New_York"
     elif locale_lower == "zh-cn":
         timezone = "Asia/Shanghai"
+    elif locale_lower == "ko-kr":
+        # FORK: 한국 사용자 KST 적용
+        timezone = "Asia/Seoul"
     else:
         timezone = "UTC"
 

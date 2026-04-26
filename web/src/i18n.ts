@@ -1,9 +1,11 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import enUS from './locales/en-US.json';
+import koKR from './locales/ko-KR.json';
 import zhCN from './locales/zh-CN.json';
 
-const SUPPORTED_LOCALES = ['en-US', 'zh-CN'] as const;
+// FORK: ko-KR 추가 — 한국 사용자 첫 인상 한국화
+const SUPPORTED_LOCALES = ['en-US', 'ko-KR', 'zh-CN'] as const;
 
 function detectLocale(): string {
   // 1. Explicit user choice persisted in localStorage
@@ -28,6 +30,7 @@ function detectLocale(): string {
 i18n.use(initReactI18next).init({
   resources: {
     'en-US': { translation: enUS },
+    'ko-KR': { translation: koKR }, // FORK: 한국어
     'zh-CN': { translation: zhCN },
   },
   lng: detectLocale(),
