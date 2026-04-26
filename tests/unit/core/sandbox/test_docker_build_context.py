@@ -8,14 +8,16 @@ so build context must be packaged as a tar BytesIO and passed via `fileobj`.
 from __future__ import annotations
 
 import io
+import os
 import tarfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from ptc_agent.config.core import DockerConfig
 from ptc_agent.core.sandbox.providers.docker import (
+    _DEFAULT_TAR_EXCLUDES,
     DockerProvider,
     _build_tar_context,
     _load_dockerignore,
@@ -127,16 +129,159 @@ class TestBuildTarContext:
             assert member.read().decode("utf-8") == "FROM scratch\nCMD echo hi\n"
 
 
+class TestSafetyExcludes:
+    """Default excludes when .dockerignore is missing — guards against packing
+    the entire repo (e.g., 1.3GB .venv) by accident."""
+
+    def test_default_excludes_applied_when_dockerignore_missing(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path / "Dockerfile.sandbox", "FROM scratch")
+        _write(tmp_path / ".venv" / "lib" / "huge.bin", "x" * 5000)
+        _write(tmp_path / ".git" / "HEAD", "ref")
+        _write(tmp_path / "node_modules" / "pkg" / "i.js", "j")
+        _write(tmp_path / "src" / "app.py", "ok")
+        # Note: no .dockerignore created
+
+        buf = _build_tar_context(str(tmp_path))
+
+        names = _tar_names(buf)
+        assert "Dockerfile.sandbox" in names
+        assert "src/app.py" in names
+        assert not any(n.startswith(".venv") for n in names)
+        assert not any(n.startswith(".git") for n in names)
+        assert not any(n.startswith("node_modules") for n in names)
+
+    def test_user_dockerignore_takes_precedence_over_defaults(
+        self, tmp_path: Path
+    ) -> None:
+        # User explicitly wants .git in the context (unusual but allowed)
+        _write(tmp_path / "Dockerfile.sandbox", "FROM scratch")
+        _write(tmp_path / ".git" / "HEAD", "ref")
+        _write(tmp_path / "secret.txt", "s")
+        _write(tmp_path / ".dockerignore", "secret.txt\n")
+
+        buf = _build_tar_context(str(tmp_path))
+
+        names = _tar_names(buf)
+        # .git included because user's dockerignore did NOT exclude it
+        assert any(n.startswith(".git") for n in names)
+        # User's explicit exclusion still works
+        assert "secret.txt" not in names
+
+    def test_default_excludes_constant_has_expected_entries(self) -> None:
+        # Sanity: protect against accidental removal of critical excludes.
+        for required in (".git/", ".venv/", "node_modules/", "__pycache__/"):
+            assert required in _DEFAULT_TAR_EXCLUDES
+
+
+class TestSizeCap:
+    def test_raises_when_tar_exceeds_max_size(self, tmp_path: Path) -> None:
+        _write(tmp_path / "Dockerfile.sandbox", "FROM scratch")
+        # 100KB of incompressible random-ish bytes — defeats gzip
+        _write(tmp_path / "big.bin", "".join(chr(((i * 1103515245) % 256) ^ 0x55) for i in range(100_000)))
+
+        with pytest.raises(RuntimeError, match="too large"):
+            _build_tar_context(str(tmp_path), max_size=1024)  # 1KB cap
+
+    def test_does_not_raise_below_cap(self, tmp_path: Path) -> None:
+        _write(tmp_path / "Dockerfile.sandbox", "FROM scratch")
+        _build_tar_context(str(tmp_path), max_size=10 * 1024 * 1024)  # 10MB
+
+
+class TestDeterministicOrder:
+    def test_files_added_in_sorted_order(self, tmp_path: Path) -> None:
+        _write(tmp_path / "Dockerfile.sandbox", "FROM scratch")
+        # Create files in non-alphabetical order
+        for name in ("z.txt", "a.txt", "m.txt"):
+            _write(tmp_path / name, name)
+        for name in ("zz", "aa", "mm"):
+            _write(tmp_path / name / "f.txt", name)
+
+        buf = _build_tar_context(str(tmp_path))
+
+        # Order in archive must be sorted (lexicographic) at each level
+        buf.seek(0)
+        with tarfile.open(fileobj=buf, mode="r:gz") as t:
+            members = [m.name for m in t.getmembers()]
+        # Top-level files appear in sorted order
+        top_files = [n for n in members if "/" not in n]
+        assert top_files == sorted(top_files)
+
+
+class TestSymlinkSafety:
+    def test_skips_symlink_pointing_outside_build_dir(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        outside_file = outside / "secret.key"
+        outside_file.write_text("HOST_SECRET")
+
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
+        _write(build_dir / "Dockerfile.sandbox", "FROM scratch")
+        _write(build_dir / "kept.txt", "k")
+        # Symlink pointing OUTSIDE build_dir
+        os.symlink(str(outside_file), str(build_dir / "leaked.key"))
+
+        buf = _build_tar_context(str(build_dir))
+
+        names = _tar_names(buf)
+        assert "Dockerfile.sandbox" in names
+        assert "kept.txt" in names
+        assert "leaked.key" not in names
+
+    def test_includes_symlink_pointing_inside_build_dir(
+        self, tmp_path: Path
+    ) -> None:
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
+        _write(build_dir / "Dockerfile.sandbox", "FROM scratch")
+        _write(build_dir / "real.txt", "real")
+        os.symlink(str(build_dir / "real.txt"), str(build_dir / "alias.txt"))
+
+        buf = _build_tar_context(str(build_dir))
+
+        names = _tar_names(buf)
+        assert "alias.txt" in names
+
+    def test_skips_dangling_symlink(self, tmp_path: Path) -> None:
+        _write(tmp_path / "Dockerfile.sandbox", "FROM scratch")
+        os.symlink(
+            str(tmp_path / "does_not_exist.txt"),
+            str(tmp_path / "broken.txt"),
+        )
+
+        buf = _build_tar_context(str(tmp_path))
+
+        names = _tar_names(buf)
+        assert "broken.txt" not in names
+
+
 class TestEnsureImageBuildSignature:
     """Verify `_ensure_image` calls aiodocker with the new (0.26+) signature."""
 
     @pytest.mark.asyncio
     async def test_build_called_with_fileobj_and_path_dockerfile(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Arrange: create a fake build context with Dockerfile.sandbox
+        # Arrange: fake build context with Dockerfile.sandbox in tmp_path.
         dockerfile = tmp_path / "Dockerfile.sandbox"
         dockerfile.write_text("FROM scratch\n")
+
+        # Isolate _ensure_image's Dockerfile search.
+        #
+        # `_ensure_image` builds a `search_paths` list:
+        #   [os.path.join(os.getcwd(), 'Dockerfile.sandbox'),
+        #    + module_dir-based paths from os.path.abspath(__file__) walking
+        #      up to 6 levels]
+        #
+        # The loop breaks on first match. We chdir to tmp_path so cwd-based
+        # path is found first. Without this isolation, the module_dir walk
+        # could discover the real repo's Dockerfile.sandbox, making the test
+        # implicitly depend on repo layout.
+        monkeypatch.chdir(tmp_path)
 
         config = DockerConfig(image="langalpha-sandbox:test")
         provider = DockerProvider(config)
@@ -159,12 +304,7 @@ class TestEnsureImageBuildSignature:
 
         client.images.build = build_mock
 
-        # Force search path to find our tmp Dockerfile.sandbox
-        with patch(
-            "ptc_agent.core.sandbox.providers.docker.os.getcwd",
-            return_value=str(tmp_path),
-        ):
-            await provider._ensure_image(client)
+        await provider._ensure_image(client)
 
         kwargs = captured["kwargs"]
         # New signature: fileobj + path_dockerfile (NOT path/dockerfile)
