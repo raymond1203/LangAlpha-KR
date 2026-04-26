@@ -30,6 +30,8 @@ import { loadPref, savePref } from '../utils/prefs';
 import type { SnapshotData } from '@/types/market';
 import type { BarData } from '../hooks/useMarketDataWS';
 import { useOnClickOutside } from '@/hooks/useOnClickOutside';
+// FORK (#33): KR symbol (.KS / .KQ) 일 때 차트 거래일 도출이 KST 기준이도록 분기
+import { getTimezoneForSymbol } from '@/lib/marketTimezone';
 
 interface ChartDataBar {
   time: number;
@@ -277,7 +279,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
           (async () => {
             try {
               const fromDate = new Date(lastDataTime * 1000).toISOString().split('T')[0];
-              const toDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+              const toDate = new Date().toLocaleDateString('en-CA', { timeZone: getTimezoneForSymbol(symbol) });
               const sym = symbol;
               const result = await fetchStockData(sym, interval, fromDate, toDate);
               if (symbolRef.current !== sym) return; // symbol changed, discard stale data
@@ -1255,13 +1257,14 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
         let fromDate, toDate;
         if (loadDays > 0) {
           const now = new Date();
-          toDate = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+          const tz = getTimezoneForSymbol(symbol);
+          toDate = now.toLocaleDateString('en-CA', { timeZone: tz });
           {
             const maxMaPeriod = Math.max(...enabledMaPeriodsRef.current, 0);
             const overheadDays = Math.ceil((maxMaPeriod / (BARS_PER_DAY[interval] || 1)) * 1.5);
             const from = new Date(now);
             from.setDate(from.getDate() - loadDays - overheadDays);
-            fromDate = from.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+            fromDate = from.toLocaleDateString('en-CA', { timeZone: tz });
           }
         }
 
@@ -1324,7 +1327,7 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
               if (interval === '1s' && oldestDateRef.current) {
                 const firstBarDate = new Date(oldestDateRef.current * 1000);
                 const firstBarMins = firstBarDate.getUTCHours() * 60 + firstBarDate.getUTCMinutes();
-                const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+                const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: getTimezoneForSymbol(symbol) });
                 const firstBarDateStr = firstBarDate.toISOString().split('T')[0];
 
                 // Fill if first bar is from today and starts after 4:30 AM ET (270 mins)
@@ -1449,13 +1452,14 @@ const MarketChart = React.memo(forwardRef<MarketChartHandle, MarketChartProps>((
       if (lastLiveTickTimeRef.current > Date.now() - 5000) return;
       try {
         const now = new Date();
-        const toDate = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        const tz = getTimezoneForSymbol(symbol);
+        const toDate = now.toLocaleDateString('en-CA', { timeZone: tz });
 
         // Delta-based: fetch only from last known bar's time onward
         const lastBar = allDataRef.current?.[allDataRef.current.length - 1];
         const fromDate = lastBar
           ? new Date(lastBar.time * 1000).toISOString().split('T')[0]
-          : (() => { const d = new Date(now); d.setDate(d.getDate() - 3); return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); })();
+          : (() => { const d = new Date(now); d.setDate(d.getDate() - 3); return d.toLocaleDateString('en-CA', { timeZone: tz }); })();
 
         const result = await fetchStockData(symbol, interval, fromDate, toDate);
         if (aborted) return;

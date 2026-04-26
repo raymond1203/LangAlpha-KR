@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, memo } from 'react';
 import { useTheme } from '@/contexts/ThemeContext';
+// FORK (#33): KR symbol (.KS / .KQ) 일 때 KRX prefix 변환 + KST timezone
+import { getTimezoneForSymbol, toTradingViewSymbol } from '@/lib/marketTimezone';
 
 // Map our interval keys to TradingView widget interval values
 const TV_INTERVALS: Record<string, string> = {
@@ -46,9 +48,12 @@ function TradingViewWidget({ symbol, interval = '1day' }: TradingViewWidgetProps
     script.async = true;
     script.innerHTML = JSON.stringify({
       autosize: true,
-      symbol: symbol,
+      // FORK (#33): KR ticker (.KS/.KQ) 는 KRX:XXXXXX 형태로 변환, US 는 그대로.
+      // 사용자 OS timezone 대신 시장 timezone 사용 — 미국 사용자가 한국 차트
+      // 보면 KST 봉 시간이 정확.
+      symbol: toTradingViewSymbol(symbol),
       interval: TV_INTERVALS[interval] || 'D',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York',
+      timezone: getTimezoneForSymbol(symbol),
       theme: theme === 'light' ? 'light' : 'dark',
       style: '1', // Candlestick
       locale: 'en',
