@@ -1,15 +1,17 @@
-import React, { useState, useRef } from 'react';
+import React, { useMemo, useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import ChatInput, { type ChatInputHandle } from '../../../components/ui/chat-input';
 import { useChatInput } from '../hooks/useChatInput';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { MobileFabChat } from '@/components/ui/mobile-fab-chat';
 
-const SUGGESTION_CHIPS: string[] = [
-  "Summarize Apple's earnings",
-  'Compare TSLA vs BYD',
-  'Predict market volatility',
-  'Analyze my portfolio risk',
-];
+// FORK: 추천 prompt 를 i18n 키로 derive — locale 별 종목/시장 컨텍스트 분기
+const SUGGESTION_KEYS = [
+  'dashboard.suggestionEarnings',
+  'dashboard.suggestionCompare',
+  'dashboard.suggestionVolatility',
+  'dashboard.suggestionPortfolio',
+] as const;
 
 /**
  * Floating chat input wrapper for dashboard.
@@ -17,6 +19,11 @@ const SUGGESTION_CHIPS: string[] = [
  * On mobile: collapses to a floating logo FAB by default.
  */
 function ChatInputCard() {
+  const { t } = useTranslation();
+  const suggestionChips = useMemo(
+    () => SUGGESTION_KEYS.map((key) => t(key)),
+    [t],
+  );
   const {
     mode,
     setMode,
@@ -68,7 +75,7 @@ function ChatInputCard() {
       <div className="pointer-events-auto w-full max-w-2xl px-4">
         {/* Suggestion bubbles — above the input, outside focus container */}
         <div className={`dashboard-suggestion-bubbles ${focused ? 'visible' : ''}`}>
-          {SUGGESTION_CHIPS.map((label, i) => (
+          {suggestionChips.map((label, i) => (
             <button
               key={label}
               type="button"

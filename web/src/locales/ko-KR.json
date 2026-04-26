@@ -209,7 +209,11 @@
     "watchlist": "관심 종목",
     "personalizeTitle": "내게 맞춰 사용하기",
     "personalizeDesc": "에이전트와 대화로 관심 종목, 리스크 성향, 알림을 맞춤 설정합니다",
-    "personalize": "맞춤 설정"
+    "personalize": "맞춤 설정",
+    "suggestionEarnings": "삼성전자 최근 실적 요약해줘",
+    "suggestionCompare": "현대차와 기아 비교 분석",
+    "suggestionVolatility": "코스피 변동성 전망",
+    "suggestionPortfolio": "내 포트폴리오 리스크 분석"
   },
   "workspace": {
     "workspaces": "워크스페이스",

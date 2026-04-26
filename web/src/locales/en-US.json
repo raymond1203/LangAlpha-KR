@@ -209,7 +209,11 @@
     "watchlist": "Watchlist",
     "personalizeTitle": "Personalize your experience",
     "personalizeDesc": "Chat with our agent to customize watchlists, risk preferences, and alerts",
-    "personalize": "Personalize"
+    "personalize": "Personalize",
+    "suggestionEarnings": "Summarize Apple's earnings",
+    "suggestionCompare": "Compare TSLA vs BYD",
+    "suggestionVolatility": "Predict market volatility",
+    "suggestionPortfolio": "Analyze my portfolio risk"
   },
   "workspace": {
     "workspaces": "Workspaces",

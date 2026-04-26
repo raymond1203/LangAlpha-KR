@@ -209,7 +209,11 @@
     "watchlist": "自选",
     "personalizeTitle": "个性化您的体验",
     "personalizeDesc": "与我们的 AI 助手交流，自定义您的关注列表、风险偏好和提醒",
-    "personalize": "个性化"
+    "personalize": "个性化",
+    "suggestionEarnings": "总结苹果公司最新财报",
+    "suggestionCompare": "比较特斯拉与比亚迪",
+    "suggestionVolatility": "预测市场波动率",
+    "suggestionPortfolio": "分析我的投资组合风险"
   },
   "workspace": {
     "workspaces": "工作区",
