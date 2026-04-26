@@ -57,6 +57,11 @@ describe('getNewsRegionForLocale', () => {
     expect(getNewsRegionForLocale('ko')).toBe('kr');
   });
 
+  it('is case-insensitive on locale prefix (KO-KR / KO)', () => {
+    expect(getNewsRegionForLocale('KO-KR')).toBe('kr');
+    expect(getNewsRegionForLocale('KO')).toBe('kr');
+  });
+
   it('returns undefined for en-US (글로벌 fallback)', () => {
     expect(getNewsRegionForLocale('en-US')).toBeUndefined();
   });

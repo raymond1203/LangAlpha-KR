@@ -424,6 +424,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error closing usage limits HTTP client: {e}")
 
+    # 10. FORK: Close news data provider (KoreanNewsSource 의 httpx.AsyncClient 등 자원 해제)
+    try:
+        from src.data_client import get_news_data_provider
+
+        provider = await get_news_data_provider()
+        await provider.close()
+        logger.info("News data provider closed")
+    except Exception as e:
+        logger.warning(f"Error closing news data provider: {e}")
+
     logger.info("Application shutdown complete")
 
 

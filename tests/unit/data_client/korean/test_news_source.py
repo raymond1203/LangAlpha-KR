@@ -8,11 +8,35 @@ import httpx
 import pytest
 
 from src.data_client.korean.news_source import (
+    _RSS_FEEDS,
     KoreanNewsSource,
     _parse_feed,
     _parse_pub_date,
     _stable_id,
 )
+
+
+def _url_for(name: str) -> str:
+    """_RSS_FEEDS 에서 source name 으로 URL 조회 — 테스트가 feed 순서/추가에 둔감해지도록."""
+    for feed_name, url, _publisher, _favicon in _RSS_FEEDS:
+        if feed_name == name:
+            return url
+    raise KeyError(f"unknown feed name: {name}")
+
+
+def _make_url_dispatch(responses: dict[str, bytes | Exception]) -> object:
+    """url → response/exception 매핑 dispatcher. 등록되지 않은 URL 은 ValueError."""
+    def _dispatch(url: str, *_, **__):
+        if url not in responses:
+            raise ValueError(f"unmocked URL: {url}")
+        value = responses[url]
+        if isinstance(value, Exception):
+            raise value
+        resp = MagicMock(spec=httpx.Response)
+        resp.content = value
+        resp.raise_for_status = MagicMock()
+        return resp
+    return _dispatch
 
 # ---------------------------------------------------------------------------
 # RSS sample fixtures (real-world payload structure)
@@ -211,20 +235,14 @@ async def test_get_news_respects_limit():
 
 @pytest.mark.asyncio
 async def test_get_news_one_feed_failure_does_not_break_aggregation():
-    """매경이 실패해도 연합 결과는 유지."""
+    """매경이 실패해도 연합 결과는 유지. URL 기반 dispatch 라 _RSS_FEEDS 순서가 바뀌어도 안정."""
     source = KoreanNewsSource()
 
-    def make_response(content: bytes) -> MagicMock:
-        resp = MagicMock(spec=httpx.Response)
-        resp.content = content
-        resp.raise_for_status = MagicMock()
-        return resp
-
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.get.side_effect = [
-        httpx.HTTPError("매경 down"),
-        make_response(_YNA_SAMPLE),
-    ]
+    mock_client.get.side_effect = _make_url_dispatch({
+        _url_for("mk_stock"): httpx.HTTPError("매경 down"),
+        _url_for("yna_economy"): _YNA_SAMPLE,
+    })
 
     with patch.object(source, "_get_client", return_value=mock_client):
         result = await source.get_news(limit=10)

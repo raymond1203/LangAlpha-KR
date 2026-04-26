@@ -30,9 +30,17 @@ class NewsDataProvider:
     def _sources_for(
         self, region: str | None
     ) -> list[tuple[str, NewsDataSource]]:
-        """region 에 매칭되는 (name, source) 페어 반환. region=None → 모든 소스."""
+        """region 에 매칭되는 (name, source) 페어 반환.
+
+        - region=None → markets 에 "all" 포함된 글로벌 소스만 (region 특화 소스가 leak 되지 않게).
+        - region 지정 → "all" 또는 해당 region (lowercase) 포함 소스를 config 순서대로.
+        """
         if region is None:
-            return [(name, src) for name, src, _ in self._sources]
+            return [
+                (name, src)
+                for name, src, markets in self._sources
+                if "all" in markets
+            ]
         region_lower = region.lower()
         return [
             (name, src)
@@ -58,7 +66,13 @@ class NewsDataProvider:
                     name, region, exc,
                 )
                 last_exc = exc
-        raise last_exc  # type: ignore[misc]
+        # candidates 가 비어있지 않은 한 위 루프에서 last_exc 가 채워지지만,
+        # 명시적으로 분기해 None 인 가상 케이스도 안전하게 처리.
+        if last_exc is None:
+            raise RuntimeError(
+                f"All news sources for region={region!r} failed without exception"
+            )
+        raise last_exc
 
     async def get_news_article(
         self, article_id: str, user_id: str | None = None

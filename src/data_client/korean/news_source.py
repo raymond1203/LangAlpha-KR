@@ -18,8 +18,9 @@ import logging
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
-from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as ET  # ParseError 타입 비교용 (parse 자체는 defusedxml)
 
+import defusedxml.ElementTree as DefusedET  # FORK: 외부 RSS 의 XXE/외부 엔티티 방어
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -63,9 +64,13 @@ def _stable_id(link: str) -> str:
 def _parse_feed(
     xml_bytes: bytes, publisher: str, favicon: str | None
 ) -> list[dict[str, Any]]:
-    """RSS 2.0 XML → 표준 article dict 리스트."""
+    """RSS 2.0 XML → 표준 article dict 리스트.
+
+    defusedxml 로 파싱해 외부 엔티티 (XXE) / billion laughs 등을 차단.
+    defusedxml 은 ET.ParseError 호환 예외를 raise 하므로 동일 except 로 처리.
+    """
     try:
-        root = ET.fromstring(xml_bytes)
+        root = DefusedET.fromstring(xml_bytes)
     except ET.ParseError as exc:
         logger.warning(
             "korean.news.rss.parse_failed | publisher=%s err=%s", publisher, exc
@@ -136,13 +141,18 @@ async def _fetch_one(
     publisher: str,
     favicon: str | None,
 ) -> list[dict[str, Any]]:
+    """단일 RSS 의 fetch + parse — 어떤 단계에서 실패하더라도 빈 리스트로 graceful degradation.
+
+    parse 도 try 안에 둬서 _parse_feed 가 ET.ParseError 외 예측 못한 예외를 raise 해도
+    asyncio.gather 가 깨지지 않도록 보장 (단일 피드 실패 → 다른 피드 결과 유지 계약).
+    """
     try:
         resp = await client.get(url, headers={"User-Agent": _USER_AGENT})
         resp.raise_for_status()
+        return _parse_feed(resp.content, publisher, favicon)
     except Exception as exc:
         logger.warning("korean.news.fetch_failed | url=%s err=%s", url, exc)
         return []
-    return _parse_feed(resp.content, publisher, favicon)
 
 
 class KoreanNewsSource:
@@ -170,6 +180,8 @@ class KoreanNewsSource:
         user_id: str | None = None,
     ) -> dict[str, Any]:
         # tickers / cursor / 시간 필터는 v1 미지원 — RSS 메타데이터에 ticker 없음, RSS 는 단순 latest-N.
+        # limit 가드 — FastAPI 라우터가 ge=1 검증하지만 본 클래스는 직접 호출도 가능 (테스트/에이전트 등).
+        limit = max(0, limit)
         client = await self._get_client()
         feeds = await asyncio.gather(
             *(

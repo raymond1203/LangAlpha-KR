@@ -76,6 +76,7 @@ dependencies = [
     "opendartreader>=0.2.2",  # FORK: DART 전자공시
     "qdrant-client>=1.12.0",  # FORK: 벡터 DB 클라이언트 (RAG)
     "pathspec>=0.12",  # FORK: aiodocker 0.26+ images.build() 호환 — .dockerignore 매칭
+    "defusedxml>=0.7",  # FORK: KoreanNewsSource RSS XXE 방어
 ]
 
 [tool.uv.sources]

@@ -88,16 +88,31 @@ async def test_region_us_skips_kr_only_source():
 
 
 @pytest.mark.asyncio
-async def test_region_none_uses_all_sources_in_order():
+async def test_region_none_skips_region_specific_sources():
+    """region=None → 글로벌 소스만 사용 (kr-only 같은 region 특화 소스가 leak 되면 안 됨)."""
     kr = FakeSource("kr", [{"title": "한국"}])
     glob = FakeSource("glob", [{"title": "global"}])
 
     provider = _provider(("korean", kr, {"kr"}), ("yfinance", glob, {"all"}))
     result = await provider.get_news(region=None)
 
-    # region 미지정 → 첫 소스 (korean) 우선 시도하고 성공하면 거기서 종료
-    assert result["results"][0]["title"] == "한국"
-    assert kr.calls and not glob.calls
+    # KR-only 소스는 region 미지정 시 호출되지 않음 (한국 뉴스가 en-US 사용자에게 노출되는 회귀 방지)
+    assert not kr.calls
+    assert glob.calls
+    assert result["results"][0]["title"] == "global"
+
+
+@pytest.mark.asyncio
+async def test_region_none_uses_all_global_sources_in_order():
+    """region=None 일 때 markets=[all] 소스들은 config 순서대로 fallback."""
+    glob1 = FakeSource("glob1", raise_exc=RuntimeError("first down"))
+    glob2 = FakeSource("glob2", [{"title": "second"}])
+
+    provider = _provider(("a", glob1, {"all"}), ("b", glob2, {"all"}))
+    result = await provider.get_news(region=None)
+
+    assert glob1.calls and glob2.calls
+    assert result["results"][0]["title"] == "second"
 
 
 @pytest.mark.asyncio
