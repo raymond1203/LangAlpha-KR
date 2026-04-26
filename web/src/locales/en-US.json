@@ -213,7 +213,9 @@
     "suggestionEarnings": "Summarize Apple's earnings",
     "suggestionCompare": "Compare TSLA vs BYD",
     "suggestionVolatility": "Predict market volatility",
-    "suggestionPortfolio": "Analyze my portfolio risk"
+    "suggestionPortfolio": "Analyze my portfolio risk",
+    "chatPlaceholder": "Ask AI about market trends...",
+    "chatPlaceholderFull": "Ask AI about market trends, specific stocks, or portfolio analysis..."
   },
   "workspace": {
     "workspaces": "Workspaces",

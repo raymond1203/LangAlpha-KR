@@ -213,7 +213,9 @@
     "suggestionEarnings": "总结苹果公司最新财报",
     "suggestionCompare": "比较特斯拉与比亚迪",
     "suggestionVolatility": "预测市场波动率",
-    "suggestionPortfolio": "分析我的投资组合风险"
+    "suggestionPortfolio": "分析我的投资组合风险",
+    "chatPlaceholder": "向 AI 询问市场趋势……",
+    "chatPlaceholderFull": "向 AI 询问市场趋势、特定股票或投资组合分析……"
   },
   "workspace": {
     "workspaces": "工作区",

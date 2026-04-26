@@ -6,11 +6,12 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { MobileFabChat } from '@/components/ui/mobile-fab-chat';
 
 // FORK: 추천 prompt 를 i18n 키로 derive — locale 별 종목/시장 컨텍스트 분기
+// id 는 React key 충돌 방지용 안정 식별자 (label 이 locale 따라 바뀌고 중복될 수 있음).
 const SUGGESTION_KEYS = [
-  'dashboard.suggestionEarnings',
-  'dashboard.suggestionCompare',
-  'dashboard.suggestionVolatility',
-  'dashboard.suggestionPortfolio',
+  { id: 'earnings', key: 'dashboard.suggestionEarnings' },
+  { id: 'compare', key: 'dashboard.suggestionCompare' },
+  { id: 'volatility', key: 'dashboard.suggestionVolatility' },
+  { id: 'portfolio', key: 'dashboard.suggestionPortfolio' },
 ] as const;
 
 /**
@@ -21,7 +22,7 @@ const SUGGESTION_KEYS = [
 function ChatInputCard() {
   const { t } = useTranslation();
   const suggestionChips = useMemo(
-    () => SUGGESTION_KEYS.map((key) => t(key)),
+    () => SUGGESTION_KEYS.map(({ id, key }) => ({ id, label: t(key) })),
     [t],
   );
   const {
@@ -63,7 +64,7 @@ function ChatInputCard() {
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
-            placeholder="Ask AI about market trends..."
+            placeholder={t('dashboard.chatPlaceholder')}
           />
         </div>
       </MobileFabChat>
@@ -75,9 +76,9 @@ function ChatInputCard() {
       <div className="pointer-events-auto w-full max-w-2xl px-4">
         {/* Suggestion bubbles — above the input, outside focus container */}
         <div className={`dashboard-suggestion-bubbles ${focused ? 'visible' : ''}`}>
-          {suggestionChips.map((label, i) => (
+          {suggestionChips.map(({ id, label }, i) => (
             <button
-              key={label}
+              key={id}
               type="button"
               className="dashboard-suggestion-bubble"
               style={{ transitionDelay: `${i * 60}ms` }}
@@ -105,7 +106,7 @@ function ChatInputCard() {
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
-            placeholder="Ask AI about market trends, specific stocks, or portfolio analysis..."
+            placeholder={t('dashboard.chatPlaceholderFull')}
           />
         </div>
       </div>
