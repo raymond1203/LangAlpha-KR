@@ -29,7 +29,6 @@ import ConfirmDialog from '@/pages/Dashboard/components/ConfirmDialog';
 import { ModelTierConfig } from '@/components/model/ModelTierConfig';
 import type { ByokProvider, CustomModelEntry } from '@/components/model/types';
 import { useAllModels } from '@/hooks/useAllModels';
-import { useStarredPickerModels } from '@/hooks/useStarredPickerModels';
 import type { CompactionProfileName } from '@/hooks/useAllModels';
 import { useDebouncedSave } from '@/hooks/useDebouncedSave';
 import './Settings.css';
@@ -625,12 +624,6 @@ function Settings() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validModelNames]);
 
-  const pickerModels = useStarredPickerModels(
-    visibleModels,
-    starredModels,
-    [preferredModel, preferredFlashModel],
-  );
-
   return (
     <div className="settings-page">
       <div className="settings-container">
@@ -1003,7 +996,7 @@ function Settings() {
               <div>
                 {/* Default + Flash model selectors */}
                 <ModelTierConfig
-                  models={pickerModels}
+                  models={visibleModels}
                   primaryModel={preferredModel}
                   onPrimaryModelChange={(v) => { setPreferredModel(v); triggerModelSave(); }}
                   flashModel={preferredFlashModel}
