@@ -174,6 +174,9 @@ class TestEnsureImageBuildSignature:
         assert kwargs.get("tag") == "langalpha-sandbox:test"
         assert kwargs.get("rm") is True
         assert kwargs.get("encoding") == "gzip"
+        # stream=True is required — without it aiodocker returns a coroutine
+        # rather than an async iterator, breaking the `async for` loop.
+        assert kwargs.get("stream") is True
         # Old args must be absent
         assert "path" not in kwargs
         assert "dockerfile" not in kwargs
