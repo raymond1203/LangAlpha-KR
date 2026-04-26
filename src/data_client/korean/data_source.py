@@ -171,6 +171,14 @@ class KoreanDataSource:
         asset_type: str = "stocks",
         user_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        # FORK: pykrx 는 KOSPI/KOSDAQ 주식 snapshot 만 지원. 인덱스(KS11/KQ11/...) 는 미지원.
+        # 빈 list 반환 시 MarketDataProvider 가 "성공한 결과" 로 인식해 yfinance 로 fallback 안 됨 →
+        # NotImplementedError 를 raise 해 chain 의 다음 source 로 넘기도록 함 (get_intraday 와 동일 패턴).
+        if asset_type != "stocks":
+            raise NotImplementedError(
+                f"KoreanDataSource only supports stock snapshots, got asset_type={asset_type!r}"
+            )
+
         if not symbols:
             return []
 

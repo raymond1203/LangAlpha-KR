@@ -263,3 +263,22 @@ class TestGetSnapshots:
         result = await source.get_snapshots(["005930.KS"])
 
         assert result == []
+
+    @pytest.mark.asyncio
+    @patch("src.data_client.korean.data_source.stock")
+    async def test_indices_asset_type_raises_to_trigger_chain_fallback(
+        self, mock_stock, source
+    ):
+        # KoreanDataSource 는 인덱스 snapshot 을 지원하지 않음. 빈 list 를 반환하면
+        # MarketDataProvider 가 yfinance 로 fallback 하지 않으므로 명시적으로 raise.
+        with pytest.raises(NotImplementedError, match="indices"):
+            await source.get_snapshots(["KS11", "KQ11"], asset_type="indices")
+        # pykrx 는 호출되지 않아야 함 (가드가 먼저 작동)
+        mock_stock.get_market_ohlcv.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("src.data_client.korean.data_source.stock")
+    async def test_unknown_asset_type_raises(self, mock_stock, source):
+        with pytest.raises(NotImplementedError):
+            await source.get_snapshots(["X"], asset_type="forex")
+        mock_stock.get_market_ohlcv.assert_not_called()
