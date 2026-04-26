@@ -1,18 +1,9 @@
-import React, { useMemo, useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import ChatInput, { type ChatInputHandle } from '../../../components/ui/chat-input';
 import { useChatInput } from '../hooks/useChatInput';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { MobileFabChat } from '@/components/ui/mobile-fab-chat';
-
-// FORK: 추천 prompt 를 i18n 키로 derive — locale 별 종목/시장 컨텍스트 분기
-// id 는 React key 충돌 방지용 안정 식별자 (label 이 locale 따라 바뀌고 중복될 수 있음).
-const SUGGESTION_KEYS = [
-  { id: 'earnings', key: 'dashboard.suggestionEarnings' },
-  { id: 'compare', key: 'dashboard.suggestionCompare' },
-  { id: 'volatility', key: 'dashboard.suggestionVolatility' },
-  { id: 'portfolio', key: 'dashboard.suggestionPortfolio' },
-] as const;
 
 /**
  * Floating chat input wrapper for dashboard.
@@ -21,10 +12,6 @@ const SUGGESTION_KEYS = [
  */
 function ChatInputCard() {
   const { t } = useTranslation();
-  const suggestionChips = useMemo(
-    () => SUGGESTION_KEYS.map(({ id, key }) => ({ id, label: t(key) })),
-    [t],
-  );
   const {
     mode,
     setMode,
@@ -34,6 +21,16 @@ function ChatInputCard() {
     selectedWorkspaceId,
     setSelectedWorkspaceId,
   } = useChatInput();
+
+  const SUGGESTION_CHIPS = useMemo<string[]>(
+    () => [
+      t('dashboard.chatInputCard.suggestion1'),
+      t('dashboard.chatInputCard.suggestion2'),
+      t('dashboard.chatInputCard.suggestion3'),
+      t('dashboard.chatInputCard.suggestion4'),
+    ],
+    [t],
+  );
 
   const [focused, setFocused] = useState(false);
   const chatInputRef = useRef<ChatInputHandle>(null);
@@ -64,7 +61,7 @@ function ChatInputCard() {
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
-            placeholder={t('dashboard.chatPlaceholder')}
+            placeholder={t('dashboard.chatInputCard.placeholderMobile')}
             minRows={2}
           />
         </div>
@@ -114,7 +111,7 @@ function ChatInputCard() {
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={setSelectedWorkspaceId}
-            placeholder={t('dashboard.chatPlaceholderFull')}
+            placeholder={t('dashboard.chatInputCard.placeholderDesktop')}
             minRows={2}
           />
         </div>
