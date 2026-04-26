@@ -133,25 +133,22 @@ function getIndexMarketHours(norm: string): { open: string; close: string } {
 }
 
 /**
- * locale 에 맞는 인덱스 ticker set + 표시명 반환.
- * ko 로 시작하는 locale → KR set, 그 외 → US set.
+ * 시장(MarketRegion) 에 맞는 인덱스 ticker set + 표시명 반환.
+ * #32 에서 locale 의존 → market 의존으로 전환 — 사용자가 한국어 UX 로 미국 시장 보는 등 분리된 시나리오 지원.
  */
-export function getIndexSetForLocale(locale: string | undefined | null): { symbols: string[]; names: Record<string, string> } {
-  if (locale && locale.toLowerCase().startsWith('ko')) {
+export function getIndexSetForMarket(market: 'kr' | 'us'): { symbols: string[]; names: Record<string, string> } {
+  if (market === 'kr') {
     return { symbols: KR_INDEX_SYMBOLS, names: KR_INDEX_NAMES };
   }
   return { symbols: INDEX_SYMBOLS, names: INDEX_NAMES };
 }
 
 /**
- * locale → 백엔드 news region 코드. ko 로 시작하면 'kr', 그 외 undefined (= 글로벌 fallback).
+ * MarketRegion → 백엔드 news region 코드. 'kr' 면 'kr', 'us' 면 undefined (= 글로벌 fallback).
  * News 라우터는 region=kr 일 때 KoreanNewsSource 를 우선 시도, 실패 시 글로벌 소스로 fallback.
  */
-export function getNewsRegionForLocale(locale: string | undefined | null): string | undefined {
-  if (locale && locale.toLowerCase().startsWith('ko')) {
-    return 'kr';
-  }
-  return undefined;
+export function getNewsRegionForMarket(market: 'kr' | 'us'): string | undefined {
+  return market === 'kr' ? 'kr' : undefined;
 }
 
 function normalizeIndexSymbol(s: string): string {

@@ -21,6 +21,16 @@ import { MobileFabChat } from '../../components/ui/mobile-fab-chat';
 import { MarketDataWSProvider, useMarketDataWSContext } from './contexts/MarketDataWSContext';
 
 import { loadPref, savePref } from './utils/prefs';
+// FORK (#32): 시장에 맞춰 첫 진입 디폴트 심볼 분기. localStorage 에 마지막 종목이 있으면 그걸 우선.
+import { useMarket } from '@/contexts/MarketContext';
+
+// 시장별 첫 진입 디폴트 종목. localStorage 'market-chart:symbol' 이 비어있을 때만 사용.
+// 한국 시장 backend 인프라 (실시간 시세 / fundamentals) 는 #33 에서 다뤄지며,
+// 본 PR 의 KR 디폴트는 차트가 빈 상태로 보이더라도 사용자가 검색으로 override 가능한 graceful fallback.
+const DEFAULT_SYMBOL_BY_MARKET: Record<'kr' | 'us', string> = {
+  kr: '005930.KS', // 삼성전자
+  us: 'GOOGL',
+};
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 import { useStockData } from './hooks/useStockData';
@@ -101,7 +111,10 @@ function MarketViewInner() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
   const { prices: wsPrices, connectionStatus: wsStatus, dataLevel: wsDataLevel, ginlixDataEnabled, subscribe: wsSubscribe, unsubscribe: wsUnsubscribe, setPreviousClose, setDayOpen } = useMarketDataWSContext();
-  const [selectedStock, setSelectedStock] = useState<string>(() => loadPref('symbol', 'GOOGL'));
+  const { region: marketRegion } = useMarket();
+  const [selectedStock, setSelectedStock] = useState<string>(
+    () => loadPref('symbol', DEFAULT_SYMBOL_BY_MARKET[marketRegion]),
+  );
   const [selectedStockDisplay, setSelectedStockDisplay] = useState<DisplayOverride | null>(null);
 
   const {

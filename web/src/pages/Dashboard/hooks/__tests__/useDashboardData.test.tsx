@@ -14,15 +14,14 @@ vi.mock('../../utils/api', () => ({
     symbol: s, name: s, price: 0, change: 0, changePercent: 0, isPositive: true, sparklineData: [],
   })),
   normalizeIndexSymbol: vi.fn((s: string) => String(s).replace(/^\^/, '').toUpperCase()),
-  getIndexSetForLocale: vi.fn((locale?: string | null) => {
-    if (locale && locale.toLowerCase().startsWith('ko')) {
+  // FORK (#32): locale 의존 → market 의존으로 시그니처 변경
+  getIndexSetForMarket: vi.fn((market: 'kr' | 'us') => {
+    if (market === 'kr') {
       return { symbols: ['KS11', 'KQ11', 'KS200'], names: { KS11: '코스피', KQ11: '코스닥', KS200: '코스피 200' } };
     }
     return { symbols: ['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX'], names: { GSPC: 'S&P 500', IXIC: 'NASDAQ', DJI: 'Dow Jones', RUT: 'Russell 2000', VIX: 'VIX' } };
   }),
-  getNewsRegionForLocale: vi.fn((locale?: string | null) =>
-    locale && locale.toLowerCase().startsWith('ko') ? 'kr' : undefined,
-  ),
+  getNewsRegionForMarket: vi.fn((market: 'kr' | 'us') => (market === 'kr' ? 'kr' : undefined)),
 }));
 
 vi.mock('@/lib/marketUtils', () => ({
@@ -39,8 +38,9 @@ const mockGetNews = getNews as Mock;
 describe('useDashboardData', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    // 다른 테스트로부터의 locale leakage 방지 — 각 테스트가 en-US 에서 시작
+    // 다른 테스트로부터의 locale/market leakage 방지 — 각 테스트가 en-US + auto market (= us) 에서 시작
     await i18n.changeLanguage('en-US');
+    localStorage.removeItem('marketRegion');
     mockFetchMarketStatus.mockResolvedValue({ market: 'open', afterHours: false, earlyHours: false });
     mockGetIndices.mockResolvedValue({
       indices: [

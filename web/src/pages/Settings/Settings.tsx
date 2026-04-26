@@ -15,6 +15,8 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useTranslation } from 'react-i18next';
 // FORK: locale 단일 진실 소스 — i18n.ts 의 SUPPORTED_LOCALES 활용
 import { SUPPORTED_LOCALES, type SupportedLocale } from '@/i18n';
+// FORK: 기본 시장 드롭다운 — locale 과 분리된 시장 선택 (#32)
+import { useMarket, type MarketSetting } from '@/contexts/MarketContext';
 
 const LOCALE_LABELS: Record<SupportedLocale, string> = {
   'en-US': 'English (United States)',
@@ -75,6 +77,8 @@ function Settings() {
   const updatePrefsMutation = useUpdatePreferences();
   const queryClient = useQueryClient();
   const { theme: _theme, preference, setTheme: setThemePref } = useTheme();
+  // FORK: 시장 선택 — locale 과 독립. Auto/Korea/US.
+  const { setting: marketSetting, setSetting: setMarketSetting } = useMarket();
   const { models: visibleModels, modelAccessMap, systemDefaults: hookSystemDefaults, validModelNames, compactionProfiles, isLoading: isModelsLoading } = useAllModels();
   const { t, i18n } = useTranslation();
 
@@ -190,6 +194,13 @@ function Settings() {
   const locales = [
     { value: '', label: t('settings.selectLocale') },
     ...SUPPORTED_LOCALES.map((value) => ({ value, label: LOCALE_LABELS[value] })),
+  ];
+
+  // FORK: 시장 드롭다운 옵션 — 'auto' 가 디폴트 (locale 따라 도출), kr/us 는 명시 override
+  const marketOptions: { value: MarketSetting; label: string }[] = [
+    { value: 'auto', label: t('settings.marketAuto') },
+    { value: 'kr', label: t('settings.marketKR') },
+    { value: 'us', label: t('settings.marketUS') },
   ];
 
   // Sync tab with URL search params
@@ -764,6 +775,19 @@ function Settings() {
                 >
                   {locales.map((item, i) => (
                     <option key={i} value={item.value}>{item.label}</option>
+                  ))}
+                </Select>
+              </div>
+
+              {/* FORK: 기본 시장 선택 — locale 과 분리. localStorage 영속, 새로고침 유지. */}
+              <div>
+                <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-primary)' }}>{t('settings.market')}</label>
+                <Select
+                  value={marketSetting}
+                  onChange={(e) => setMarketSetting(e.target.value as MarketSetting)}
+                >
+                  {marketOptions.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
                   ))}
                 </Select>
               </div>

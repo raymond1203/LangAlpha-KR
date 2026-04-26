@@ -1,15 +1,15 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
 import {
   getNews,
   getIndices,
   fallbackIndex,
   normalizeIndexSymbol,
-  getIndexSetForLocale,
-  getNewsRegionForLocale,
+  getIndexSetForMarket,
+  getNewsRegionForMarket,
 } from '../utils/api';
 import { fetchMarketStatus } from '@/lib/marketUtils';
+import { useMarket } from '@/contexts/MarketContext';
 import type { IndexData } from '@/types/market';
 
 interface MarketStatusData {
@@ -63,10 +63,11 @@ function formatRelativeTime(timestamp: string | number | null | undefined): stri
  * Eliminates race conditions and reduces boilerplate of manual useEffects.
  */
 export function useDashboardData(): DashboardData {
-  // FORK: locale-aware 인덱스 set + news region 선택 (ko-* → KR, 그 외 → US/글로벌)
-  const { i18n } = useTranslation();
-  const indexSet = useMemo(() => getIndexSetForLocale(i18n.language), [i18n.language]);
-  const newsRegion = useMemo(() => getNewsRegionForLocale(i18n.language), [i18n.language]);
+  // FORK (#32): 시장(MarketContext) 으로 인덱스/뉴스 region 도출 — locale 의존성 제거.
+  // 사용자가 한국어 UX 로 미국 시장, 또는 영어 UX 로 한국 시장 보는 시나리오 지원.
+  const { region } = useMarket();
+  const indexSet = useMemo(() => getIndexSetForMarket(region), [region]);
+  const newsRegion = useMemo(() => getNewsRegionForMarket(region), [region]);
 
   // 1. Market Status (Polls every 60s, cached globally)
   const { data: marketStatus = null } = useQuery<MarketStatusData | null>({

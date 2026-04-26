@@ -2,6 +2,8 @@ import React, { type ReactElement, type ReactNode } from 'react';
 import { render, renderHook, type RenderOptions } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+// FORK (#32): MarketContext 가 도입된 이후 useDashboardData 등이 useMarket() 사용 → 테스트도 같은 provider tree 필요
+import { MarketProvider } from '../contexts/MarketContext';
 
 function createTestQueryClient() {
   return new QueryClient({
@@ -17,7 +19,7 @@ function createWrapper(queryClient: QueryClient, route = '/') {
     return (
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[route]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          {children}
+          <MarketProvider>{children}</MarketProvider>
         </MemoryRouter>
       </QueryClientProvider>
     );
