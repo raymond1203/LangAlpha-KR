@@ -154,4 +154,25 @@ describe('useDashboardData', () => {
       expect(krNewsCall).toBeDefined();
     });
   });
+
+  it('explicit market="us" 가 ko-KR locale 보다 우선 — locale 전환해도 KR 인덱스로 안 바뀜', async () => {
+    // initialMarket='us' 로 명시 → MarketProvider 가 localStorage/locale 둘 다 무시하고 us 강제
+    renderHookWithProviders(() => useDashboardData(), { initialMarket: 'us' });
+    await waitFor(() => {
+      expect(mockGetIndices).toHaveBeenCalledWith(['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX']);
+    });
+
+    // locale 을 ko-KR 로 전환해도 explicit 'us' setting 이라 region 안 바뀜 → KR 호출 없어야
+    await act(async () => {
+      await i18n.changeLanguage('ko-KR');
+    });
+
+    // 잠시 기다려 잠재적 추가 fetch 가 없는지 확인
+    await new Promise((r) => setTimeout(r, 50));
+
+    const krCall = mockGetIndices.mock.calls.find((args) =>
+      Array.isArray(args[0]) && args[0][0] === 'KS11',
+    );
+    expect(krCall).toBeUndefined();
+  });
 });

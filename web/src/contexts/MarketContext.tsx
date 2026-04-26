@@ -25,28 +25,54 @@ export interface MarketContextValue {
 
 const MarketContext = createContext<MarketContextValue | null>(null);
 
-/** 'auto' 모드에서 locale 을 시장으로 변환. ko-* → kr, 그 외 → us. */
+/** 'auto' 모드에서 locale 을 시장으로 변환. 'ko' 또는 'ko-*' 정확히 매칭 (Konkani 'kok' 같은 pseudo-prefix 배제). */
 export function deriveRegionFromLocale(locale: string | undefined | null): MarketRegion {
-  if (locale && locale.toLowerCase().startsWith('ko')) {
-    return 'kr';
-  }
+  if (!locale) return 'us';
+  const lower = locale.toLowerCase();
+  if (lower === 'ko' || lower.startsWith('ko-')) return 'kr';
   return 'us';
 }
 
-function getInitialSetting(): MarketSetting {
+function getInitialSetting(initial?: MarketSetting): MarketSetting {
+  if (initial !== undefined) return initial;
   const stored = safeLocalStorage.getItem(STORAGE_KEY);
   if (stored === 'kr' || stored === 'us' || stored === 'auto') return stored;
   return 'auto';
 }
 
-export function MarketProvider({ children }: { children: React.ReactNode }) {
-  const { i18n } = useTranslation();
-  const [setting, setSettingState] = useState<MarketSetting>(getInitialSetting);
+export interface MarketProviderProps {
+  children: React.ReactNode;
+  /**
+   * 테스트용 초기값 override — 명시 시 localStorage 무시.
+   * 프로덕션 코드에서는 사용 금지.
+   */
+  initialSetting?: MarketSetting;
+}
 
-  // localStorage 영속 — Settings 변경이 새로고침에도 유지
+export function MarketProvider({ children, initialSetting }: MarketProviderProps) {
+  const { i18n } = useTranslation();
+  const [setting, setSettingState] = useState<MarketSetting>(() =>
+    getInitialSetting(initialSetting),
+  );
+
+  // localStorage 영속 — Settings 변경이 새로고침에도 유지.
+  // 초기 mount 시 setting 은 이미 stored 값으로 초기화돼 있어 same-value setItem 은 사실상 no-op.
   useEffect(() => {
     safeLocalStorage.setItem(STORAGE_KEY, setting);
   }, [setting]);
+
+  // FORK: 다른 탭에서 시장 바꾸면 본 탭도 즉시 동기화 (storage 이벤트는 다른 document 에서만 fire 됨).
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key !== STORAGE_KEY) return;
+      const next = event.newValue;
+      if (next === 'kr' || next === 'us' || next === 'auto') {
+        setSettingState(next);
+      }
+    }
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   // i18n 이 mock 으로 stub 되거나 init 전인 환경 (테스트 격리, 초기 부팅) 에서도 안전하게 동작.
   // deriveRegionFromLocale 자체가 null/undefined 를 us 로 fallback.
