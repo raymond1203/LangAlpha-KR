@@ -54,16 +54,23 @@ async def get_news(
     published_before: str | None = Query(None, description="ISO 8601 date filter"),
     order: str | None = Query(None, description="Sort order: asc or desc"),
     sort: str | None = Query(None, description="Sort field, e.g. published_utc"),
+    # FORK: region-aware 라우팅 — 'kr' 면 KoreanNewsSource 우선, 그 외 글로벌 소스 fallback
+    region: str | None = Query(
+        None, description="Market region (e.g. 'kr' for Korean news sources)"
+    ),
 ) -> NewsCompactResponse:
     ticker_list = (
         [t.strip().upper() for t in tickers.split(",") if t.strip()]
         if tickers
         else None
     )
+    normalized_region = region.lower() if region else None
 
     # Check cache (skip when cursor is used — paginated requests bypass cache)
     if not cursor:
-        cached = await _cache.get(tickers=ticker_list, limit=limit)
+        cached = await _cache.get(
+            tickers=ticker_list, limit=limit, region=normalized_region
+        )
         if cached:
             results = [c for a in cached["results"] if (c := _compact(a)) is not None]
             return NewsCompactResponse(
@@ -76,6 +83,7 @@ async def get_news(
 
     provider = await get_news_data_provider()
     data = await provider.get_news(
+        region=normalized_region,
         tickers=ticker_list,
         limit=limit,
         cursor=cursor,
@@ -88,7 +96,9 @@ async def get_news(
 
     # Populate cache (stores full articles internally)
     if not cursor:
-        await _cache.set(data, tickers=ticker_list, limit=limit)
+        await _cache.set(
+            data, tickers=ticker_list, limit=limit, region=normalized_region
+        )
 
     results = [c for a in data["results"] if (c := _compact(a)) is not None]
     return NewsCompactResponse(

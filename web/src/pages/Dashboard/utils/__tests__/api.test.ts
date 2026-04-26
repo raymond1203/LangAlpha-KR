@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   getIndexSetForLocale,
+  getNewsRegionForLocale,
   INDEX_SYMBOLS,
   KR_INDEX_SYMBOLS,
   KR_INDEX_NAMES,
@@ -44,5 +45,34 @@ describe('getIndexSetForLocale', () => {
     expect(KR_INDEX_NAMES.KS11).toBe('코스피');
     expect(KR_INDEX_NAMES.KQ11).toBe('코스닥');
     expect(KR_INDEX_NAMES.KS200).toBe('코스피 200');
+  });
+});
+
+describe('getNewsRegionForLocale', () => {
+  it('returns "kr" for ko-KR', () => {
+    expect(getNewsRegionForLocale('ko-KR')).toBe('kr');
+  });
+
+  it('returns "kr" for bare "ko"', () => {
+    expect(getNewsRegionForLocale('ko')).toBe('kr');
+  });
+
+  it('is case-insensitive on locale prefix (KO-KR / KO)', () => {
+    expect(getNewsRegionForLocale('KO-KR')).toBe('kr');
+    expect(getNewsRegionForLocale('KO')).toBe('kr');
+  });
+
+  it('returns undefined for en-US (글로벌 fallback)', () => {
+    expect(getNewsRegionForLocale('en-US')).toBeUndefined();
+  });
+
+  it('returns undefined for zh-CN (글로벌 fallback)', () => {
+    expect(getNewsRegionForLocale('zh-CN')).toBeUndefined();
+  });
+
+  it('returns undefined for null / undefined / empty', () => {
+    expect(getNewsRegionForLocale(undefined)).toBeUndefined();
+    expect(getNewsRegionForLocale(null)).toBeUndefined();
+    expect(getNewsRegionForLocale('')).toBeUndefined();
   });
 });

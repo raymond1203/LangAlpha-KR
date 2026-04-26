@@ -72,6 +72,7 @@ interface NewsParams {
   tickers?: string[];
   limit?: number;
   cursor?: string;
+  region?: string;
 }
 
 interface NewsResponse {
@@ -140,6 +141,17 @@ export function getIndexSetForLocale(locale: string | undefined | null): { symbo
     return { symbols: KR_INDEX_SYMBOLS, names: KR_INDEX_NAMES };
   }
   return { symbols: INDEX_SYMBOLS, names: INDEX_NAMES };
+}
+
+/**
+ * locale → 백엔드 news region 코드. ko 로 시작하면 'kr', 그 외 undefined (= 글로벌 fallback).
+ * News 라우터는 region=kr 일 때 KoreanNewsSource 를 우선 시도, 실패 시 글로벌 소스로 fallback.
+ */
+export function getNewsRegionForLocale(locale: string | undefined | null): string | undefined {
+  if (locale && locale.toLowerCase().startsWith('ko')) {
+    return 'kr';
+  }
+  return undefined;
 }
 
 function normalizeIndexSymbol(s: string): string {
@@ -594,12 +606,13 @@ export async function disconnectClaudeOAuth(): Promise<Record<string, unknown>> 
  * @param {{ tickers?: string[], limit?: number, cursor?: string }} opts
  * @returns {Promise<{ results: Array, count: number, next_cursor: string|null }>}
  */
-export async function getNews({ tickers, limit = 20, cursor }: NewsParams = {}): Promise<NewsResponse> {
+export async function getNews({ tickers, limit = 20, cursor, region }: NewsParams = {}): Promise<NewsResponse> {
   try {
     const params: Record<string, string | number> = {};
     if (tickers && tickers.length) params.tickers = tickers.join(',');
     if (limit) params.limit = limit;
     if (cursor) params.cursor = cursor;
+    if (region) params.region = region;
     const { data } = await api.get('/api/v1/news', { params });
     return data || { results: [], count: 0, next_cursor: null };
   } catch (e: unknown) {

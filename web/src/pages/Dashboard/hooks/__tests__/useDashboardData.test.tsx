@@ -20,6 +20,9 @@ vi.mock('../../utils/api', () => ({
     }
     return { symbols: ['GSPC', 'IXIC', 'DJI', 'RUT', 'VIX'], names: { GSPC: 'S&P 500', IXIC: 'NASDAQ', DJI: 'Dow Jones', RUT: 'Russell 2000', VIX: 'VIX' } };
   }),
+  getNewsRegionForLocale: vi.fn((locale?: string | null) =>
+    locale && locale.toLowerCase().startsWith('ko') ? 'kr' : undefined,
+  ),
 }));
 
 vi.mock('@/lib/marketUtils', () => ({
@@ -130,5 +133,25 @@ describe('useDashboardData', () => {
     });
     // locale 변경 이후에 추가 호출이 발생했는지 확인 — 캐시가 분리되어 새 fetch 가 트리거됨
     expect(mockGetIndices.mock.calls.length).toBeGreaterThan(usCallCount);
+  });
+
+  it('passes region=kr to getNews when locale is ko-KR', async () => {
+    // en-US: region 파라미터 없이 (undefined) 호출됨 — 글로벌 fallback
+    renderHookWithProviders(() => useDashboardData());
+    await waitFor(() => {
+      expect(mockGetNews).toHaveBeenCalledWith({ limit: 50, region: undefined });
+    });
+
+    // locale 전환 → region='kr' 로 재호출, queryKey 분리로 새 fetch 트리거
+    await act(async () => {
+      await i18n.changeLanguage('ko-KR');
+    });
+
+    await waitFor(() => {
+      const krNewsCall = mockGetNews.mock.calls.find(
+        (args) => (args[0] as { region?: string })?.region === 'kr',
+      );
+      expect(krNewsCall).toBeDefined();
+    });
   });
 });

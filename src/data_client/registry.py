@@ -56,6 +56,19 @@ def _korean_available() -> bool:
         return False
 
 
+# FORK: 한국 뉴스 소스 — RSS 기반이라 httpx 만 있으면 동작 (pykrx 와 독립).
+# httpx / defusedxml 은 pyproject.toml 의 hard dep 이라 import 가 실제로 실패할 일은 없지만,
+# 다른 _available 함수들과 패턴 일관성 + 미래의 dep 변동 (예: 다른 라이브러리로 교체) 시 안전망용.
+def _korean_news_available() -> bool:
+    try:
+        import defusedxml  # noqa: F401
+        import httpx  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Async source constructors
 # ---------------------------------------------------------------------------
@@ -108,6 +121,13 @@ async def _build_yfinance_news_source() -> NewsDataSource:
     return YFinanceNewsSource()
 
 
+# FORK: 한국 뉴스 소스 (매경/연합 RSS 어그리게이터)
+async def _build_korean_news_source() -> NewsDataSource:
+    from .korean.news_source import KoreanNewsSource
+
+    return KoreanNewsSource()
+
+
 # ---------------------------------------------------------------------------
 # Source registries — map config name → (availability_check, async_constructor)
 # ---------------------------------------------------------------------------
@@ -123,6 +143,7 @@ _NEWS_SOURCE_REGISTRY: dict[str, tuple[Any, Any]] = {
     "ginlix-data": (_ginlix_data_available, _build_ginlix_data_news_source),
     "fmp": (_fmp_available, _build_fmp_news_source),
     "yfinance": (_yfinance_available, _build_yfinance_news_source),
+    "korean": (_korean_news_available, _build_korean_news_source),  # FORK: 한국 RSS
 }
 
 # ---------------------------------------------------------------------------
@@ -157,7 +178,8 @@ async def get_market_data_provider() -> MarketDataSource:
 
         for cfg in provider_configs:
             name = cfg["name"]
-            markets = set(cfg.get("markets", ["all"]))
+            # FORK: get_news_data_provider 와 동일하게 lowercase 정규화 — region/market 비교가 모두 lowercase 기준
+            markets = {m.lower() for m in cfg.get("markets", ["all"])}
             reg = _SOURCE_REGISTRY.get(name)
             if reg and reg[0]():  # availability check
                 source = await reg[1]()
@@ -206,15 +228,18 @@ async def get_news_data_provider():
         from .news_data_provider import NewsDataProvider
 
         provider_configs = get_news_data_providers()
-        sources: list[tuple[str, Any]] = []
+        sources: list[tuple[str, Any, set[str]]] = []
 
         for cfg in provider_configs:
             name = cfg["name"]
+            markets = {m.lower() for m in cfg.get("markets", ["all"])}
             reg = _NEWS_SOURCE_REGISTRY.get(name)
             if reg and reg[0]():  # availability check
                 source = await reg[1]()
-                sources.append((name, source))
-                logger.debug("news_data.source.registered | name=%s", name)
+                sources.append((name, source, markets))
+                logger.debug(
+                    "news_data.source.registered | name=%s markets=%s", name, markets
+                )
             else:
                 logger.debug("news_data.source.skipped | name=%s (unavailable)", name)
 

@@ -7,6 +7,7 @@ import {
   fallbackIndex,
   normalizeIndexSymbol,
   getIndexSetForLocale,
+  getNewsRegionForLocale,
 } from '../utils/api';
 import { fetchMarketStatus } from '@/lib/marketUtils';
 import type { IndexData } from '@/types/market';
@@ -62,9 +63,10 @@ function formatRelativeTime(timestamp: string | number | null | undefined): stri
  * Eliminates race conditions and reduces boilerplate of manual useEffects.
  */
 export function useDashboardData(): DashboardData {
-  // FORK: locale-aware 인덱스 set 선택 (ko-* → KOSPI/KOSDAQ/KOSPI 200, 그 외 → US 5종)
+  // FORK: locale-aware 인덱스 set + news region 선택 (ko-* → KR, 그 외 → US/글로벌)
   const { i18n } = useTranslation();
   const indexSet = useMemo(() => getIndexSetForLocale(i18n.language), [i18n.language]);
+  const newsRegion = useMemo(() => getNewsRegionForLocale(i18n.language), [i18n.language]);
 
   // 1. Market Status (Polls every 60s, cached globally)
   const { data: marketStatus = null } = useQuery<MarketStatusData | null>({
@@ -95,10 +97,11 @@ export function useDashboardData(): DashboardData {
   });
 
   // 3. News Feed (Fetched once, cached for 5 minutes)
+  // FORK: queryKey 에 newsRegion 포함 → locale 변경 시 KR/US 캐시 분리 + 자동 refetch
   const { data: newsItems = [], isLoading: newsLoading } = useQuery<NewsItem[]>({
-    queryKey: ['dashboard', 'news'],
+    queryKey: ['dashboard', 'news', newsRegion ?? 'global'],
     queryFn: async (): Promise<NewsItem[]> => {
-      const data = await getNews({ limit: 50 });
+      const data = await getNews({ limit: 50, region: newsRegion });
       if (data.results && data.results.length > 0) {
         return data.results.map((r: Record<string, unknown>) => ({
           id: r.id as string,

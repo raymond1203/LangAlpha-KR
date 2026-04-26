@@ -150,12 +150,18 @@ market_data:
     - name: yfinance
       markets: [all]         # Free fallback — no API key required
 
-# Ordered news provider chain — sequential fallback (no market routing).
+# Ordered news provider chain. region 쿼리에 따라 매칭되는 markets 의 소스를
+# 우선 시도하고 실패 시 markets=[all] 소스로 fallback. region 미지정 시 전체 순차.
 news_data:
   providers:
+    - name: korean              # FORK: 한국 RSS (매경 증권 + 연합 경제)
+      markets: [kr]
     - name: ginlix-data
+      markets: [all]
     - name: fmp
+      markets: [all]
     - name: yfinance
+      markets: [all]
 
 
 # =============================================================================
