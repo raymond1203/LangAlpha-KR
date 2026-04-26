@@ -97,3 +97,33 @@ class TestManifestIntegrity:
                 assert "text" in modalities, (
                     f"{model_name}: input_modalities missing 'text': {modalities}"
                 )
+
+    def test_anthropic_thinking_enabled_requires_budget_tokens(self, model_config):
+        """Anthropic SDK 는 thinking.type == 'enabled' 일 때 budget_tokens 필수.
+        누락 시 런타임에 400 (Field required) 으로 실패. 회귀 트리거: issue #35
+        에서 claude-haiku-4-5 가 OAuth variant 와 달리 budget_tokens 누락된 채
+        머지돼 InsightService 가 매 사이클 400 fail. 본 테스트는 anthropic /
+        claude-oauth provider 만 검증 (다른 provider 는 'thinking' 키 의미가
+        다를 수 있음).
+        """
+        ANTHROPIC_PROVIDERS = {"anthropic", "claude-oauth"}
+        failures: list[str] = []
+
+        for model_name, model_def in model_config.llm_config.items():
+            if model_def.get("provider") not in ANTHROPIC_PROVIDERS:
+                continue
+            thinking = model_def.get("parameters", {}).get("thinking")
+            if not isinstance(thinking, dict):
+                continue
+            if thinking.get("type") != "enabled":
+                continue  # adaptive / disabled 는 budget_tokens 불필요
+            if "budget_tokens" not in thinking:
+                failures.append(
+                    f"{model_name}: thinking.type='enabled' 인데 budget_tokens 누락 "
+                    f"({thinking!r})"
+                )
+
+        assert not failures, (
+            f"{len(failures)} 개 Anthropic 모델이 thinking.budget_tokens 누락:\n"
+            + "\n".join(f"  - {f}" for f in failures)
+        )
