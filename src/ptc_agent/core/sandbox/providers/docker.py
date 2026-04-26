@@ -19,8 +19,10 @@ import re
 import shlex
 import tarfile
 import uuid
+from pathlib import Path
 from typing import Any
 
+import pathspec  # FORK: aiodocker 0.26+ images.build() 호환 — .dockerignore 매칭
 import structlog
 
 from ptc_agent.config.core import DockerConfig
@@ -886,14 +888,26 @@ class DockerProvider(SandboxProvider):
             tag=image_tag,
         )
 
-        # Use aiodocker to build
+        # FORK: aiodocker 0.26+ 의 images.build() 는 path/dockerfile 인자를 받지 않는다.
+        # build context 를 tar 로 패키징해 fileobj 로 넘기고, dockerfile 이름은
+        # path_dockerfile 로 전달한다. .dockerignore 패턴 매칭으로 .venv/.git/node_modules
+        # 같은 대용량 디렉토리를 제외해 tar 크기를 합리적 수준으로 유지한다.
+        # Run blocking tar/gzip work off the event loop.
         try:
-            # aiodocker build expects a tar context or path
+            tar_buf = await asyncio.to_thread(_build_tar_context, build_context)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to build tar context for {build_context!r}: {e}"
+            ) from e
+
+        try:
             async for log_line in client.images.build(
-                path=build_context,
-                dockerfile=os.path.basename(dockerfile_path),
+                fileobj=tar_buf,
+                path_dockerfile=os.path.basename(dockerfile_path),
                 tag=image_tag,
                 rm=True,
+                encoding="gzip",
+                stream=True,
             ):
                 if isinstance(log_line, dict) and "stream" in log_line:
                     line = log_line["stream"].strip()
@@ -914,6 +928,141 @@ class DockerProvider(SandboxProvider):
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
+
+# FORK: aiodocker 0.26+ images.build() 호환 — 안전망용 상수
+# .dockerignore 가 누락된 환경에서도 .git/.venv/node_modules 같은 대용량 디렉토리가
+# tar 에 들어가는 사고를 막기 위한 default exclude. Docker 본가 규칙은 아니고 우리 안전망.
+_DEFAULT_TAR_EXCLUDES = (
+    ".git/",
+    ".venv/",
+    "node_modules/",
+    "__pycache__/",
+    "*.pyc",
+    "dist/",
+    "build/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    ".mypy_cache/",
+)
+
+# tar context 크기 가드. 500MB 초과면 .dockerignore 누락이나 의도치 않은 대용량
+# 산물(빌드 아티팩트, 모델 체크포인트 등) 가능성이 크므로 빠르게 실패시킨다.
+_MAX_TAR_CONTEXT_BYTES = 500 * 1024 * 1024
+
+
+# FORK: aiodocker 0.26+ images.build() 호환 helper
+def _load_dockerignore(build_dir: str) -> "pathspec.PathSpec | None":
+    """Load .dockerignore patterns from build_dir if the file exists.
+
+    Note: Docker's .dockerignore semantics differ from gitignore in subtle
+    ways — it is rooted at build context root, uses Go ``filepath.Match``
+    (not full glob), and ``**`` handling differs slightly from git. ``pathspec``'s
+    ``gitignore`` factory covers our common patterns (``*.ext``, ``dir/``,
+    ``**/glob``) but edge cases (negation order, double-star at root) may
+    diverge. Add a pattern adaptation layer if real mismatches surface.
+    """
+    dockerignore_path = os.path.join(build_dir, ".dockerignore")
+    if not os.path.isfile(dockerignore_path):
+        return None
+    with open(dockerignore_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    return pathspec.PathSpec.from_lines("gitignore", lines)
+
+
+# FORK: aiodocker 0.26+ images.build() 호환 helper
+def _build_tar_context(
+    build_dir: str, max_size: int = _MAX_TAR_CONTEXT_BYTES
+) -> io.BytesIO:
+    """Pack ``build_dir`` into a gzip-compressed tar BytesIO for Docker build.
+
+    Honors ``.dockerignore`` patterns when present, so large directories like
+    ``.venv``, ``.git``, ``node_modules`` are excluded from the build context.
+    When ``.dockerignore`` is missing, falls back to ``_DEFAULT_TAR_EXCLUDES``
+    so a forgotten ignore file can't accidentally pack the entire repo.
+
+    Iterates directories and files in sorted order for reproducible builds,
+    and skips symlinks resolving outside ``build_dir`` (or dangling) to avoid
+    leaking host files into the image.
+
+    Raises:
+        RuntimeError: when the resulting tar exceeds ``max_size`` bytes.
+    """
+    spec = _load_dockerignore(build_dir)
+    used_default_excludes = spec is None
+    if used_default_excludes:
+        spec = pathspec.PathSpec.from_lines("gitignore", _DEFAULT_TAR_EXCLUDES)
+
+    real_build_dir = os.path.realpath(build_dir)
+    buf = io.BytesIO()
+
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for root, dirs, files in os.walk(build_dir):
+            # Deterministic traversal order — stable tar contents across runs.
+            dirs.sort()
+            files.sort()
+
+            rel_root = os.path.relpath(root, build_dir)
+            # Filter directories in-place to skip ignored ones (and avoid
+            # walking into them — important for performance on .venv etc.)
+            kept_dirs = []
+            for d in dirs:
+                rel_dir_posix = (
+                    d if rel_root == "." else (Path(rel_root) / d).as_posix()
+                )
+                if spec.match_file(rel_dir_posix + "/"):
+                    continue
+                kept_dirs.append(d)
+            dirs[:] = kept_dirs
+
+            for fname in files:
+                rel_path = (
+                    fname if rel_root == "." else (Path(rel_root) / fname).as_posix()
+                )
+                if spec.match_file(rel_path):
+                    continue
+                fpath = os.path.join(root, fname)
+                # Symlink safety: skip if target resolves outside build context
+                # or is dangling (prevents host file leakage and tar errors).
+                if os.path.islink(fpath):
+                    target_real = os.path.realpath(fpath)
+                    inside = target_real == real_build_dir or target_real.startswith(
+                        real_build_dir + os.sep
+                    )
+                    if not inside:
+                        logger.debug(
+                            "Skipping symlink outside build context",
+                            link=rel_path,
+                            target=target_real,
+                        )
+                        continue
+                    if not os.path.exists(target_real):
+                        logger.debug("Skipping dangling symlink", link=rel_path)
+                        continue
+                tar.add(fpath, arcname=rel_path, recursive=False)
+
+    tar_size = buf.tell()
+    if tar_size > max_size:
+        raise RuntimeError(
+            f"Docker build context too large: {tar_size:,} bytes "
+            f"(cap {max_size:,}). Add a .dockerignore or trim large files in "
+            f"{build_dir!r}."
+        )
+    if used_default_excludes:
+        logger.warning(
+            "No .dockerignore in build context; default safety excludes applied",
+            build_dir=build_dir,
+            excludes=list(_DEFAULT_TAR_EXCLUDES),
+        )
+    logger.info(
+        "Docker build context packaged",
+        build_dir=build_dir,
+        tar_size_bytes=tar_size,
+        used_default_excludes=used_default_excludes,
+    )
+
+    buf.seek(0)
+    return buf
 
 
 def _read_source(source: bytes | str) -> bytes:
