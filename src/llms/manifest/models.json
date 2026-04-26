@@ -98,7 +98,8 @@
     "parameters": {
       "max_tokens": 64000,
       "thinking": {
-        "type": "enabled"
+        "type": "enabled",
+        "budget_tokens": 8000
       }
     }
   },
