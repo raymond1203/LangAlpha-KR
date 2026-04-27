@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { getTimezoneForSymbol, toTradingViewSymbol } from '../marketTimezone';
+import { getTimezoneForSymbol, isKoreanSymbol, toTradingViewSymbol } from '../marketTimezone';
+
+describe('isKoreanSymbol', () => {
+  it('true for .KS / .KQ (case-insensitive)', () => {
+    expect(isKoreanSymbol('005930.KS')).toBe(true);
+    expect(isKoreanSymbol('263750.KQ')).toBe(true);
+    expect(isKoreanSymbol('005930.ks')).toBe(true);
+  });
+
+  it('false for US / unknown / empty', () => {
+    expect(isKoreanSymbol('GOOGL')).toBe(false);
+    expect(isKoreanSymbol('AAPL')).toBe(false);
+    expect(isKoreanSymbol('0700.HK')).toBe(false);
+    expect(isKoreanSymbol('')).toBe(false);
+    expect(isKoreanSymbol(null)).toBe(false);
+    expect(isKoreanSymbol(undefined)).toBe(false);
+  });
+});
 
 describe('getTimezoneForSymbol', () => {
   it('returns Asia/Seoul for .KS (KOSPI)', () => {

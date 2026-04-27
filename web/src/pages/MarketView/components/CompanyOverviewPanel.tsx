@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Loader2 } from 'lucide-react';
 import {
   PerformanceBarChart,
@@ -43,6 +44,9 @@ interface OverviewData {
   cashFlow?: unknown;
   revenueByProduct?: unknown;
   revenueByGeo?: unknown;
+  // FORK (#33): backend 가 KR ticker 시 unsupported=true 로 응답 — frontend 가 graceful 카드 렌더.
+  unsupported?: boolean;
+  message?: string;
   [key: string]: unknown;
 }
 
@@ -122,6 +126,7 @@ function QuoteSummary({ data }: QuoteSummaryProps) {
 }
 
 export default function CompanyOverviewPanel({ symbol: _symbol, visible, onClose, data, loading }: CompanyOverviewPanelProps) {
+  const { t } = useTranslation();
   if (!visible) return null;
 
   const error = !data && !loading ? 'No data available' : null;
@@ -146,7 +151,14 @@ export default function CompanyOverviewPanel({ symbol: _symbol, visible, onClose
         <div className="company-overview-error">{error}</div>
       )}
 
-      {data && !loading && (
+      {/* FORK (#33): backend 가 unsupported=true 응답하면 informational 안내 카드 (error 톤 아님). */}
+      {data?.unsupported && !loading && (
+        <div className="company-overview-notice">
+          {t('marketView.fundamentalsUnsupported', { defaultValue: data.message ?? '' })}
+        </div>
+      )}
+
+      {data && !data.unsupported && !loading && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <QuoteSummary data={data} />
           <PerformanceBarChart performance={data.performance as Record<string, number> | undefined} />

@@ -82,6 +82,21 @@
   padding: 0 20px;
 }
 
+/* FORK (#33): unsupported market 안내 — error 가 아닌 informational 톤 (회색 / 둥근 카드). */
+.company-overview-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+  background: var(--color-bg-subtle, transparent);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
 @media (max-width: 767px) {
   .company-overview-panel {
     width: 100%;

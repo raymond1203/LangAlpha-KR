@@ -45,6 +45,22 @@ router = APIRouter(
 )
 
 
+# FORK (#33): /overview, /analyst-data 가 native source 가 없는 시장의 ticker
+# 를 받았을 때 graceful "미지원" 응답으로 처리. 향후 .HK / .T 등 추가 시 본 set
+# 에 추가하면 모든 endpoint 가 일관되게 동작. fundamentals 가 native 로 채워진
+# 시장 (예: KR via #42 pykrx + DART) 은 set 에서 제외.
+_UNSUPPORTED_FUNDAMENTALS_SUFFIXES: tuple[str, ...] = (".KS", ".KQ")
+
+
+def is_unsupported_market(symbol: str) -> bool:
+    """Return True if symbol's market lacks a native fundamentals source.
+
+    Symbol is normalized to upper-case before suffix check, matching the
+    handler's own normalization (``symbol.strip().upper()``).
+    """
+    return symbol.strip().upper().endswith(_UNSUPPORTED_FUNDAMENTALS_SUFFIXES)
+
+
 def _convert_data_points(raw_data: list) -> list[IntradayDataPoint]:
     """Convert raw OHLCV data to IntradayDataPoint models."""
     return [
@@ -477,6 +493,17 @@ async def get_company_overview(symbol: str, user_id: CurrentUserId) -> CompanyOv
         raise HTTPException(status_code=422, detail="Symbol is required")
 
     symbol_upper = symbol.strip().upper()
+
+    # FORK (#33): native fundamentals source 가 없는 시장은 graceful 미지원 응답.
+    # message 는 영어 fallback — frontend 가 i18n 키 (marketView.fundamentalsUnsupported)
+    # 로 사용자 locale 에 맞게 표시.
+    if is_unsupported_market(symbol_upper):
+        return CompanyOverviewResponse(
+            symbol=symbol_upper,
+            unsupported=True,
+            message="Fundamentals are not yet supported for this market.",
+        )
+
     try:
         from src.utils.cache.redis_cache import get_cache_client
 
@@ -534,6 +561,15 @@ async def get_analyst_data(
         raise HTTPException(status_code=422, detail="Symbol is required")
 
     symbol_upper = symbol.strip().upper()
+
+    # FORK (#33): native analyst rating source 가 없는 시장은 graceful 미지원 응답.
+    if is_unsupported_market(symbol_upper):
+        return AnalystDataResponse(
+            symbol=symbol_upper,
+            grades=[],
+            unsupported=True,
+            message="Analyst data is not yet supported for this market.",
+        )
 
     try:
         import asyncio

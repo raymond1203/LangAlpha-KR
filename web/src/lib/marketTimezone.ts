@@ -9,6 +9,21 @@
 const US_TZ = 'America/New_York';
 const KR_TZ = 'Asia/Seoul';
 
+// 단일 진리 — Korean suffix 추가/변경 시 본 정규식 한 곳만 수정.
+const KR_SUFFIX_RE = /\.(KS|KQ)$/i;
+
+/**
+ * True if symbol is a Korean ticker (KOSPI .KS / KOSDAQ .KQ).
+ *
+ * 본 fork 에서 KR 시장은 backend WebSocket source 가 없어 polling fallback 으로
+ * 동작. fundamentals/analyst 도 graceful "미지원" 처리. 이 분기를 위한 단일 진리 —
+ * getTimezoneForSymbol / toTradingViewSymbol 도 본 함수를 사용.
+ */
+export function isKoreanSymbol(symbol: string | null | undefined): boolean {
+  if (!symbol) return false;
+  return KR_SUFFIX_RE.test(symbol);
+}
+
 /**
  * Derive IANA timezone from symbol suffix.
  *
@@ -17,8 +32,7 @@ const KR_TZ = 'Asia/Seoul';
  * - 그 외 (HK / JP / EU 등) → `America/New_York` (현재 MarketView 미지원, 향후 확장 시 추가)
  */
 export function getTimezoneForSymbol(symbol: string | null | undefined): string {
-  if (!symbol) return US_TZ;
-  if (/\.(KS|KQ)$/i.test(symbol)) return KR_TZ;
+  if (isKoreanSymbol(symbol)) return KR_TZ;
   return US_TZ;
 }
 
@@ -33,7 +47,9 @@ export function getTimezoneForSymbol(symbol: string | null | undefined): string 
  */
 export function toTradingViewSymbol(symbol: string | null | undefined): string {
   if (!symbol) return '';
-  const match = symbol.match(/^(.+)\.(KS|KQ)$/i);
-  if (match) return `KRX:${match[1]}`;
+  if (isKoreanSymbol(symbol)) {
+    // KS / KQ 둘 다 KRX 매핑. KR_SUFFIX_RE 가 보장하는 ".XX" suffix 제거.
+    return `KRX:${symbol.slice(0, -3)}`;
+  }
   return symbol;
 }

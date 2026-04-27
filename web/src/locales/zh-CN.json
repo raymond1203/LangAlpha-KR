@@ -969,5 +969,8 @@
     "flashModelLabel": "快速模型",
     "notSet": "未设置",
     "notConfigured": "未配置"
+  },
+  "marketView": {
+    "fundamentalsUnsupported": "此市场暂不支持基本面数据。"
   }
 }

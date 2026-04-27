@@ -967,5 +967,8 @@
     "flashModelLabel": "Flash 모델",
     "notSet": "미설정",
     "notConfigured": "미구성"
+  },
+  "marketView": {
+    "fundamentalsUnsupported": "이 시장은 현재 fundamentals 가 지원되지 않습니다."
   }
 }
