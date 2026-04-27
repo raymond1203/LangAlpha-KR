@@ -238,7 +238,7 @@ function MarketViewInner() {
 
   // Subscribe selected stock to WS feed.
   // FORK (#33): KR ticker (.KS / .KQ) 는 backend WebSocket source 가 없어 subscribe 자체를
-  // skip — useKoreanSnapshotPolling 이 60s snapshot polling 으로 대체.
+  // skip — useKoreanSnapshotPolling 이 KR symbol 만 받으면 자체적으로 polling, 그 외엔 idle.
   const isKR = isKoreanSymbol(selectedStock);
   useEffect(() => {
     if (!selectedStock || isKR) return;
@@ -246,8 +246,8 @@ function MarketViewInner() {
     return () => wsUnsubscribe([selectedStock]);
   }, [selectedStock, isKR, wsSubscribe, wsUnsubscribe]);
 
-  // FORK (#33): KR polling 결과 (selectedStock 이 KR 일 때만 활성, US 면 항상 null)
-  const krPollPrice = useKoreanSnapshotPolling(isKR ? selectedStock : null);
+  // FORK (#33): hook 자체가 KR 검사 — 외부 가드 불필요 (US symbol 이면 query disabled).
+  const krPollPrice = useKoreanSnapshotPolling(selectedStock);
 
   // Display price: KR 면 polling 결과, US 면 WS live → REST fallback.
   // Only use realTimePrice if it belongs to the current symbol (prevents stale data flash when switching tickers).

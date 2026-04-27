@@ -45,6 +45,22 @@ router = APIRouter(
 )
 
 
+# FORK (#33): /overview, /analyst-data 가 native source 가 없는 시장의 ticker
+# 를 받았을 때 graceful "미지원" 응답으로 처리. 향후 .HK / .T 등 추가 시 본 set
+# 에 추가하면 모든 endpoint 가 일관되게 동작. fundamentals 가 native 로 채워진
+# 시장 (예: KR via #42 pykrx + DART) 은 set 에서 제외.
+_UNSUPPORTED_FUNDAMENTALS_SUFFIXES: tuple[str, ...] = (".KS", ".KQ")
+
+
+def is_unsupported_market(symbol: str) -> bool:
+    """Return True if symbol's market lacks a native fundamentals source.
+
+    Symbol is normalized to upper-case before suffix check, matching the
+    handler's own normalization (``symbol.strip().upper()``).
+    """
+    return symbol.strip().upper().endswith(_UNSUPPORTED_FUNDAMENTALS_SUFFIXES)
+
+
 def _convert_data_points(raw_data: list) -> list[IntradayDataPoint]:
     """Convert raw OHLCV data to IntradayDataPoint models."""
     return [
@@ -478,14 +494,14 @@ async def get_company_overview(symbol: str, user_id: CurrentUserId) -> CompanyOv
 
     symbol_upper = symbol.strip().upper()
 
-    # FORK (#33): KR ticker (.KS / .KQ) 는 현재 fundamentals source 없음. 200 with
-    # unsupported=True 응답 — frontend 가 graceful "한국 시장 미지원" 카드 렌더.
-    # #42 에서 pykrx + DART 로 채워질 예정.
-    if symbol_upper.endswith((".KS", ".KQ")):
+    # FORK (#33): native fundamentals source 가 없는 시장은 graceful 미지원 응답.
+    # message 는 영어 fallback — frontend 가 i18n 키 (marketView.fundamentalsUnsupported)
+    # 로 사용자 locale 에 맞게 표시.
+    if is_unsupported_market(symbol_upper):
         return CompanyOverviewResponse(
             symbol=symbol_upper,
             unsupported=True,
-            message="한국 시장 fundamentals 는 현재 지원되지 않습니다 (#42 에서 추가 예정).",
+            message="Fundamentals are not yet supported for this market.",
         )
 
     try:
@@ -546,13 +562,13 @@ async def get_analyst_data(
 
     symbol_upper = symbol.strip().upper()
 
-    # FORK (#33): KR ticker 는 native analyst rating source 없음. graceful 미지원 응답.
-    if symbol_upper.endswith((".KS", ".KQ")):
+    # FORK (#33): native analyst rating source 가 없는 시장은 graceful 미지원 응답.
+    if is_unsupported_market(symbol_upper):
         return AnalystDataResponse(
             symbol=symbol_upper,
             grades=[],
             unsupported=True,
-            message="한국 시장 애널리스트 데이터는 현재 지원되지 않습니다.",
+            message="Analyst data is not yet supported for this market.",
         )
 
     try:

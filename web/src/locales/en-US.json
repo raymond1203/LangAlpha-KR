@@ -979,5 +979,8 @@
     "flashModelLabel": "Flash model",
     "notSet": "Not set",
     "notConfigured": "Not configured"
+  },
+  "marketView": {
+    "fundamentalsUnsupported": "Fundamentals are not yet supported for this market."
   }
 }

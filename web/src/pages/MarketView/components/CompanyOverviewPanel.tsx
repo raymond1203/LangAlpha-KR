@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Loader2 } from 'lucide-react';
 import {
   PerformanceBarChart,
@@ -125,6 +126,7 @@ function QuoteSummary({ data }: QuoteSummaryProps) {
 }
 
 export default function CompanyOverviewPanel({ symbol: _symbol, visible, onClose, data, loading }: CompanyOverviewPanelProps) {
+  const { t } = useTranslation();
   if (!visible) return null;
 
   const error = !data && !loading ? 'No data available' : null;
@@ -149,10 +151,10 @@ export default function CompanyOverviewPanel({ symbol: _symbol, visible, onClose
         <div className="company-overview-error">{error}</div>
       )}
 
-      {/* FORK (#33): KR ticker 같이 backend 가 unsupported=true 응답하면 안내 카드 단독 표시. */}
+      {/* FORK (#33): backend 가 unsupported=true 응답하면 informational 안내 카드 (error 톤 아님). */}
       {data?.unsupported && !loading && (
-        <div className="company-overview-error" style={{ lineHeight: 1.5 }}>
-          {data.message || '이 시장은 현재 fundamentals 가 지원되지 않습니다.'}
+        <div className="company-overview-notice">
+          {t('marketView.fundamentalsUnsupported', { defaultValue: data.message ?? '' })}
         </div>
       )}
 
