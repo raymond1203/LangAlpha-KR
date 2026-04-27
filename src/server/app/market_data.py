@@ -477,6 +477,17 @@ async def get_company_overview(symbol: str, user_id: CurrentUserId) -> CompanyOv
         raise HTTPException(status_code=422, detail="Symbol is required")
 
     symbol_upper = symbol.strip().upper()
+
+    # FORK (#33): KR ticker (.KS / .KQ) 는 현재 fundamentals source 없음. 200 with
+    # unsupported=True 응답 — frontend 가 graceful "한국 시장 미지원" 카드 렌더.
+    # #42 에서 pykrx + DART 로 채워질 예정.
+    if symbol_upper.endswith((".KS", ".KQ")):
+        return CompanyOverviewResponse(
+            symbol=symbol_upper,
+            unsupported=True,
+            message="한국 시장 fundamentals 는 현재 지원되지 않습니다 (#42 에서 추가 예정).",
+        )
+
     try:
         from src.utils.cache.redis_cache import get_cache_client
 
@@ -534,6 +545,15 @@ async def get_analyst_data(
         raise HTTPException(status_code=422, detail="Symbol is required")
 
     symbol_upper = symbol.strip().upper()
+
+    # FORK (#33): KR ticker 는 native analyst rating source 없음. graceful 미지원 응답.
+    if symbol_upper.endswith((".KS", ".KQ")):
+        return AnalystDataResponse(
+            symbol=symbol_upper,
+            grades=[],
+            unsupported=True,
+            message="한국 시장 애널리스트 데이터는 현재 지원되지 않습니다.",
+        )
 
     try:
         import asyncio

@@ -23,6 +23,9 @@ import { MarketDataWSProvider, useMarketDataWSContext } from './contexts/MarketD
 import { loadPref, savePref } from './utils/prefs';
 // FORK (#32): 시장에 맞춰 첫 진입 디폴트 심볼 분기. 시장별로 마지막 본 종목을 분리 저장 → KR/US 전환 시 cross-bleed 방지.
 import { useMarket, type MarketRegion } from '@/contexts/MarketContext';
+// FORK (#33): KR ticker 는 WebSocket source 부재 → 60s snapshot polling fallback. isKoreanSymbol 로 단일 진리.
+import { isKoreanSymbol } from '@/lib/marketTimezone';
+import { useKoreanSnapshotPolling } from './hooks/useKoreanSnapshotPolling';
 
 // 시장별 첫 진입 디폴트 종목. localStorage 의 시장별 키가 비어있을 때만 사용.
 // 한국 시장 backend 인프라 (실시간 시세 / fundamentals) 는 #33 에서 다뤄지며,
@@ -233,17 +236,25 @@ function MarketViewInner() {
     setShowOverview(false);
   }, []);
 
-  // Subscribe selected stock to WS feed
+  // Subscribe selected stock to WS feed.
+  // FORK (#33): KR ticker (.KS / .KQ) 는 backend WebSocket source 가 없어 subscribe 자체를
+  // skip — useKoreanSnapshotPolling 이 60s snapshot polling 으로 대체.
+  const isKR = isKoreanSymbol(selectedStock);
   useEffect(() => {
-    if (!selectedStock) return;
+    if (!selectedStock || isKR) return;
     wsSubscribe([selectedStock]);
     return () => wsUnsubscribe([selectedStock]);
-  }, [selectedStock, wsSubscribe, wsUnsubscribe]);
+  }, [selectedStock, isKR, wsSubscribe, wsUnsubscribe]);
 
-  // Display price: prefer WS live data over REST. Only use realTimePrice if it
-  // belongs to the current symbol (prevents stale data flash when switching tickers).
+  // FORK (#33): KR polling 결과 (selectedStock 이 KR 일 때만 활성, US 면 항상 null)
+  const krPollPrice = useKoreanSnapshotPolling(isKR ? selectedStock : null);
+
+  // Display price: KR 면 polling 결과, US 면 WS live → REST fallback.
+  // Only use realTimePrice if it belongs to the current symbol (prevents stale data flash when switching tickers).
   const realTimePriceMatch = realTimePrice?.symbol === selectedStock ? realTimePrice : null;
-  const displayPrice = wsPrices.get(selectedStock) || realTimePriceMatch;
+  const displayPrice = isKR
+    ? krPollPrice
+    : wsPrices.get(selectedStock) || realTimePriceMatch;
 
   // Fetch workspaces for the workspace selector (deep mode)
   useEffect(() => {

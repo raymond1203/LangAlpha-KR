@@ -23,6 +23,17 @@ export function getTimezoneForSymbol(symbol: string | null | undefined): string 
 }
 
 /**
+ * True if symbol is a Korean ticker (KOSPI .KS / KOSDAQ .KQ).
+ *
+ * 본 fork 에서 KR 시장은 backend WebSocket source 가 없어 polling fallback 으로
+ * 동작. fundamentals/analyst 도 graceful "미지원" 처리. 이 분기를 위한 단일 진리.
+ */
+export function isKoreanSymbol(symbol: string | null | undefined): boolean {
+  if (!symbol) return false;
+  return /\.(KS|KQ)$/i.test(symbol);
+}
+
+/**
  * Convert a Yahoo-style symbol to a TradingView-compatible symbol.
  *
  * TradingView 의 한국 시장은 KOSPI/KOSDAQ 모두 `KRX` exchange 로 통합

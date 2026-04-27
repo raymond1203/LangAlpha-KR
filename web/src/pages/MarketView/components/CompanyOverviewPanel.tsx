@@ -43,6 +43,9 @@ interface OverviewData {
   cashFlow?: unknown;
   revenueByProduct?: unknown;
   revenueByGeo?: unknown;
+  // FORK (#33): backend 가 KR ticker 시 unsupported=true 로 응답 — frontend 가 graceful 카드 렌더.
+  unsupported?: boolean;
+  message?: string;
   [key: string]: unknown;
 }
 
@@ -146,7 +149,14 @@ export default function CompanyOverviewPanel({ symbol: _symbol, visible, onClose
         <div className="company-overview-error">{error}</div>
       )}
 
-      {data && !loading && (
+      {/* FORK (#33): KR ticker 같이 backend 가 unsupported=true 응답하면 안내 카드 단독 표시. */}
+      {data?.unsupported && !loading && (
+        <div className="company-overview-error" style={{ lineHeight: 1.5 }}>
+          {data.message || '이 시장은 현재 fundamentals 가 지원되지 않습니다.'}
+        </div>
+      )}
+
+      {data && !data.unsupported && !loading && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <QuoteSummary data={data} />
           <PerformanceBarChart performance={data.performance as Record<string, number> | undefined} />

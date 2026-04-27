@@ -218,6 +218,10 @@ class CompanyOverviewResponse(BaseModel):
     cashFlow: Optional[List[Dict[str, Any]]] = Field(None, description="Quarterly cash flow data")
     revenueByProduct: Optional[Dict[str, Any]] = Field(None, description="Revenue breakdown by product")
     revenueByGeo: Optional[Dict[str, Any]] = Field(None, description="Revenue breakdown by geography")
+    # FORK (#33): KR ticker (.KS / .KQ) 는 현재 fundamentals source 없음. unsupported=True 면
+    # 모든 데이터 필드는 None, message 에 사유. 향후 #42 (pykrx + DART 기반) 로 채워질 예정.
+    unsupported: bool = Field(False, description="True if this market is not supported for fundamentals")
+    message: Optional[str] = Field(None, description="Human-readable explanation when unsupported=True")
 
 
 class PriceTargetSummary(BaseModel):
@@ -242,6 +246,10 @@ class AnalystDataResponse(BaseModel):
     symbol: str = Field(..., description="Stock ticker symbol")
     priceTargets: Optional[PriceTargetSummary] = Field(None, description="Price target summary")
     grades: List[AnalystGrade] = Field(default_factory=list, description="Recent analyst grade changes")
+    # FORK (#33): KR 시장은 native analyst rating 데이터 source 없음 (DART 공시 sentiment 로
+    # 대체할 수도 있으나 별도 작업). unsupported=True 면 priceTargets=None, grades=[].
+    unsupported: bool = Field(False, description="True if this market is not supported for analyst data")
+    message: Optional[str] = Field(None, description="Human-readable explanation when unsupported=True")
 
 
 class SnapshotData(BaseModel):
