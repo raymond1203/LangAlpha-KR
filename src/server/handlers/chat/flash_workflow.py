@@ -32,6 +32,11 @@ from src.server.utils.directive_context import (
     parse_directive_contexts,
 )
 from src.llms.callbacks import init_cost_tracker  # FORK: 비용 관측 콜백
+from src.server.utils.widget_context import (
+    build_widget_context_reminder,
+    parse_widget_contexts,
+    serialize_widget_contexts_for_metadata,
+)
 from src.llms.llm import get_input_modalities
 from src.server.utils.multimodal_context import (
     build_attachment_metadata,
@@ -83,22 +88,11 @@ async def astream_flash_workflow(
     is_byok: bool = False,
     config=None,
 ):
-    """
-    Async generator that streams Flash agent workflow events.
+    """Async generator that streams Flash agent workflow events.
 
-    Flash mode is optimized for speed - no sandbox, no MCP, no workspace required.
-    Uses only external tools (web search, market data, SEC filings).
-
-    Args:
-        request: The chat request
-        thread_id: Thread identifier
-        user_input: Extracted user input text
-        user_id: User identifier
-        is_byok: Whether the user is using their own API key
-        config: Pre-resolved LLM config (optional; resolved here if absent)
-
-    Yields:
-        SSE-formatted event strings
+    Flash mode: no sandbox, no MCP, external tools only (web search, market
+    data, SEC filings). Follows the same background-task / reconnect pattern
+    as PTC but skips workspace and session setup.
     """
     start_time = time.time()
     handler = None
@@ -114,7 +108,6 @@ async def astream_flash_workflow(
 
     slot_owned = True
     try:
-        # Validate agent_config is available
         if not setup.agent_config:
             raise HTTPException(
                 status_code=503,
@@ -125,11 +118,9 @@ async def astream_flash_workflow(
         # Database Persistence Setup
         # =================================================================
 
-        # Get or create the shared flash workspace for this user
         flash_ws = await get_or_create_flash_workspace(user_id)
         workspace_id = str(flash_ws["workspace_id"])
 
-        # Ensure thread exists in database
         await ensure_thread(
             request, thread_id, workspace_id, user_id, msg_type="flash",
             initial_query=user_input,
@@ -151,11 +142,16 @@ async def astream_flash_workflow(
         query_metadata = {"msg_type": "flash"}
         if effective_model:
             query_metadata["llm_model"] = effective_model
+        widget_ctxs = parse_widget_contexts(request.additional_context)
         if request.additional_context:
             multimodal_ctxs = parse_multimodal_contexts(request.additional_context)
             if multimodal_ctxs:
                 query_metadata["attachments"] = await build_attachment_metadata(
                     multimodal_ctxs, thread_id
+                )
+            if widget_ctxs:
+                query_metadata["widget_contexts"] = serialize_widget_contexts_for_metadata(
+                    widget_ctxs
                 )
 
         # Persist lightweight additional_context + slash command fallback
@@ -222,7 +218,6 @@ async def astream_flash_workflow(
         # Propagate fetch model override to tool context
         apply_fetch_override(config)
 
-        # Fetch user profile for prompt injection
         flash_user_profile = None
         if user_id:
             flash_user_profile = await get_user_profile_for_prompt(user_id)
@@ -235,7 +230,6 @@ async def astream_flash_workflow(
             store=setup.store,
         )
 
-        # Build input state from messages
         messages = normalize_request_messages(request)
 
         # Multimodal Context Injection (images and PDFs) -- Flash-specific
@@ -279,15 +273,28 @@ async def astream_flash_workflow(
         # Skill Context Injection (Flash mode)
         loaded_skill_names = inject_skills(messages, request, config, mode="flash")
 
-        # Directive Context Injection (inline with user message) --
-        # Flash-specific
+        # Directive + Widget Context Injection (inline with user message) --
+        # Flash-specific. Skip on HITL resumes and checkpoint replay because
+        # `input_state` below replaces `messages` with `Command(resume=...)` /
+        # `None`, so anything appended here would be silently discarded.
+        # Mirrors the PTC guard at `ptc_workflow.py:620,638`.
+        skip_inline_injection = bool(request.hitl_response) or is_checkpoint_replay
+
         directives = parse_directive_contexts(request.additional_context)
         directive_reminder = build_directive_reminder(directives)
-        if directive_reminder:
+        if directive_reminder and not skip_inline_injection:
             _append_to_last_user_message(messages, directive_reminder)
             logger.info(
                 f"[FLASH_CHAT] Directive context injected inline "
                 f"({len(directives)} directives)"
+            )
+
+        widget_reminder = build_widget_context_reminder(widget_ctxs)
+        if widget_reminder and not skip_inline_injection:
+            _append_to_last_user_message(messages, widget_reminder)
+            logger.info(
+                f"[FLASH_CHAT] Widget context injected inline "
+                f"({len(widget_ctxs)} widgets)"
             )
 
         # Build input state or resume command -- Flash-specific (no
@@ -310,7 +317,6 @@ async def astream_flash_workflow(
             if loaded_skill_names:
                 input_state["loaded_skills"] = loaded_skill_names
 
-        # Build LangGraph config
         graph_config = build_graph_config(
             thread_id=thread_id,
             user_id=user_id,
@@ -325,7 +331,6 @@ async def astream_flash_workflow(
             cost_callback=cost_callback,  # FORK
         )
 
-        # Create stream handler
         handler = WorkflowStreamHandler(
             thread_id=thread_id,
             token_callback=token_callback,
@@ -356,7 +361,6 @@ async def astream_flash_workflow(
                 yield steering_event
             return
 
-        # Mark workflow as active in Redis tracker
         await tracker.mark_active(
             thread_id=thread_id,
             workspace_id=workspace_id,
@@ -419,7 +423,6 @@ async def astream_flash_workflow(
                     exc_info=True,
                 )
 
-        # Start workflow in background
         try:
             await manager.start_workflow(
                 thread_id=thread_id,
@@ -471,7 +474,6 @@ async def astream_flash_workflow(
         else:
             slot_owned = False  # Manager owns burst slot release from here
 
-        # Stream live events from background task to client
         async for event in stream_live_events(
             manager=manager,
             tracker=tracker,
@@ -524,4 +526,3 @@ async def astream_flash_workflow(
 
     finally:
         ExecutionTracker.stop_tracking()
-        logger.debug("Flash execution tracking stopped")
