@@ -452,12 +452,17 @@ class IntradayCacheService:
                         )
                         envelope = None
             elif _needs_refresh(envelope, base_ttl, interval=interval, is_live=is_live):
-                # Normal SWR: return stale bars, refresh in background.
-                bg_triggered = True
-                logger.info("Cache %s %s: SWR delta refresh triggered", normalized, interval)
-                asyncio.create_task(
-                    self._delta_refresh(cache_key, normalized, is_index, interval, user_id)
-                )
+                if is_live:
+                    # Normal SWR: return stale bars, refresh in background.
+                    bg_triggered = True
+                    logger.info("Cache %s %s: SWR delta refresh triggered", normalized, interval)
+                    asyncio.create_task(
+                        self._delta_refresh(cache_key, normalized, is_index, interval, user_id)
+                    )
+                # else: historical (is_live=False) — _delta_refresh 가 to_date=None
+                # 으로 fetch 하면 원본 윈도우 밖 bars 가 cache_key 에 merge 돼
+                # range-cache pollution. truncated 히스토리컬 retry 는 향후
+                # _delta_refresh 가 from_date/to_date 받도록 확장 시 복원.
 
             if envelope is not None:
                 return IntradayFetchResult(

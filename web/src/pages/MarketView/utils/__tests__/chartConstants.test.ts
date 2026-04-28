@@ -114,22 +114,25 @@ describe('computeExtendedHoursRegions', () => {
 
   it('closes region when gap is 2h + 1s (boundary is exclusive)', () => {
     const GAP = 2 * 60 * 60;
-    const data = [
-      { time: preAt(DAY1_00_00, 5, 0) },
-      { time: preAt(DAY1_00_00, 5, 0) + GAP + 1 },
-    ];
-    expect(computeExtendedHoursRegions(data)).toHaveLength(2);
+    const first = preAt(DAY1_00_00, 5, 0);
+    const second = first + GAP + 1;
+    const data = [{ time: first }, { time: second }];
+    expect(computeExtendedHoursRegions(data)).toEqual([
+      { start: first, end: first, type: 'pre' },
+      { start: second, end: second, type: 'pre' },
+    ]);
   });
 
   it('preserves region when gap is exactly 2h (boundary is exclusive)', () => {
     // Pins the contract that the threshold is `>`, not `>=`. Flipping the
     // operator would split real sparse pre-market data with a single 2h gap.
     const GAP = 2 * 60 * 60;
-    const data = [
-      { time: preAt(DAY1_00_00, 5, 0) },
-      { time: preAt(DAY1_00_00, 5, 0) + GAP },
-    ];
-    expect(computeExtendedHoursRegions(data)).toHaveLength(1);
+    const first = preAt(DAY1_00_00, 5, 0);
+    const second = first + GAP;
+    const data = [{ time: first }, { time: second }];
+    expect(computeExtendedHoursRegions(data)).toEqual([
+      { start: first, end: second, type: 'pre' },
+    ]);
   });
 });
 

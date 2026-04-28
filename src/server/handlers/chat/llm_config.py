@@ -166,9 +166,13 @@ async def _cleanup_stale_model_preferences(user_id: str) -> list[tuple[str, str]
     custom_models = {cm.get("name") for cm in (pref.get("custom_models") or [])}
     custom_providers = {cp.get("name") for cp in (pref.get("custom_providers") or [])}
 
-    def resolvable(name: str | None) -> bool:
+    def resolvable(name: object) -> bool:
         if not name:
             return True  # empty = not set; nothing to scrub
+        if not isinstance(name, str):
+            # 비-string preference (DB 손상·수동 편집·schema migration 잔재) 도
+            # KeyError/TypeError 없이 "resolvable 아님" 으로 처리해 안전하게 청소.
+            return False
         return (
             name in custom_models
             or name in custom_providers
@@ -184,16 +188,17 @@ async def _cleanup_stale_model_preferences(user_id: str) -> list[tuple[str, str]
         val = pref.get(key)
         if val and not resolvable(val):
             updates[key] = None
-            removed.append((key, val))
+            # removed 는 (key, str) 튜플 — non-str 은 repr 로 안전 변환.
+            removed.append((key, val if isinstance(val, str) else repr(val)))
 
     fallback = pref.get("fallback_models")
     if isinstance(fallback, list):
         kept: list[str] = []
         for m in fallback:
-            if resolvable(m):
+            if isinstance(m, str) and resolvable(m):
                 kept.append(m)
             else:
-                removed.append(("fallback_models", m))
+                removed.append(("fallback_models", m if isinstance(m, str) else repr(m)))
         if len(kept) != len(fallback):
             # Empty list → delete the key entirely so it doesn't linger as ``[]``
             updates["fallback_models"] = kept or None
@@ -616,14 +621,13 @@ async def resolve_llm_config(
     # culprit; raise a user-facing CTA either way. YAML-default UNKNOWN
     # falls through so the downstream error surfaces the config bug.
     if source == ModelSource.UNKNOWN and not is_custom_provider:
-        # Only the five scalar keys feed ``effective_model`` — fallback_models
-        # is tried by ``_resolve_one_with_fallbacks`` on a separate path and
-        # never flows through here, so it's intentionally excluded from this
-        # attribution check (the scrub in ``_cleanup_stale_model_preferences``
-        # still filters fallback_models once it fires).
-        from_pref = any(
-            model_pref.get(k) == effective_model for k in _MODEL_PREF_KEYS
-        )
+        # 현재 mode 의 pref_key 만 비교. 이전엔 _MODEL_PREF_KEYS 전체를 any() 로
+        # 검사해, 예컨대 main 요청인데 effective_model 이 fetch_model 이나
+        # compaction_model pref 와 우연히 일치하면 from_pref=True 가 돼 다른 키의
+        # 정상 prefs 까지 휩쓸어 지우는 false-positive 가 발생했음. fallback_models
+        # 는 _resolve_one_with_fallbacks 가 별도 경로로 다루므로 여기서는 제외
+        # (scrub 시점에 _cleanup_stale_model_preferences 가 별도 필터링).
+        from_pref = model_pref.get(pref_key) == effective_model
         from_request = request_model == effective_model
 
         if from_pref:

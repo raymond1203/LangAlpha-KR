@@ -185,6 +185,14 @@
   transform: translateY(0);
   animation: dashboard-chip-enter 0.3s ease both;
 }
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-suggestion-bubble {
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .dashboard-suggestion-bubbles.visible .dashboard-suggestion-bubble {
+    animation: none;
+  }
+}
 .dashboard-suggestion-bubble:hover,
 .dashboard-suggestion-bubble:active {
   background: var(--color-bg-elevated);
