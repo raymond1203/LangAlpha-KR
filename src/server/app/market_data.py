@@ -45,20 +45,27 @@ router = APIRouter(
 )
 
 
-# FORK (#33): /analyst-data 가 native source 가 없는 시장의 ticker 를 받았을 때
-# graceful "미지원" 응답으로 처리. 향후 .HK / .T 등 추가 시 본 set 에 추가.
-# (KR /overview 는 #42 Stage A+B 에서 KoreanFundamentalsSource 가 채움 — 별도 분기.)
-_UNSUPPORTED_ANALYST_SUFFIXES: tuple[str, ...] = (".KS", ".KQ")
+# FORK (#33 / #42): KR ticker (.KS / .KQ) 단일 진리. 향후 시장 분기 (예: .HK)
+# 추가 시 본 tuple 만 갱신 — is_unsupported_analyst_market / _is_kr_symbol 둘 다 참조.
+KR_SUFFIXES: tuple[str, ...] = (".KS", ".KQ")
 
 
 def is_unsupported_analyst_market(symbol: str) -> bool:
-    """Return True if symbol's market lacks a native analyst-rating source."""
-    return symbol.strip().upper().endswith(_UNSUPPORTED_ANALYST_SUFFIXES)
+    """Return True if symbol's market lacks a native analyst-rating source.
+
+    현재 KR (.KS / .KQ) 만 unsupported — analyst rating 의 native KR source 가 없음.
+    """
+    return symbol.strip().upper().endswith(KR_SUFFIXES)
 
 
 def _is_kr_symbol(symbol: str) -> bool:
     """Return True if symbol is a KR (.KS / .KQ) ticker — for /overview routing."""
-    return symbol.strip().upper().endswith((".KS", ".KQ"))
+    return symbol.strip().upper().endswith(KR_SUFFIXES)
+
+
+# FORK (#42): source 일시 outage 시 _partial fallback 응답을 짧게 캐시 — 매 요청
+# 마다 yf 재호출 방지. 성공 캐시 (5분) 보다 짧아 outage 회복 시 빠르게 정상화.
+_NEGATIVE_CACHE_TTL_SECONDS = 60
 
 
 def _convert_data_points(raw_data: list) -> list[IntradayDataPoint]:
@@ -511,12 +518,19 @@ async def get_company_overview(symbol: str, user_id: CurrentUserId) -> CompanyOv
             kr_source = KoreanFundamentalsSource()
             artifact = await kr_source.get_overview(symbol_upper)
             if artifact.get("_partial"):
-                # quote 도출 실패 — graceful unsupported 와 동일 처리.
-                return CompanyOverviewResponse(
+                # quote 도출 실패 — graceful unsupported. 짧은 negative cache 로
+                # source outage 시 burst 보호 (60s, 성공 5분보다 짧음).
+                partial_response = CompanyOverviewResponse(
                     symbol=symbol_upper,
                     unsupported=True,
                     message="KR market data temporarily unavailable.",
                 )
+                await cache.set(
+                    cache_key,
+                    partial_response.model_dump(),
+                    ttl=_NEGATIVE_CACHE_TTL_SECONDS,
+                )
+                return partial_response
             response = CompanyOverviewResponse(
                 symbol=artifact["symbol"],
                 name=artifact.get("name"),

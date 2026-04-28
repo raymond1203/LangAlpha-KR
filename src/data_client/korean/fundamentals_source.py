@@ -107,7 +107,9 @@ def _fetch_performance_from_pykrx(ticker: str) -> dict[str, float | None]:
         logger.warning("kr_fundamentals.pykrx_ohlcv.failed | ticker=%s", ticker, exc_info=True)
         return {p: None for p in (*_PERIOD_BUSINESS_DAYS.keys(), "YTD")}
 
-    if df is None or df.empty:
+    # FORK (#42): "종가" column 누락 (pykrx 응답 schema 변경 / mock 결함) 도 빈 응답으로
+    # 안전 처리 — 직접 인덱싱은 KeyError 로 /overview 전체 500 으로 번질 수 있음.
+    if df is None or df.empty or "종가" not in df.columns:
         return {p: None for p in (*_PERIOD_BUSINESS_DAYS.keys(), "YTD")}
 
     closes = df["종가"]
@@ -152,7 +154,8 @@ class KoreanFundamentalsSource:
 
     @staticmethod
     def supports(symbol: str) -> bool:
-        return symbol.upper().endswith(_KR_SUFFIXES)
+        # is_unsupported_analyst_market / _is_kr_symbol 와 동일하게 strip + upper 정규화.
+        return symbol.strip().upper().endswith(_KR_SUFFIXES)
 
     async def get_overview(self, symbol: str) -> dict[str, Any]:
         """Return CompanyOverviewResponse 호환 dict (KR 채울 수 있는 부분만).

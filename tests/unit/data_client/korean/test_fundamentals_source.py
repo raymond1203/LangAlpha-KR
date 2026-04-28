@@ -134,6 +134,17 @@ def test_performance_returns_all_none_on_empty_df(monkeypatch):
     assert all(v is None for v in perf.values())
 
 
+def test_performance_returns_all_none_when_close_column_missing(monkeypatch):
+    """pykrx schema 변경 / mock 결함으로 '종가' column 이 빠진 DataFrame 도 안전 처리.
+
+    회귀 방지 — 직접 df["종가"] 인덱싱은 KeyError 로 /overview 전체 500 으로 번짐.
+    """
+    df_no_close = pd.DataFrame({"시가": [100.0, 101.0], "거래량": [10, 20]})
+    monkeypatch.setattr(fs.stock, "get_market_ohlcv", lambda *a, **k: df_no_close)
+    perf = fs._fetch_performance_from_pykrx("005930")
+    assert all(v is None for v in perf.values())
+
+
 # ---------------------------------------------------------------------------
 # _safe_float — NaN / None / non-numeric 처리
 # ---------------------------------------------------------------------------

@@ -1,19 +1,23 @@
 """
-Tests for /analyst-data graceful 미지원 응답 (issue #33 backend slice).
+Tests for /analyst-data 미지원 응답 + /overview KR router-level 통합.
 
-KR ticker (.KS / .KQ) 호출 시 200 with unsupported=True 로 응답. user_id / DB /
-cache 모두 무관 (early-return 분기) 이라 mock 없이 직접 함수 호출.
-
-NOTE: /overview KR 분기는 #42 Stage A+B 에서 KoreanFundamentalsSource 로 채워짐
-(test_kr_fundamentals_source.py 참조).
+- /analyst-data 는 KR ticker 호출 시 200 with unsupported=True (helper 직접 호출).
+- /overview KR 분기는 #42 에서 KoreanFundamentalsSource 호출 — router 레벨로
+  AsyncClient + ASGITransport 통합 검증 (FastAPI dependency / response 직렬화 포함).
+- KoreanFundamentalsSource 자체 단위는 test_fundamentals_source.py 참조.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 from src.server.app.market_data import (
     get_analyst_data,
     is_unsupported_analyst_market,
 )
+from tests.conftest import create_test_app
 
 
 class TestIsUnsupportedAnalystMarket:
@@ -48,3 +52,83 @@ class TestAnalystDataKRUnsupported:
     async def test_kosdaq_ticker_returns_unsupported(self):
         result = await get_analyst_data(symbol="263750.KQ", user_id="test-user")
         assert result.unsupported is True
+
+
+# ---------------------------------------------------------------------------
+# Router-level 통합 — /overview KR 분기 (FastAPI dependency / 직렬화 검증)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def overview_client():
+    from src.server.app.market_data import router
+
+    app = create_test_app(router)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+
+@pytest.mark.asyncio
+async def test_overview_router_kr_success(overview_client):
+    """KoreanFundamentalsSource 가 정상 응답 시 quote + performance 포함된 200 응답."""
+    artifact = {
+        "symbol": "005930.KS",
+        "name": None,
+        "quote": {
+            "price": 75000.0, "change": 500.0, "changePct": 0.67,
+            "marketCap": 500_000_000_000_000.0, "yearHigh": 88000.0,
+        },
+        "performance": {"1D": 0.67, "5D": 1.5, "1M": 3.2, "3M": -2.1, "6M": 5.0, "1Y": 25.0, "YTD": 10.0},
+        "analystRatings": None,
+        "quarterlyFundamentals": None,
+        "earningsSurprises": None,
+        "cashFlow": None,
+        "revenueByProduct": None,
+        "revenueByGeo": None,
+    }
+    cache_mock = AsyncMock()
+    cache_mock.get = AsyncMock(return_value=None)  # cache miss
+    cache_mock.set = AsyncMock(return_value=True)
+
+    with patch(
+        "src.data_client.korean.fundamentals_source.KoreanFundamentalsSource.get_overview",
+        new=AsyncMock(return_value=artifact),
+    ), patch(
+        "src.utils.cache.redis_cache.get_cache_client", return_value=cache_mock,
+    ):
+        resp = await overview_client.get("/api/v1/market-data/stocks/005930.KS/overview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["symbol"] == "005930.KS"
+    assert body["unsupported"] is False
+    assert body["quote"]["marketCap"] == 500_000_000_000_000.0
+    assert body["performance"]["1Y"] == 25.0
+
+
+@pytest.mark.asyncio
+async def test_overview_router_kr_partial_falls_back_to_unsupported(overview_client):
+    """KoreanFundamentalsSource 가 _partial=True 반환 시 unsupported 응답 + negative cache 기록."""
+    cache_mock = AsyncMock()
+    cache_mock.get = AsyncMock(return_value=None)
+    cache_mock.set = AsyncMock(return_value=True)
+
+    with patch(
+        "src.data_client.korean.fundamentals_source.KoreanFundamentalsSource.get_overview",
+        new=AsyncMock(return_value={"symbol": "005930.KS", "_partial": True, "quote": None, "performance": None}),
+    ), patch(
+        "src.utils.cache.redis_cache.get_cache_client", return_value=cache_mock,
+    ):
+        resp = await overview_client.get("/api/v1/market-data/stocks/005930.KS/overview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["unsupported"] is True
+    assert body["message"] is not None
+    assert "unavailable" in body["message"].lower()
+    # negative cache 기록 검증 — TTL 60s 로 burst 보호
+    cache_mock.set.assert_awaited_once()
+    _, kwargs = cache_mock.set.call_args
+    assert kwargs.get("ttl") == 60
