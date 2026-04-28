@@ -71,6 +71,31 @@ async def test_get_overview_returns_quote_and_performance(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_overview_strips_whitespace_from_symbol(monkeypatch):
+    """공백 포함 호출 시 ticker / symbol_upper 모두 깨끗하게 정규화 — supports() 와 일관."""
+    captured: dict[str, str] = {}
+
+    def capture_quote(sym: str) -> dict[str, float]:
+        captured["yf_symbol"] = sym
+        return {"price": 1.0}
+
+    def capture_perf(ticker: str) -> dict[str, float]:
+        captured["pykrx_ticker"] = ticker
+        return {"1D": 0.0}
+
+    monkeypatch.setattr(fs, "_fetch_quote_from_yf", capture_quote)
+    monkeypatch.setattr(fs, "_fetch_performance_from_pykrx", capture_perf)
+
+    source = fs.KoreanFundamentalsSource()
+    result = await source.get_overview("  005930.KS  ")
+
+    # symbol/ticker 모두 strip 됐는지 — 공백이 외부 호출까지 leak 안 돼야
+    assert captured["yf_symbol"] == "005930.KS"
+    assert captured["pykrx_ticker"] == "005930"
+    assert result["symbol"] == "005930.KS"
+
+
+@pytest.mark.asyncio
 async def test_get_overview_yf_fail_returns_partial(monkeypatch):
     """yf 호출 실패 (빈 dict) 면 _partial=True — caller 가 unsupported 응답으로 fallback."""
     monkeypatch.setattr(fs, "_fetch_quote_from_yf", lambda symbol: {})

@@ -162,6 +162,9 @@ class KoreanFundamentalsSource:
 
         외부 호출 (yfinance + pykrx) 은 ``asyncio.to_thread`` 로 wrap.
         """
+        # FORK (#42): supports() / is_unsupported_analyst_market 와 동일하게 strip 먼저.
+        # 호출자가 이미 normalize 했더라도 source 자체가 raw input 안전 처리.
+        symbol = symbol.strip()
         ticker = _strip_suffix(symbol)
         symbol_upper = symbol.upper()
 

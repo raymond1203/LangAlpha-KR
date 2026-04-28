@@ -132,3 +132,32 @@ async def test_overview_router_kr_partial_falls_back_to_unsupported(overview_cli
     cache_mock.set.assert_awaited_once()
     _, kwargs = cache_mock.set.call_args
     assert kwargs.get("ttl") == 60
+
+
+@pytest.mark.asyncio
+async def test_overview_router_kr_exception_falls_back_with_negative_cache(overview_client):
+    """KoreanFundamentalsSource 가 예외 raise 시 unsupported 응답 + negative cache 기록.
+
+    회귀 방지 — 이전엔 exception 분기에서 cache.set 누락돼 outage 시 매 요청마다 외부
+    source 재호출. _partial 와 동일하게 60s TTL 로 burst 보호.
+    """
+    cache_mock = AsyncMock()
+    cache_mock.get = AsyncMock(return_value=None)
+    cache_mock.set = AsyncMock(return_value=True)
+
+    with patch(
+        "src.data_client.korean.fundamentals_source.KoreanFundamentalsSource.get_overview",
+        new=AsyncMock(side_effect=Exception("yf upstream timeout")),
+    ), patch(
+        "src.utils.cache.redis_cache.get_cache_client", return_value=cache_mock,
+    ):
+        resp = await overview_client.get("/api/v1/market-data/stocks/005930.KS/overview")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["unsupported"] is True
+    assert body["message"] is not None
+    assert "unavailable" in body["message"].lower()
+    cache_mock.set.assert_awaited_once()
+    _, kwargs = cache_mock.set.call_args
+    assert kwargs.get("ttl") == 60

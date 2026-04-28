@@ -547,11 +547,19 @@ async def get_company_overview(symbol: str, user_id: CurrentUserId) -> CompanyOv
             return response
         except Exception as e:
             logger.error(f"KoreanFundamentalsSource failed for {symbol_upper}: {e}")
-            return CompanyOverviewResponse(
+            # FORK (#42): exception 분기도 _partial 와 동일하게 negative cache (60s)
+            # 로 burst 보호 — yf/pykrx outage 시 매 요청마다 외부 source 재호출 방지.
+            error_response = CompanyOverviewResponse(
                 symbol=symbol_upper,
                 unsupported=True,
                 message="KR market data temporarily unavailable.",
             )
+            await cache.set(
+                cache_key,
+                error_response.model_dump(),
+                ttl=_NEGATIVE_CACHE_TTL_SECONDS,
+            )
+            return error_response
 
     try:
         from src.utils.cache.redis_cache import get_cache_client
