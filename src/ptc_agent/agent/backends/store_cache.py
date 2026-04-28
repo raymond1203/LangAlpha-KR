@@ -25,6 +25,7 @@ this size; the cache is dropped with the agent instance.
 
 from __future__ import annotations
 
+import asyncio
 import structlog
 from typing import Any
 
@@ -41,14 +42,19 @@ class RequestScopedStoreCache:
     repeats, and writes go straight to the store followed by an
     ``invalidate`` so future reads observe the new value.
 
+    Concurrent ``aget`` for the same key shares one in-flight ``Task`` so
+    parallel middleware (e.g. user + workspace memory loaded in
+    ``asyncio.gather``) cannot fan out N store calls for the same row.
+
     Not safe to share across event loops or asyncio tasks that outlive the
     agent run; the agent runs single-threaded on one loop.
     """
 
-    __slots__ = ("_cache",)
+    __slots__ = ("_cache", "_inflight")
 
     def __init__(self) -> None:
         self._cache: dict[tuple[tuple[str, ...], str], Any] = {}
+        self._inflight: dict[tuple[tuple[str, ...], str], asyncio.Task[Any]] = {}
 
     async def aget(
         self,
@@ -60,9 +66,21 @@ class RequestScopedStoreCache:
         ck = (namespace, key)
         if ck in self._cache:
             return self._cache[ck]
-        item = await store.aget(namespace, key)
-        self._cache[ck] = item
-        return item
+        existing = self._inflight.get(ck)
+        if existing is not None:
+            return await asyncio.shield(existing)
+
+        async def _fetch() -> Any:
+            item = await store.aget(namespace, key)
+            self._cache[ck] = item
+            return item
+
+        task = asyncio.create_task(_fetch())
+        self._inflight[ck] = task
+        try:
+            return await asyncio.shield(task)
+        finally:
+            self._inflight.pop(ck, None)
 
     def invalidate(
         self,

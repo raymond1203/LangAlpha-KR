@@ -662,7 +662,6 @@
     "templateEarningsWatchDesc": "Deep pre-earnings analysis report",
     "templateCustom": "Custom",
     "templateCustomDesc": "Start from scratch",
-    "schedule": "Schedule",
     "freqMinutes": "Every N minutes",
     "freqHourly": "Hourly",
     "freqDaily": "Daily",

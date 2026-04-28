@@ -20,5 +20,7 @@ def test_two_calls_produce_distinct_timestamps_within_one_second():
     b = now_iso()
     # On any reasonable machine these calls are microseconds apart, never equal.
     assert a != b
-    # Same second prefix, different microseconds.
-    assert a[:19] == b[:19] or a < b
+    # Strictly monotonic — `b` was emitted after `a` so it must lex-sort after.
+    # Pinning ordering (rather than the weaker "same second OR a<b") catches
+    # regressions to a clock that wraps or jitters backwards mid-test.
+    assert a < b

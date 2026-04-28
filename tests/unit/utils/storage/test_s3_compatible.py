@@ -15,7 +15,11 @@ def _reload_module():
     return mod
 
 
-def test_default_timeouts_applied_to_boto3_config():
+def test_default_timeouts_applied_to_boto3_config(monkeypatch):
+    # Ensure the test runs against module defaults even if CI exports
+    # STORAGE_*_TIMEOUT_S in its environment.
+    monkeypatch.delenv("STORAGE_CONNECT_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("STORAGE_READ_TIMEOUT_S", raising=False)
     mod = _reload_module()
     mod._reset_client_for_test()
     captured: dict = {}

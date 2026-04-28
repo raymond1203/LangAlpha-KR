@@ -106,13 +106,17 @@ def _render_memo_md(items: list[Any]) -> str:
 
 async def _collect_items(
     store: BaseStore, namespace: tuple[str, ...]
-) -> list[Any]:
+) -> list[Any] | None:
     """Page through the namespace and return every non-reserved item.
 
     ``original_bytes_b64`` may live inside these values. ``asearch`` returns
     whole rows today; the rebuilder only needs metadata fields, but we can't
     project them out through the current BaseStore API. The O(N) cost is
     documented as a known limitation; revisit at 500+ memos per user.
+
+    Returns ``None`` on timeout — the caller treats this as "abort rebuild,
+    keep existing memo.md" so a partial page set never overwrites the
+    catalog with a shrunken view.
     """
     items: list[Any] = []
     offset = 0
@@ -127,7 +131,7 @@ async def _collect_items(
                 "memo asearch timed out during index rebuild",
                 extra={"namespace": namespace, "offset": offset},
             )
-            break
+            return None
         if not page:
             break
         for item in page:
@@ -174,6 +178,10 @@ async def rebuild_memo_index(
     a full memo.md row replacement when nothing visible changed.
     """
     items = await _collect_items(store, namespace)
+    if items is None:
+        # Timeout mid-rebuild — preserve existing memo.md rather than
+        # writing a shrunken catalog from a partial page set.
+        return
     state_hash = _index_state_hash(items)
 
     now = now_iso()

@@ -56,8 +56,11 @@ async def test_fallback_handles_content_blocks_list() -> None:
     # ``tracing_context`` requires LangSmith plumbing we don't need in a
     # unit test — patch it out.
     with patch("langsmith.tracing_context") as ctx:
-        ctx.return_value.__enter__ = lambda self: None
-        ctx.return_value.__exit__ = lambda self, *a: None
+        # Setting __enter__/__exit__ on the .return_value mock makes the
+        # context-manager protocol explicit (vs. relying on MagicMock's
+        # implicit cm behavior).
+        ctx.return_value.__enter__.return_value = None
+        ctx.return_value.__exit__.return_value = False
         result = await make_api_call(
             llm,
             system_prompt="sys",
@@ -79,8 +82,11 @@ async def test_fallback_still_rejects_truly_empty_list() -> None:
     llm = _StubLLM(_ListContentMessage(blocks))
 
     with patch("langsmith.tracing_context") as ctx:
-        ctx.return_value.__enter__ = lambda self: None
-        ctx.return_value.__exit__ = lambda self, *a: None
+        # Setting __enter__/__exit__ on the .return_value mock makes the
+        # context-manager protocol explicit (vs. relying on MagicMock's
+        # implicit cm behavior).
+        ctx.return_value.__enter__.return_value = None
+        ctx.return_value.__exit__.return_value = False
         with pytest.raises(ValueError) as exc_info:
             await make_api_call(
                 llm,

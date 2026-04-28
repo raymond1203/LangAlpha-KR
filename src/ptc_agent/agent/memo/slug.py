@@ -88,7 +88,12 @@ def slugify_filename(
         candidate = random_collision_slug(base_slug, suffix)
         if candidate not in existing:
             return candidate
-    return random_collision_slug(base_slug, suffix)
+    # All 8 random suffixes happened to collide — refuse rather than return a
+    # known-colliding key that would silently overwrite an existing memo.
+    raise RuntimeError(
+        "Unable to allocate a unique memo slug after exhausting linear and "
+        "random fallbacks; namespace is densely populated."
+    )
 
 
 def slug_components(original_filename: str) -> tuple[str, str]:

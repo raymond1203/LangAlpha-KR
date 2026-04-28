@@ -2,11 +2,11 @@ import React, { Suspense, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { AnimatedTabs } from '@/components/ui/animated-tabs';
-import type { ContextPayload } from './FilePanel';
+import type { ContextPayload } from '@/pages/ChatAgent/components/FilePanel';
 
-const FilePanel = React.lazy(() => import('./FilePanel'));
-const MemoryPanel = React.lazy(() => import('./MemoryPanel'));
-const MemoPanel = React.lazy(() => import('./MemoPanel'));
+const FilePanel = React.lazy(() => import('@/pages/ChatAgent/components/FilePanel'));
+const MemoryPanel = React.lazy(() => import('@/pages/ChatAgent/components/MemoryPanel'));
+const MemoPanel = React.lazy(() => import('@/pages/ChatAgent/components/MemoPanel'));
 
 export type RightPanelTab = 'files' | 'memory' | 'memo';
 
@@ -89,6 +89,7 @@ export default function RightPanel({
           onClick={onClose}
           className="file-panel-icon-btn"
           title={t('rightPanel.close')}
+          aria-label={t('rightPanel.close')}
         >
           <X className="h-4 w-4" />
         </button>

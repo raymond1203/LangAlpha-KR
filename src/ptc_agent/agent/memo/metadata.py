@@ -2,8 +2,10 @@
 
 Runs in a background task — callers dispatch with ``asyncio.create_task``
 inside the upload/write handlers so the user's request returns 202 quickly.
-Any exception here is swallowed and recorded in the value as
-``metadata_status="failed"`` — never raised up to the scheduler.
+Most exceptions are swallowed and recorded in the value as
+``metadata_status="failed"``. ``asyncio.CancelledError`` is the one
+exception: it is re-raised so the asyncio task ends in CANCELLED rather
+than FINISHED — siblings rely on that signal when handing the row off.
 """
 
 from __future__ import annotations
@@ -94,7 +96,9 @@ def _build_user_prompt(
 
     truncated = content[:METADATA_LLM_CONTENT_CHARS]
     safe_filename = _sanitize_filename_for_prompt(filename or "")
-    safe_mime = (mime_type or "")[:64]
+    # Same dangerous-char strip as filenames so a crafted Content-Type header
+    # cannot inject a fake closing isolation tag or system-prompt fragment.
+    safe_mime = _FILENAME_DANGEROUS_RE.sub(" ", mime_type or "")[:64]
     return (
         f"{open_filename}\n{safe_filename}\n{close_filename}\n"
         f"MIME type: {safe_mime}\n\n"
@@ -252,8 +256,9 @@ async def generate_memo_metadata(
 ) -> None:
     """Fetch the memo value, call the LLM, merge results, rebuild the index.
 
-    On any failure: flip metadata_status to 'failed' and rebuild so the user
-    sees the failure badge. Never raises — always logs and returns.
+    On any failure other than ``CancelledError``: flip metadata_status to
+    'failed' and rebuild so the user sees the failure badge.
+    ``CancelledError`` is re-raised — see module docstring for why.
     """
     try:
         item = await asyncio.wait_for(

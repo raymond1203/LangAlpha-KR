@@ -100,7 +100,9 @@ describe('Memo API utilities', () => {
       const [url, formData, opts] = mockPost.mock.calls[0];
       expect(url).toBe('/api/v1/memo/user/upload');
       expect(formData).toBeInstanceOf(FormData);
-      expect(opts.headers['Content-Type']).toBe('multipart/form-data');
+      // Content-Type must be omitted so axios derives it (with boundary) from
+      // the FormData body — pinning that contract.
+      expect(opts.headers).toBeUndefined();
       // FormData should contain the file under "file"
       const fd = formData as FormData;
       expect(fd.get('file')).toBeInstanceOf(File);
@@ -243,11 +245,17 @@ describe('Memo API utilities', () => {
         }) as typeof document.createElement,
       );
 
-      await triggerUserMemoDownload('abc.md', 'pretty.md');
+      try {
+        await triggerUserMemoDownload('abc.md', 'pretty.md');
 
-      expect(click).toHaveBeenCalled();
-      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake-url');
-      createSpy.mockRestore();
+        expect(click).toHaveBeenCalled();
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fake-url');
+      } finally {
+        // try/finally so a failed assertion doesn't leak the spy into
+        // subsequent tests (where document.createElement would still be
+        // overridden).
+        createSpy.mockRestore();
+      }
     });
 
     it('falls back to key as filename when none provided', async () => {
@@ -266,11 +274,14 @@ describe('Memo API utilities', () => {
         }) as typeof document.createElement,
       );
 
-      await triggerUserMemoDownload('abc.md');
+      try {
+        await triggerUserMemoDownload('abc.md');
 
-      expect(lastAnchor).not.toBeNull();
-      expect(lastAnchor!.download).toBe('abc.md');
-      createSpy.mockRestore();
+        expect(lastAnchor).not.toBeNull();
+        expect(lastAnchor!.download).toBe('abc.md');
+      } finally {
+        createSpy.mockRestore();
+      }
     });
   });
 });

@@ -106,9 +106,19 @@ async def store_binary(
     storage_key = _build_storage_key(user_id, content_type)
     # upload_bytes is a synchronous boto3 call; off-load to a thread so we
     # don't block the event loop (same pattern as persistence/image_capture).
-    success = await asyncio.to_thread(
-        _storage_upload_bytes, storage_key, content, content_type,
-    )
+    try:
+        success = await asyncio.to_thread(
+            _storage_upload_bytes, storage_key, content, content_type,
+        )
+    except Exception as exc:
+        logger.exception(
+            "memo binary upload raised exception",
+            extra={"user_id": user_id, "storage_key": storage_key},
+        )
+        msg = (
+            "Could not store the original file in object storage. Please retry."
+        )
+        raise MemoBinaryUploadError(msg) from exc
     if not success:
         logger.error(
             "Failed to upload memo binary to object storage (user=%s storage_key=%s)",
@@ -183,7 +193,16 @@ async def fetch_binary(binary_ref: dict[str, Any]) -> bytes:
         )
         raise MemoBinaryFetchError(msg)
 
-    data = await asyncio.to_thread(_storage_get_bytes, storage_key)
+    try:
+        data = await asyncio.to_thread(_storage_get_bytes, storage_key)
+    except Exception as exc:
+        logger.exception(
+            "memo binary fetch raised exception",
+            extra={"storage_key": storage_key},
+        )
+        raise MemoBinaryFetchError(
+            f"Memo binary not found or unreadable at {storage_key}"
+        ) from exc
     if data is None:
         msg = f"Memo binary not found or unreadable at {storage_key}"
         raise MemoBinaryFetchError(msg)

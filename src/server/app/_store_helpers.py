@@ -125,13 +125,19 @@ async def paginate_namespace(
     *,
     max_list_limit: int = MAX_LIST_LIMIT,
     page: int = 100,
+    exclude_keys: frozenset[str] | None = None,
 ) -> tuple[list[E], bool]:
     """Page through a namespace, mapping each store item to an entry.
 
     Returns (entries, truncated) where truncated indicates the namespace had
     more than ``max_list_limit`` items. Callers supply ``value_to_entry`` so
     memory and memo can shape their own response rows independently.
+
+    ``exclude_keys`` filters reserved/internal keys (e.g. ``memo.md``) BEFORE
+    the page-cut so the visible row count is not silently shrunk and the
+    ``truncated`` flag reflects user-visible entries.
     """
+    excluded = exclude_keys or frozenset()
     entries: list[E] = []
     offset = 0
     while len(entries) < max_list_limit:
@@ -139,12 +145,15 @@ async def paginate_namespace(
         if not results:
             break
         for item in results:
+            if item.key in excluded:
+                continue
             entries.append(value_to_entry(item.key, item.value))
         if len(results) < page:
             break
         offset += page
     truncated = False
     if len(entries) >= max_list_limit:
-        extra = await asearch(store, namespace, limit=1, offset=max_list_limit)
+        offset_check = max_list_limit + len(excluded)
+        extra = await asearch(store, namespace, limit=1, offset=offset_check)
         truncated = bool(extra)
     return entries[:max_list_limit], truncated

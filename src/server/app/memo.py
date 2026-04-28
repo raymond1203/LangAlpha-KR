@@ -396,9 +396,16 @@ async def _resolve_unique_slug(
         item = await aget(store, namespace, candidate)
         if item is None:
             return candidate
-    # Truly adversarial — return a fresh random slug and let the downstream
-    # aput overwrite if it still collides.
-    return random_collision_slug(base, suffix)
+    # Truly adversarial — refuse rather than silently overwrite. 8 random
+    # 4-hex-char suffixes colliding implies the namespace is densely populated
+    # past the design point; the user can retry or rename.
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Could not allocate a unique memo key after exhausting linear and "
+            "random fallbacks. Please retry or rename the file."
+        ),
+    )
 
 
 async def _rebuild_index_under_lock(
@@ -822,10 +829,10 @@ async def list_user_memos(user_id: CurrentUserId) -> MemoListResponse:
     """List all memos for the caller. Excludes memo.md itself."""
     store = require_store(setup.store)
     namespace = _namespace(user_id)
-    raw_entries, truncated = await paginate_namespace(
-        store, namespace, _value_to_entry
+    entries, truncated = await paginate_namespace(
+        store, namespace, _value_to_entry,
+        exclude_keys=frozenset({_INDEX_KEY}),
     )
-    entries = [entry for entry in raw_entries if entry.key != _INDEX_KEY]
     return MemoListResponse(entries=entries, truncated=truncated)
 
 
@@ -942,7 +949,13 @@ async def delete_user_memo(
     # the catalog either way; the storage hygiene matters for compliance and
     # bucket size, not correctness.
     if isinstance(binary_ref, dict):
-        await memo_binary_storage.delete_binary(binary_ref)
+        try:
+            await memo_binary_storage.delete_binary(binary_ref)
+        except Exception:
+            logger.exception(
+                "memo binary delete failed during memo deletion",
+                extra={"user_id": user_id, "key": key},
+            )
 
     await _rebuild_index_under_lock(store, namespace)
     return {"status": "deleted", "key": key}

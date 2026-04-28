@@ -173,3 +173,4 @@ class TestFactoryFailure:
         appended = result.system_message.content_blocks[-1]["text"]
         # User block shows "not created" hint; workspace block also missing
         assert "No .agents/user/memory/memory.md" in appended
+        assert "No .agents/workspace/memory/memory.md" in appended

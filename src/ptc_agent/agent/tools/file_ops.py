@@ -232,7 +232,16 @@ def create_filesystem_tools(
                 logger.error(error_msg, file_path=file_path)
                 return f"ERROR: {error_msg}"
 
-            result = await backend.aedit_text(normalized_path, old_string, new_string, replace_all=replace_all)
+            try:
+                result = await backend.aedit_text(
+                    normalized_path, old_string, new_string, replace_all=replace_all
+                )
+            except ReadOnlyStoreError as exc:
+                logger.info(
+                    "edit rejected on read-only path",
+                    file_path=file_path,
+                )
+                return f"ERROR: {exc}"
             if not result.get("success", False):
                 error_msg = result.get("error", "Edit operation failed")
                 return f"ERROR: {error_msg}"

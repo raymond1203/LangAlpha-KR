@@ -34,8 +34,8 @@ import {
   useUploadUserMemo,
   useUserMemoList,
   useWriteUserMemo,
-} from '../hooks/useMemo';
-import { useWorkspaces } from '../../../hooks/useWorkspaces';
+} from '@/pages/ChatAgent/hooks/useMemo';
+import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import {
@@ -44,8 +44,8 @@ import {
   downloadUserMemoBlobUrl,
   type MemoEntry,
   type MemoMetadataStatus,
-} from '../utils/api';
-import Markdown from './Markdown';
+} from '@/pages/ChatAgent/utils/api';
+import Markdown from '@/pages/ChatAgent/components/Markdown';
 import './FilePanel.css';
 
 // --- Constants -------------------------------------------------------------
@@ -659,6 +659,7 @@ export default function MemoPanel() {
               onClick={handleBackToList}
               className="file-panel-icon-btn"
               title={t('memoPanel.backToList')}
+              aria-label={t('memoPanel.backToList')}
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -681,6 +682,7 @@ export default function MemoPanel() {
                 onClick={() => handleRegenerate(selectedEntry.key)}
                 className="file-panel-icon-btn"
                 title={t('memoPanel.actions.regenerate')}
+                aria-label={t('memoPanel.actions.regenerate')}
                 disabled={regenerateMutation.isPending}
               >
                 <RefreshCw
@@ -699,6 +701,7 @@ export default function MemoPanel() {
               }
               className="file-panel-icon-btn"
               title={t('memoPanel.actions.download')}
+              aria-label={t('memoPanel.actions.download')}
             >
               <Download className="h-4 w-4" />
             </button>
@@ -707,6 +710,7 @@ export default function MemoPanel() {
                 onClick={handleStartEdit}
                 className="file-panel-icon-btn"
                 title={t('memoPanel.actions.edit')}
+                aria-label={t('memoPanel.actions.edit')}
                 disabled={read.isLoading || !read.data}
               >
                 <Pencil className="h-4 w-4" />
@@ -716,6 +720,7 @@ export default function MemoPanel() {
               onClick={() => setDeleteKey(selectedEntry.key)}
               className="file-panel-icon-btn"
               title={t('memoPanel.actions.delete')}
+              aria-label={t('memoPanel.actions.delete')}
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -961,6 +966,7 @@ export default function MemoPanel() {
                 onClick={() => list.refetch()}
                 className="file-panel-icon-btn"
                 title={t('memoPanel.refresh')}
+                aria-label={t('memoPanel.refresh')}
                 disabled={list.isFetching}
               >
                 <RefreshCw
@@ -971,6 +977,7 @@ export default function MemoPanel() {
                 onClick={() => setSelectMode(true)}
                 className="file-panel-icon-btn"
                 title={t('memoPanel.selectMode')}
+                aria-label={t('memoPanel.selectMode')}
                 disabled={sortedEntries.length === 0}
               >
                 <CheckSquare className="h-4 w-4" />
@@ -1018,6 +1025,7 @@ export default function MemoPanel() {
             onClick={() => setUploadError(null)}
             className="flex-shrink-0"
             title={t('memoPanel.actions.cancel')}
+            aria-label={t('memoPanel.actions.cancel')}
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -1135,6 +1143,19 @@ export default function MemoPanel() {
                     onClick={() =>
                       selectMode ? toggleSelectKey(entry.key) : handleOpen(entry.key)
                     }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (selectMode) {
+                          toggleSelectKey(entry.key);
+                        } else {
+                          handleOpen(entry.key);
+                        }
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
+                    aria-selected={selectMode ? isSelected : undefined}
                     className="cursor-pointer transition-colors"
                     style={{
                       color: 'var(--color-text-primary)',

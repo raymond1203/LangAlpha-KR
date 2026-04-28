@@ -6,9 +6,9 @@ import {
   useWorkspaceMemory,
   useReadUserMemory,
   useReadWorkspaceMemory,
-} from '../hooks/useMemory';
-import Markdown from './Markdown';
-import type { MemoryEntry } from '../utils/api';
+} from '@/pages/ChatAgent/hooks/useMemory';
+import Markdown from '@/pages/ChatAgent/components/Markdown';
+import type { MemoryEntry } from '@/pages/ChatAgent/utils/api';
 
 type Tier = 'user' | 'workspace';
 
@@ -84,6 +84,7 @@ export default function MemoryPanel({ workspaceId }: MemoryPanelProps) {
               onClick={() => setSelectedKey(null)}
               className="file-panel-icon-btn"
               title={t('memoryPanel.backToList')}
+              aria-label={t('memoryPanel.backToList')}
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -147,6 +148,7 @@ export default function MemoryPanel({ workspaceId }: MemoryPanelProps) {
           onClick={list.refresh}
           className="file-panel-icon-btn"
           title={t('memoryPanel.refresh')}
+          aria-label={t('memoryPanel.refresh')}
           disabled={list.loading}
         >
           <RefreshCw className={`h-4 w-4 ${list.loading ? 'animate-spin' : ''}`} />

@@ -205,25 +205,33 @@ def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> bool
 
 
 def get_bytes(key: str) -> bytes | None:
-    """Download an object's raw bytes. Returns None on failure or missing object."""
+    """Download an object's raw bytes.
+
+    Returns ``None`` only when the object is missing (NoSuchKey/404). Any
+    other ClientError is re-raised so permission/throttling/transient
+    failures are not silently treated as "not found". Closes the streaming
+    body to release the connection back to the pool.
+    """
     try:
         client = _get_client()
         response = client.get_object(Bucket=StorageConfig.BUCKET_NAME, Key=key)
         body = response.get("Body")
         if body is None:
             return None
-        data = body.read()
-        return data if isinstance(data, bytes) else bytes(data)
+        try:
+            data = body.read()
+            return data if isinstance(data, bytes) else bytes(data)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code")
         if code in {"NoSuchKey", "404"}:
             logger.debug(f"Object not found: {key}")
             return None
         logger.exception(f"Download failed for {key}")
-        return None
-    except Exception:
-        logger.exception(f"Unexpected error downloading {key}")
-        return None
+        raise
 
 
 def does_object_exist(key: str) -> bool:

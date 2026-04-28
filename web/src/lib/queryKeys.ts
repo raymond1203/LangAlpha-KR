@@ -44,8 +44,8 @@ export const queryKeys = {
   },
   memory: {
     all:       ['memory'],
-    user:      () => [...queryKeys.memory.all, 'user'],
-    userRead:  (key: string) => [...queryKeys.memory.user(), 'read', key],
+    user:      (userId: string) => [...queryKeys.memory.all, 'user', userId],
+    userRead:  (userId: string, key: string) => [...queryKeys.memory.user(userId), 'read', key],
     workspace: (wsId: string) => [...queryKeys.memory.all, 'workspace', wsId],
     workspaceRead: (wsId: string, key: string) => [...queryKeys.memory.workspace(wsId), 'read', key],
   },

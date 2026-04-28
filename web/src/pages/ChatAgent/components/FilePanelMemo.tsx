@@ -4,8 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
 import { ToastAction } from '@/components/ui/toast';
-import { useReadUserMemo, useUploadUserMemo, useUserMemoList } from '../hooks/useMemo';
-import type { MemoEntry } from '../utils/api';
+import { useReadUserMemo, useUploadUserMemo, useUserMemoList } from '@/pages/ChatAgent/hooks/useMemo';
+import type { MemoEntry } from '@/pages/ChatAgent/utils/api';
 
 const CodeEditor = React.lazy(() => import('./viewers/CodeEditor'));
 

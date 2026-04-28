@@ -34,7 +34,9 @@ def resolve_mime_type(reported_mime: str | None, filename: str | None) -> str:
     octet-stream), look at the filename extension. Resolves the Safari /
     drag-and-drop case where valid memo files would otherwise 415.
     """
-    mime = (reported_mime or "").lower()
+    # Strip MIME parameters (e.g. ``text/plain; charset=utf-8``) before
+    # comparison; browsers commonly attach charset on multipart uploads.
+    mime = (reported_mime or "").split(";", 1)[0].strip().lower()
     if mime in ACCEPTED_MIME_TYPES:
         return mime
     if mime in _AMBIGUOUS_MIMES and filename:

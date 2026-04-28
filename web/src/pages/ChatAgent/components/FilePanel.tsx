@@ -874,7 +874,7 @@ function FilePanel({
     } else if (action === 'open') {
       handleFileClick(filePath);
     }
-  }, [onAddContext, handleAddToMemo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onAddContext, handleAddToMemo, handleFileClick]);
 
   // Export modal state
   const [exportModalOpen, setExportModalOpen] = useState(false);

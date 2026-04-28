@@ -374,11 +374,8 @@ class TestNamespaceFactory:
         assert (
             await workspace.aread_text(workspace_prefix + "memory.md") == "WORKSPACE"
         )
-        # Cross-tier reads return nothing
-        assert (
-            await user.aread_text(workspace_prefix + "memory.md") is None
-            or True  # out-of-prefix returns None by design
-        )
+        # Cross-tier reads return nothing — out-of-prefix path resolves to None.
+        assert await user.aread_text(workspace_prefix + "memory.md") is None
 
 
 class TestReadOnly:

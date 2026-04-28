@@ -121,7 +121,7 @@ class CompositeFilesystemBackend:
         normalized = self.normalize_path(path)
         route = self._route_for(normalized)
         if route is not None:
-            return await route.aglob_paths(pattern, path)
+            return await route.aglob_paths(pattern, normalized)
 
         # Sandbox root (or outside every route) — fan out in parallel.
         matching_routes = [
@@ -210,6 +210,10 @@ class CompositeFilesystemBackend:
                 type=type,
                 case_insensitive=case_insensitive,
                 show_line_numbers=show_line_numbers,
+                lines_after=lines_after,
+                lines_before=lines_before,
+                lines_context=lines_context,
+                multiline=multiline,
                 head_limit=None,
                 offset=0,
             )

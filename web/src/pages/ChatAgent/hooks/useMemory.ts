@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { queryKeys } from '../../../lib/queryKeys';
+import { queryKeys } from '@/lib/queryKeys';
+import { useUser } from '@/hooks/useUser';
 import {
   listUserMemory,
   listWorkspaceMemory,
@@ -20,16 +21,19 @@ interface ListResult {
 /** List the user-tier memory entries for the current user. */
 export function useUserMemory(enabled: boolean = true): ListResult {
   const queryClient = useQueryClient();
+  const { user } = useUser();
+  const userId = user?.user_id ?? '';
   const { data, isLoading, error } = useQuery({
-    queryKey: queryKeys.memory.user(),
+    queryKey: queryKeys.memory.user(userId),
     queryFn: listUserMemory,
-    enabled,
+    enabled: enabled && !!userId,
     staleTime: 30_000,
   });
 
   const refresh = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.memory.user() });
-  }, [queryClient]);
+    if (!userId) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.memory.user(userId) });
+  }, [queryClient, userId]);
 
   return {
     entries: data?.entries ?? [],
@@ -72,10 +76,12 @@ interface ReadResult {
 }
 
 export function useReadUserMemory(key: string | null): ReadResult {
+  const { user } = useUser();
+  const userId = user?.user_id ?? '';
   const { data, isLoading, error } = useQuery({
-    queryKey: queryKeys.memory.userRead(key ?? ''),
+    queryKey: queryKeys.memory.userRead(userId, key ?? ''),
     queryFn: () => readUserMemory(key!),
-    enabled: !!key,
+    enabled: !!key && !!userId,
     staleTime: 30_000,
   });
   return {

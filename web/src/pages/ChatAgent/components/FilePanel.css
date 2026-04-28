@@ -425,7 +425,7 @@
     align-items: center;
     gap: 4px;
     background: transparent;
-    border: 1px solid currentColor;
+    border: 1px solid currentcolor;
     border-radius: 4px;
     padding: 2px 8px;
     font-size: 11px;

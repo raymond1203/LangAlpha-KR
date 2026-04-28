@@ -1,5 +1,6 @@
 """Execute code tool for running Python code in the PTC sandbox."""
 
+import re
 from typing import Any
 
 import structlog
@@ -11,11 +12,14 @@ logger = structlog.get_logger(__name__)
 
 # Same guard as bash — sandbox Python cannot reach the store-backed memory or
 # user-managed memo store. Memo paths are additionally read-only to the agent.
+# Boundary-anchored so ``.agents/user/memory`` (no trailing slash) and joined
+# variants like ``"".join([".agents/user/memory", "/file"])`` cannot bypass.
 _MEMORY_PATH_MARKERS: tuple[str, ...] = (
-    ".agents/user/memory/",
-    ".agents/workspace/memory/",
-    ".agents/user/memo/",
+    r"\.agents/user/memory(?![A-Za-z0-9])",
+    r"\.agents/workspace/memory(?![A-Za-z0-9])",
+    r"\.agents/user/memo(?![A-Za-z0-9])",
 )
+_MEMORY_PATH_RE = re.compile("|".join(_MEMORY_PATH_MARKERS))
 
 _MEMORY_ROUTE_ERROR = (
     "ERROR: Store-backed paths (.agents/user/memory/**, .agents/workspace/memory/**, "
@@ -28,7 +32,11 @@ _MEMORY_ROUTE_ERROR = (
 
 
 def _code_touches_memory(code: str) -> bool:
-    return any(marker in code for marker in _MEMORY_PATH_MARKERS)
+    # Match the canonical prefix as a boundary so trailing-slash variants
+    # ('.agents/user/memory', '.agents/user/memory/foo', joined string forms)
+    # are all detected without letting names like '.agents/user/memorial'
+    # trigger a false positive.
+    return bool(_MEMORY_PATH_RE.search(code))
 
 
 def create_execute_code_tool(backend: SandboxBackend, mcp_registry: Any, thread_id: str = "") -> BaseTool:

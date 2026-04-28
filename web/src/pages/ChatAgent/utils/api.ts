@@ -956,7 +956,9 @@ export async function uploadUserMemo(
     '/api/v1/memo/user/upload',
     formData,
     {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      // Let axios derive Content-Type from FormData so the boundary parameter
+      // gets included; an explicit "multipart/form-data" without boundary makes
+      // the server unable to parse the body.
       onUploadProgress: onProgress
         ? (e) => onProgress(Math.round((e.loaded * 100) / (e.total || 1)))
         : undefined,

@@ -6,6 +6,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/h
 import { useIsMobile, getIsMobileSnapshot } from '@/hooks/useIsMobile';
 import { ScrollArea } from '../../../components/ui/scroll-area';
 import { usePreferences } from '@/hooks/usePreferences';
+import { useUser } from '@/hooks/useUser';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/queryKeys';
 import { updateCurrentUser } from '../../Dashboard/utils/api';
@@ -286,6 +287,8 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
   const location = useLocation();
   const navigate = useNavigate();
   const { preferences } = usePreferences();
+  const { user } = useUser();
+  const userId = user?.user_id ?? '';
   const queryClient = useQueryClient();
   const initialMessageSentRef = useRef(false);
   // Determine agent mode: flash workspaces use flash mode, otherwise ptc
@@ -508,6 +511,9 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
 
   // When the agent writes to a memory-tier path, invalidate the memory queries
   // so the Memory tab reflects the new content without a manual refresh.
+  // Workspace invalidation hits both the active chat workspace and the file
+  // panel's workspace (when different — cross-workspace file links) so the
+  // memory pane stays in sync regardless of which one MemoryPanel is showing.
   const handleFileArtifact = useCallback((event: { payload?: Record<string, unknown> }) => {
     refreshFiles();
     const filePath = (event?.payload?.file_path as string | undefined) ?? '';
@@ -515,15 +521,22 @@ function ChatView({ workspaceId, threadId, initialTaskId, onBack, workspaceName:
     const normalized = filePath.replace(/^\/+/, '');
     const matchesUser = normalized.includes('.agents/user/memory/');
     const matchesWorkspace = normalized.includes('.agents/workspace/memory/');
-    if (matchesUser) {
-      queryClient.invalidateQueries({ queryKey: queryKeys.memory.user() });
+    if (matchesUser && userId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.memory.user(userId) });
     }
-    if (matchesWorkspace && effectiveFileWorkspaceId) {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.memory.workspace(effectiveFileWorkspaceId),
-      });
+    if (matchesWorkspace) {
+      if (workspaceId) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.memory.workspace(workspaceId),
+        });
+      }
+      if (effectiveFileWorkspaceId && effectiveFileWorkspaceId !== workspaceId) {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.memory.workspace(effectiveFileWorkspaceId),
+        });
+      }
     }
-  }, [refreshFiles, queryClient, effectiveFileWorkspaceId]);
+  }, [refreshFiles, queryClient, userId, workspaceId, effectiveFileWorkspaceId]);
 
   // Navigation panel data — workspaces + threads for the overlay sidebar
   const {
