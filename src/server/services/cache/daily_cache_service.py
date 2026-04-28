@@ -235,6 +235,7 @@ class DailyCacheService:
 
         # --- Try cache (across all known sources) ---
         cache_key, envelope = await self._find_cached(normalized, from_date, to_date, is_index=is_index)
+        is_live = DailyCacheKeyBuilder._is_live(to_date)
 
         if envelope is not None:
             bars = envelope["bars"]
@@ -245,17 +246,23 @@ class DailyCacheService:
             ttl_remaining = max(0, int(stored_ttl - elapsed)) if stored_ttl else None
 
             bg_triggered = False
-            if _needs_refresh(envelope, base_ttl):
-                if _is_stale_date(envelope) or envelope.get("complete"):
+            # Historical daily envelopes skip live-only staleness checks but
+            # still participate in truncated/soft-TTL refresh via is_live.
+            if _needs_refresh(envelope, base_ttl, interval="1day", is_live=is_live):
+                if is_live and (_is_stale_date(envelope) or envelope.get("complete")):
                     # Stale date or day-boundary transition → sync re-fetch
                     logger.info("Daily cache %s: stale/complete → sync re-fetch", normalized)
                     envelope = None
-                else:
+                elif is_live:
                     # Normal SWR: return stale bars, refresh in background.
                     bg_triggered = True
                     asyncio.create_task(
                         self._delta_refresh(cache_key, normalized, is_index=is_index, user_id=user_id)
                     )
+                # else: historical (is_live=False) — _delta_refresh 가 to_date=None
+                # 으로 fetch 해 원본 윈도우 밖 bars 가 cache_key 에 merge 되는
+                # range-cache pollution 회피. truncated 히스토리컬 retry 는 향후
+                # _delta_refresh 시그니처에 from_date/to_date 받도록 확장 시 복원.
 
             if envelope is not None:
                 return DailyFetchResult(
