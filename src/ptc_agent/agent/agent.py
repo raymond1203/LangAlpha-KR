@@ -13,7 +13,13 @@ from typing import Any
 import structlog
 from langchain.agents import create_agent
 
-from ptc_agent.agent.backends import SandboxBackend
+from ptc_agent.agent.backends import (
+    CompositeFilesystemBackend,
+    NamespaceFactory,
+    RequestScopedStoreCache,
+    SandboxBackend,
+    StoreBackend,
+)
 from ptc_agent.agent.middleware import SubAgentMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
@@ -26,7 +32,6 @@ from ptc_agent.agent.middleware import (
     SubagentEventCaptureMiddleware,
     MultimodalMiddleware,
     create_plan_mode_interrupt_config,
-    # Tool middleware
     CodeValidationMiddleware,
     EmptyToolCallRetryMiddleware,
     LeakDetectionMiddleware,
@@ -34,22 +39,25 @@ from ptc_agent.agent.middleware import (
     ToolArgumentParsingMiddleware,
     ToolErrorHandlingMiddleware,
     ToolResultNormalizationMiddleware,
-    # File operations SSE middleware
     FileOperationMiddleware,
-    # Todo operations SSE middleware
     TodoWriteMiddleware,
-    # Skills middleware
     SkillsMiddleware,
-    # Compaction middleware
     CompactionMiddleware,
-    # Large result eviction middleware
     LargeResultEvictionMiddleware,
-    # Steering middleware
     SteeringMiddleware,
-    # Subagent steering middleware
     SubagentSteeringMiddleware,
-    # Workspace context middleware
     WorkspaceContextMiddleware,
+    # memory.md injection from the LangGraph store
+    MemoryContextMiddleware,
+    # injects <memo-index count=N path=.../>
+    MemoAwarenessMiddleware,
+)
+from ptc_agent.core.paths import (
+    MEMO_INDEX_FILENAME,
+    MEMO_USER_DIR,
+    MEMORY_INDEX_FILENAME,
+    MEMORY_USER_DIR,
+    MEMORY_WORKSPACE_DIR,
 )
 from ptc_agent.agent.middleware.runtime_context import RuntimeContextMiddleware
 from ptc_agent.agent.middleware.background_subagent.registry import (
@@ -135,11 +143,6 @@ class PTCAgent:
     """
 
     def __init__(self, config: AgentConfig) -> None:
-        """Initialize PTC agent.
-
-        Args:
-            config: Agent configuration
-        """
         self.config = config
         self.llm: Any = config.get_llm_client()
         self.subagents: dict[
@@ -152,18 +155,10 @@ class PTCAgent:
         subagent_summary: str,
         plan_mode: bool = False,
         thread_id: str | None = None,
+        memory_enabled: bool = True,
+        memo_enabled: bool = True,
     ) -> str:
-        """Build the static system prompt (excludes time/profile for cacheability).
-
-        Args:
-            tool_summary: Formatted MCP tool summary
-            subagent_summary: Formatted subagent summary
-            plan_mode: If True, includes plan mode workflow instructions
-            thread_id: Optional thread ID (first 8 chars) for thread-scoped directories
-
-        Returns:
-            Complete system prompt
-        """
+        """Build the static system prompt (excludes time/profile for cacheability)."""
         loader = get_loader()
 
         return loader.get_system_prompt(
@@ -177,15 +172,12 @@ class PTCAgent:
             include_anti_patterns=True,
             thread_id=thread_id or "",
             working_directory=self.config.filesystem.working_directory,
+            memory_enabled=memory_enabled,
+            memo_enabled=memo_enabled,
         )
 
     def _build_model_resilience_middleware(self) -> list[Any]:
-        """Build model retry and fallback middleware.
-
-        Returns a list of middleware in append order (fallback first, then retry).
-        Middleware execution: Fallback → Retry → Model
-        Error propagation: Model fails → Retry catches (3x) → Fallback catches (switch model)
-        """
+        """Append order is outermost-first: Fallback → Retry → Model. Errors propagate inward."""
         middleware: list[Any] = []
 
         # Fallback middleware (outermost — catches errors after retry exhausted)
@@ -220,7 +212,6 @@ class PTCAgent:
         return middleware
 
     def _get_tool_summary(self, mcp_registry: MCPRegistry) -> str:
-        """Get formatted tool summary for prompts."""
         return build_tool_summary_from_registry(
             mcp_registry, mode=self.config.mcp.tool_exposure_mode
         )
@@ -244,40 +235,22 @@ class PTCAgent:
         store: Any | None = None,
         on_signed_url: Any | None = None,
         vault_secrets: dict[str, str] | None = None,
+        user_id: str | None = None,
     ) -> Any:
         """Create a deepagent with PTC pattern capabilities.
 
-        Args:
-            sandbox: PTCSandbox instance for code execution
-            mcp_registry: MCPRegistry with available MCP tools
-            subagent_names: List of subagent names to include from registry
-                (default: config.subagents.enabled)
-            additional_subagents: Custom subagent dicts that bypass the registry
-            background_timeout: Timeout for waiting on background tasks (seconds)
-            checkpointer: Optional LangGraph checkpointer for state persistence.
-                Required for submit_plan interrupt/resume workflow.
-            session: Optional Session object. When provided, WorkspaceContextMiddleware
-                dynamically injects agent.md into the system prompt on every model call.
-            llm: Optional LLM override. If provided, uses this instead of self.llm.
-                Useful for model switching without recreating PTCAgent instance.
-            operation_callback: Optional callback for file operation logging.
-                Receives dict with operation details (operation, file_path, timestamp, etc.).
-            background_registry: Optional shared background task registry for subagents.
-            user_profile: Optional user profile dict with name, timezone, locale for
-                injection into the system prompt.
-            plan_mode: If True, adds submit_plan tool for plan review workflow.
-                HITL middleware is always added for future interrupt features.
-            thread_id: Optional thread ID for thread-scoped workspace directories.
-                First 8 chars used as thread directory name in .agents/threads/{id}/.
-            on_agent_md_write: Optional callback invoked when agent.md is written/edited.
-                Used to invalidate Session's agent.md cache.
-            on_signed_url: Optional async callback(sandbox_id, port, url) to cache
-                signed preview URLs. Injected from the server layer.
+        Key non-obvious parameters:
+            checkpointer: Required for submit_plan interrupt/resume workflow.
+            thread_id: First 8 chars used as thread directory name under
+                ``.agents/threads/{id}/``.
+            user_id: First component of memory-namespace tuples. When ``None``,
+                memory is disabled entirely rather than falling back to a shared
+                namespace that would cross-pollinate unauthenticated sessions.
+            on_agent_md_write: Invalidates the Session's agent.md cache on write.
 
         Returns:
-            Configured BackgroundSubagentOrchestrator wrapping the deepagent
+            Configured BackgroundSubagentOrchestrator wrapping the deepagent.
         """
-        # Use provided LLM or fall back to instance LLM
         model = llm if llm is not None else self.llm
 
         # Freeze current time for this request (refreshes on each new query)
@@ -288,8 +261,149 @@ class PTCAgent:
         # Compute short thread ID for thread-scoped storage
         short_thread_id = thread_id[:8] if thread_id else ""
 
-        # Single backend — tools, middleware, and skill discovery all route sandbox I/O through it.
         backend = SandboxBackend(sandbox, operation_callback=operation_callback)
+
+        # Memory is opt-in: disabled entirely when identity is missing rather
+        # than falling back to a shared namespace that would cross-pollinate
+        # unauthenticated sessions.
+        workspace_id_for_memory = (
+            getattr(session, "conversation_id", None) if session else None
+        )
+        user_memory_enabled = store is not None and bool(user_id)
+        workspace_memory_enabled = (
+            store is not None and bool(user_id) and bool(workspace_id_for_memory)
+        )
+        memory_enabled = user_memory_enabled or workspace_memory_enabled
+
+        if store is not None and not memory_enabled:
+            logger.warning(
+                "memory disabled due to missing identity",
+                user_id_present=bool(user_id),
+                workspace_id_present=bool(workspace_id_for_memory),
+            )
+
+        # Memo (user-managed documents) mirrors user-tier memory: enabled
+        # whenever the store is wired and we have a user identity.
+        memo_enabled = store is not None and bool(user_id)
+
+        filesystem_backend: Any = backend
+        # Holds both MemoryContextMiddleware (memory.md injection) and
+        # MemoAwarenessMiddleware (memo count block). Both append content
+        # after the prompt-cache breakpoint, hence "dynamic context".
+        dynamic_context_middleware: list[Any] = []
+        # One cache per agent (≈ per request). Shared by every memory/memo
+        # backend route + the two read-side middlewares so that across the
+        # K model calls in a turn we pay 1 set of store reads, not K.
+        # Agent-side writes invalidate the affected key so reads in later
+        # rounds within the same turn see the fresh value.
+        store_cache: RequestScopedStoreCache | None = (
+            RequestScopedStoreCache() if (memory_enabled or memo_enabled) else None
+        )
+        if memory_enabled or memo_enabled:
+            sandbox_root = backend.root_dir.rstrip("/")
+
+            # INVARIANT: these closures capture identity at agent-creation
+            # time. Safe only because one PTCAgent is built per request — if an
+            # orchestrator ever reuses agent instances across requests, memory
+            # will cross-pollinate between users. Resolve identity at call time
+            # (e.g. via `langgraph.runtime.get_runtime()`) before introducing
+            # reuse.
+            routes: list[StoreBackend] = []
+            user_namespace_factory: NamespaceFactory | None = None
+            workspace_namespace_factory: NamespaceFactory | None = None
+            memo_namespace_factory: NamespaceFactory | None = None
+
+            if user_memory_enabled:
+                captured_user_id = user_id
+                def _user_namespace() -> tuple[str, ...]:
+                    return (captured_user_id, "memory")
+
+                user_namespace_factory = _user_namespace
+                routes.append(
+                    StoreBackend(
+                        store=store,
+                        namespace_factory=_user_namespace,
+                        root_prefix=f"{sandbox_root}/{MEMORY_USER_DIR}/",
+                        sandbox_backend=backend,
+                        cache=store_cache,
+                    )
+                )
+
+            if workspace_memory_enabled:
+                captured_user_id = user_id
+                captured_workspace_id = workspace_id_for_memory
+                def _workspace_namespace() -> tuple[str, ...]:
+                    return (
+                        captured_user_id,
+                        "workspaces",
+                        captured_workspace_id,
+                        "memory",
+                    )
+
+                workspace_namespace_factory = _workspace_namespace
+                routes.append(
+                    StoreBackend(
+                        store=store,
+                        namespace_factory=_workspace_namespace,
+                        root_prefix=f"{sandbox_root}/{MEMORY_WORKSPACE_DIR}/",
+                        sandbox_backend=backend,
+                        cache=store_cache,
+                    )
+                )
+
+            if memo_enabled:
+                captured_user_id = user_id
+                def _memo_namespace() -> tuple[str, ...]:
+                    # Plural: avoid string-prefix collision with the
+                    # ``(user_id, "memory")`` tier in AsyncPostgresStore,
+                    # whose asearch is ``LIKE 'user_id.memo%'``.
+                    return (captured_user_id, "memos")
+
+                memo_namespace_factory = _memo_namespace
+                routes.append(
+                    StoreBackend(
+                        store=store,
+                        namespace_factory=_memo_namespace,
+                        root_prefix=f"{sandbox_root}/{MEMO_USER_DIR}/",
+                        sandbox_backend=backend,
+                        read_only=True,
+                        read_only_error=(
+                            "Memo is user-managed. Ask the user to edit or "
+                            "upload via the memo panel."
+                        ),
+                        cache=store_cache,
+                    )
+                )
+
+            if routes:
+                filesystem_backend = CompositeFilesystemBackend(
+                    sandbox=backend,
+                    routes=routes,
+                )
+                if memory_enabled:
+                    dynamic_context_middleware = [
+                        MemoryContextMiddleware(
+                            store=store,
+                            user_namespace_factory=user_namespace_factory,
+                            workspace_namespace_factory=workspace_namespace_factory,
+                            user_display_path=f"{MEMORY_USER_DIR}/{MEMORY_INDEX_FILENAME}",
+                            workspace_display_path=f"{MEMORY_WORKSPACE_DIR}/{MEMORY_INDEX_FILENAME}",
+                            index_key=MEMORY_INDEX_FILENAME,
+                            cache=store_cache,
+                        )
+                    ]
+                if memo_enabled and memo_namespace_factory is not None:
+                    # Memo's count block injects after the cache breakpoint
+                    # alongside memory.md, hence the shared list.
+                    dynamic_context_middleware.append(
+                        MemoAwarenessMiddleware(
+                            store=store,
+                            user_namespace_factory=memo_namespace_factory,
+                            display_path=f"{MEMO_USER_DIR}/",
+                            index_key=MEMO_INDEX_FILENAME,
+                            cache=store_cache,
+                        )
+                    )
 
         # Create the execute_code tool for MCP invocation
         execute_code_tool = create_execute_code_tool(
@@ -310,21 +424,23 @@ class PTCAgent:
         # Start with base tools
         tools: list[Any] = [execute_code_tool, bash_tool, bash_output_tool, preview_url_tool, show_widget_tool, TodoWrite]
 
-        # Create custom filesystem tools (override deepagents middleware tools)
+        # Create custom filesystem tools (override deepagents middleware tools).
+        # `filesystem_backend` is the composite when a store is wired; otherwise
+        # it's the plain sandbox backend. Tools see a uniform rich-method
+        # surface either way.
         read_file, write_file, edit_file = create_filesystem_tools(
-            backend,
+            filesystem_backend,
             operation_callback=operation_callback,
         )
         filesystem_tools = [
             read_file,  # overrides middleware read_file
             write_file,  # overrides middleware write_file
             edit_file,  # overrides middleware edit_file
-            create_glob_tool(backend),  # overrides middleware glob
-            create_grep_tool(backend),  # overrides middleware grep
+            create_glob_tool(filesystem_backend),  # overrides middleware glob
+            create_grep_tool(filesystem_backend),  # overrides middleware grep
         ]
         tools.extend(filesystem_tools)
 
-        # Add web search tool (uses configured search engine from agent_config.yaml)
         web_search_tool = get_web_search_tool(
             max_search_results=10,
             time_range=None,
@@ -333,7 +449,6 @@ class PTCAgent:
         tools.append(web_search_tool)
         tools.append(web_fetch_tool)
 
-        # Add finance tools
         finance_tools = [
             get_sec_filing,  # SEC filing extraction (10-K, 10-Q, 8-K)
             get_stock_daily_prices,  # Stock OHLCV price data
@@ -345,15 +460,12 @@ class PTCAgent:
         ]
         tools.extend(finance_tools)
 
-        # Default to subagents from config if none specified
         if subagent_names is None:
             subagent_names = self.config.subagents.enabled
 
         # --- Build shared middleware (for both main agent and subagents) ---
         shared_middleware: list[Any] = []
 
-        # Tool middleware - handles argument parsing, error handling, and result normalization
-        # These run in order: parse args -> execute -> handle errors -> normalize results
         shared_middleware.extend(
             [
                 ToolArgumentParsingMiddleware(),
@@ -370,15 +482,12 @@ class PTCAgent:
             ]
         )
 
-        # File operation SSE middleware - emits events for write_file/edit_file
         shared_middleware.append(
             FileOperationMiddleware(
                 on_agent_md_write=on_agent_md_write,
                 work_dir=self.config.filesystem.working_directory,
             )
         )
-
-        # Todo operation SSE middleware - emits events for TodoWrite
         shared_middleware.append(TodoWriteMiddleware())
 
         # Add multimodal middleware for read_file image/PDF support (when enabled)
@@ -429,7 +538,6 @@ class PTCAgent:
         _bg_registry = background_registry or BackgroundTaskRegistry()
         event_capture_middleware = SubagentEventCaptureMiddleware(registry=_bg_registry)
 
-        # Create background subagent middleware (must be created before subagents)
         background_middleware = BackgroundSubagentMiddleware(
             timeout=background_timeout,
             enabled=True,
@@ -453,13 +561,10 @@ class PTCAgent:
                 main_only_middleware.append(plan_middleware)
                 tools.extend(plan_middleware.tools)
 
-        # Ask user question middleware (always available for main agent)
         ask_user_middleware = AskUserMiddleware()
         main_only_middleware.append(ask_user_middleware)
         tools.extend(ask_user_middleware.tools)
 
-        # Build subagent registry and compiler
-        # Note: Subagents get vision capability through VisionMiddleware in shared_middleware
         from ptc_agent.agent.tools import think_tool
 
         subagent_registry = SubagentRegistry(
@@ -496,13 +601,9 @@ class PTCAgent:
         if additional_subagents:
             subagents.extend(additional_subagents)
 
-        # Get tool summary for system prompt
         tool_summary = self._get_tool_summary(mcp_registry)
-
-        # Build subagent summary for system prompt
         subagent_summary = format_subagent_summary(subagents)
 
-        # Build system prompt and eviction dir (short_thread_id computed earlier)
         eviction_dir = (
             f".agents/threads/{short_thread_id}/large_tool_results"
             if short_thread_id
@@ -513,9 +614,10 @@ class PTCAgent:
             subagent_summary,
             plan_mode=plan_mode,
             thread_id=short_thread_id,
+            memory_enabled=memory_enabled,
+            memo_enabled=memo_enabled,
         )
 
-        # Store subagent info for introspection (used by print_agent_config)
         self.subagents = {}
         for subagent in subagents:
             name = subagent.get("name", "unknown")
@@ -528,7 +630,6 @@ class PTCAgent:
                 "tools": tool_names,
             }
 
-        # Store native tools info for introspection (used by print_agent_config)
         self.native_tools = [t.name if hasattr(t, "name") else str(t) for t in tools]
 
         logger.debug(
@@ -585,6 +686,14 @@ class PTCAgent:
         if session is not None:
             workspace_context_middleware = [WorkspaceContextMiddleware(session=session)]
 
+        # Memory context middleware (memory.md injection from LangGraph store).
+        # Built alongside the composite backend above; empty list when store is
+        # None so dev/MemorySaver runs skip the middleware entirely.
+        #
+        # Positioned next to workspace_context_middleware — both run innermost
+        # (after the prompt-cache breakpoint) so dynamic content doesn't
+        # invalidate the cached prefix.
+
         # Runtime context middleware (time + user profile — after cache breakpoint)
         runtime_context_middleware: list[Any] = [
             RuntimeContextMiddleware(
@@ -622,12 +731,12 @@ class PTCAgent:
                 EmptyToolCallRetryMiddleware(),
                 PatchToolCallsMiddleware(),
                 *workspace_context_middleware,
+                *dynamic_context_middleware,
                 *runtime_context_middleware,
             ]
             if m is not None
         ]
 
-        # Create agent with middleware stack
         agent: Any = create_agent(
             model,
             system_prompt=system_prompt,
@@ -637,7 +746,6 @@ class PTCAgent:
             store=store,
         ).with_config({"recursion_limit": 2000})
 
-        # Wrap with orchestrator for background execution support
         return BackgroundSubagentOrchestrator(
             agent=agent,
             middleware=background_middleware,

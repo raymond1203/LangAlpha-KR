@@ -1,5 +1,6 @@
 """Execute code tool for running Python code in the PTC sandbox."""
 
+import re
 from typing import Any
 
 import structlog
@@ -8,6 +9,34 @@ from langchain_core.tools import BaseTool, tool
 from ptc_agent.agent.backends.sandbox import SandboxBackend
 
 logger = structlog.get_logger(__name__)
+
+# Same guard as bash — sandbox Python cannot reach the store-backed memory or
+# user-managed memo store. Memo paths are additionally read-only to the agent.
+# Boundary-anchored so ``.agents/user/memory`` (no trailing slash) and joined
+# variants like ``"".join([".agents/user/memory", "/file"])`` cannot bypass.
+_MEMORY_PATH_MARKERS: tuple[str, ...] = (
+    r"\.agents/user/memory(?![A-Za-z0-9])",
+    r"\.agents/workspace/memory(?![A-Za-z0-9])",
+    r"\.agents/user/memo(?![A-Za-z0-9])",
+)
+_MEMORY_PATH_RE = re.compile("|".join(_MEMORY_PATH_MARKERS))
+
+_MEMORY_ROUTE_ERROR = (
+    "ERROR: Store-backed paths (.agents/user/memory/**, .agents/workspace/memory/**, "
+    ".agents/user/memo/**) are managed by the long-term memory/memo system and "
+    "are NOT on the sandbox filesystem. Read them with the Read tool before this "
+    "call and pass the content in as a string; write memory paths with "
+    "Write/Edit. Memo paths are read-only — ask the user to upload via the memo "
+    "panel. ExecuteCode cannot persist to memory or memo."
+)
+
+
+def _code_touches_memory(code: str) -> bool:
+    # Match the canonical prefix as a boundary so trailing-slash variants
+    # ('.agents/user/memory', '.agents/user/memory/foo', joined string forms)
+    # are all detected without letting names like '.agents/user/memorial'
+    # trigger a false positive.
+    return bool(_MEMORY_PATH_RE.search(code))
 
 
 def create_execute_code_tool(backend: SandboxBackend, mcp_registry: Any, thread_id: str = "") -> BaseTool:
@@ -44,6 +73,13 @@ def create_execute_code_tool(backend: SandboxBackend, mcp_registry: Any, thread_
         """
         if not backend:
             return "ERROR: Sandbox not initialized"
+
+        if _code_touches_memory(code):
+            logger.info(
+                "Blocked execute_code referencing memory path",
+                code_length=len(code),
+            )
+            return _MEMORY_ROUTE_ERROR
 
         try:
             logger.info("Executing code in sandbox", code_length=len(code), thread_id=thread_id)

@@ -17,6 +17,8 @@ Environment Variables:
     STORAGE_ENDPOINT_URL      - Custom endpoint for non-AWS services (falls back to S3_ENDPOINT_URL)
     STORAGE_PUBLIC_URL_BASE   - Public URL base (falls back to S3_PUBLIC_URL_BASE)
     STORAGE_MAX_UPLOAD_SIZE   - Max upload size in bytes (default: 10MB)
+    STORAGE_CONNECT_TIMEOUT_S - boto3 connect timeout in seconds (default: 5)
+    STORAGE_READ_TIMEOUT_S    - boto3 read timeout in seconds (default: 30)
 
 Provider-specific examples:
     AWS S3:      No endpoint needed, just credentials + bucket + region
@@ -81,6 +83,9 @@ class StorageConfig:
     DEFAULT_IMAGE_PREFIX = os.getenv("STORAGE_DEFAULT_IMAGE_PREFIX", "images/")
     DEFAULT_CHART_PREFIX = os.getenv("STORAGE_DEFAULT_CHART_PREFIX", "charts/")
 
+    CONNECT_TIMEOUT_S = int(os.getenv("STORAGE_CONNECT_TIMEOUT_S", "5"))
+    READ_TIMEOUT_S = int(os.getenv("STORAGE_READ_TIMEOUT_S", "30"))
+
     @classmethod
     def get_public_url_base(cls) -> str:
         """Get the public URL base for the bucket."""
@@ -89,8 +94,19 @@ class StorageConfig:
         return f"https://{cls.BUCKET_NAME}.s3.{cls.REGION}.amazonaws.com"
 
 
+# Module-level cache. boto3 clients are thread-safe and the underlying
+# botocore connection pool reuses TLS sessions, so a single shared client
+# eliminates the per-op handshake that previously dominated upload/download
+# latency under load. Lazy so import-time failures (missing creds in tests)
+# don't blow up modules that never actually use object storage.
+_CLIENT: Any | None = None
+
+
 def _get_client() -> Any:
-    """Create and return a configured S3-compatible client."""
+    """Return the lazily-constructed shared S3-compatible client."""
+    global _CLIENT
+    if _CLIENT is not None:
+        return _CLIENT
     kwargs: dict[str, Any] = {
         "aws_access_key_id": StorageConfig.ACCESS_KEY_ID,
         "aws_secret_access_key": StorageConfig.SECRET_ACCESS_KEY,
@@ -98,11 +114,20 @@ def _get_client() -> Any:
         "config": Config(
             signature_version="s3v4",
             retries={"max_attempts": 3, "mode": "standard"},
+            connect_timeout=StorageConfig.CONNECT_TIMEOUT_S,
+            read_timeout=StorageConfig.READ_TIMEOUT_S,
         ),
     }
     if StorageConfig.ENDPOINT_URL:
         kwargs["endpoint_url"] = StorageConfig.ENDPOINT_URL
-    return boto3.client("s3", **kwargs)
+    _CLIENT = boto3.client("s3", **kwargs)
+    return _CLIENT
+
+
+def _reset_client_for_test() -> None:
+    """Drop the cached client. Test-only — production never re-initializes."""
+    global _CLIENT
+    _CLIENT = None
 
 
 def upload_file(key: str, file_path: str, content_type: str | None = None) -> bool:
@@ -177,6 +202,36 @@ def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> bool
     except Exception:
         logger.exception(f"Unexpected error uploading {key}")
         return False
+
+
+def get_bytes(key: str) -> bytes | None:
+    """Download an object's raw bytes.
+
+    Returns ``None`` only when the object is missing (NoSuchKey/404). Any
+    other ClientError is re-raised so permission/throttling/transient
+    failures are not silently treated as "not found". Closes the streaming
+    body to release the connection back to the pool.
+    """
+    try:
+        client = _get_client()
+        response = client.get_object(Bucket=StorageConfig.BUCKET_NAME, Key=key)
+        body = response.get("Body")
+        if body is None:
+            return None
+        try:
+            data = body.read()
+            return data if isinstance(data, bytes) else bytes(data)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code")
+        if code in {"NoSuchKey", "404"}:
+            logger.debug(f"Object not found: {key}")
+            return None
+        logger.exception(f"Download failed for {key}")
+        raise
 
 
 def does_object_exist(key: str) -> bool:
