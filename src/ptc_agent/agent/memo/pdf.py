@@ -4,13 +4,22 @@ Mirrors the internals of ``src/tools/crawler/extractors/pdf.py`` but takes
 ``bytes`` directly instead of a URL. The crawler's ``PdfExtractor`` downloads
 the PDF over HTTP — wrong entry point for memo uploads where the bytes are
 already in hand.
+
+Extraction runs in a subprocess (spawn context) so a hung ``pdfplumber`` or
+``pypdf`` call can be killed on timeout. The previous
+``asyncio.wait_for(asyncio.to_thread(...))`` pattern only cancelled the
+asyncio Future — the worker thread kept running with ~1 GB RSS, defeating the
+``_EXTRACTION_CONCURRENCY`` cap once the semaphore released.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import multiprocessing as mp
+from collections.abc import Callable
 from io import BytesIO
+from multiprocessing.connection import Connection
 
 from ptc_agent.agent.memo.schema import (
     MEMO_CONTENT_MIN_CHARS,
@@ -35,6 +44,14 @@ _MAX_PDF_PAGES = 500
 # uploads land at once. Additional uploads queue on this semaphore.
 _EXTRACTION_CONCURRENCY = 2
 _EXTRACTION_SEM = asyncio.Semaphore(_EXTRACTION_CONCURRENCY)
+
+# Spawn (not fork): FastAPI runs threads (uvicorn loop, logging, asyncio I/O)
+# and fork+threads is unsafe — known to deadlock libssl, glibc allocator, etc.
+# Spawn pays ~100 ms to boot a fresh interpreter, negligible against the
+# multi-second extraction work.
+_MP_CTX = mp.get_context("spawn")
+# Grace window between SIGTERM and SIGKILL when killing a runaway subprocess.
+_PROC_KILL_GRACE_S = 1.0
 
 
 class MemoPdfExtractionError(Exception):
@@ -96,6 +113,116 @@ def _pypdf_extract(content: bytes) -> str:
     return "\n\n".join(pages)
 
 
+def _subprocess_entry(
+    extractor: Callable[[bytes], str],
+    content: bytes,
+    conn: Connection,
+) -> None:
+    """Run ``extractor`` in the subprocess and ship the result back via Pipe.
+
+    Catches ``BaseException`` so even ``MemoryError`` / ``KeyboardInterrupt``
+    propagate to the parent instead of leaving it blocked on ``poll()``.
+    """
+    try:
+        result = extractor(content)
+        conn.send(("ok", result))
+    except BaseException as exc:  # noqa: BLE001 — must round-trip every failure
+        try:
+            conn.send(("err", exc))
+        except Exception:
+            # Exception is not picklable — fall through; parent will see EOF
+            # when conn closes and raise a generic extractor failure.
+            pass
+    finally:
+        conn.close()
+
+
+def _terminate(proc: mp.Process) -> None:
+    """SIGTERM the worker, escalate to SIGKILL after the grace window."""
+    if not proc.is_alive():
+        return
+    proc.terminate()
+    proc.join(timeout=_PROC_KILL_GRACE_S)
+    if proc.is_alive():
+        proc.kill()
+        proc.join()
+
+
+def _run_in_subprocess_blocking(
+    extractor: Callable[[bytes], str],
+    content: bytes,
+    timeout: float,
+) -> str:
+    """Spawn ``extractor`` in a fresh subprocess and wait up to ``timeout``.
+
+    Returns the extractor's return value. On timeout, terminates the
+    subprocess (SIGTERM, then SIGKILL after the grace window) and raises
+    ``asyncio.TimeoutError``. Any exception raised inside the subprocess is
+    pickled across the Pipe and re-raised here.
+
+    Designed to be wrapped by ``asyncio.to_thread`` from the async layer —
+    the in-process timeout (``timeout + _PROC_KILL_GRACE_S`` upper bound)
+    means the wrapping thread always returns instead of leaking.
+    """
+    parent_conn, child_conn = _MP_CTX.Pipe(duplex=False)
+    proc: mp.Process | None = None
+    try:
+        proc = _MP_CTX.Process(
+            target=_subprocess_entry,
+            args=(extractor, content, child_conn),
+            daemon=True,
+        )
+        proc.start()
+        # Close the child end in the parent: ensures recv() raises EOFError
+        # promptly if the worker dies without sending anything (segfault, OOM
+        # kill) instead of blocking until the next send.
+        child_conn.close()
+
+        if not parent_conn.poll(timeout):
+            _terminate(proc)
+            raise asyncio.TimeoutError(
+                f"PDF extraction timed out after {timeout}s"
+            )
+        try:
+            kind, payload = parent_conn.recv()
+        except EOFError as exc:
+            raise RuntimeError(
+                "PDF extractor subprocess died without sending a result"
+            ) from exc
+        # Bounded join: the worker has sent its result and should exit
+        # immediately, but its atexit/gc cleanup can occasionally drag.
+        # Don't pin the parent on it — the finally will _terminate() if it
+        # is still alive past the grace window.
+        proc.join(timeout=_PROC_KILL_GRACE_S)
+        if kind == "ok":
+            return payload
+        # Subprocess raised — re-raise the (pickled) exception in the parent.
+        raise payload
+    finally:
+        parent_conn.close()
+        # Defensive: if proc.start() raised before our in-band close above ran,
+        # the child end would otherwise leak. Closing an already-closed
+        # Connection is a no-op.
+        try:
+            child_conn.close()
+        except Exception:
+            pass
+        if proc is not None:
+            _terminate(proc)
+
+
+async def _run_extractor(
+    extractor: Callable[[bytes], str], content: bytes
+) -> str:
+    """Async wrapper that runs the blocking subprocess runner off-loop."""
+    return await asyncio.to_thread(
+        _run_in_subprocess_blocking,
+        extractor,
+        content,
+        _EXTRACTION_TIMEOUT_S,
+    )
+
+
 async def extract_pdf_text(content: bytes) -> str:
     """Extract readable text from PDF bytes.
 
@@ -110,10 +237,7 @@ async def extract_pdf_text(content: bytes) -> str:
     async with _EXTRACTION_SEM:
         # Primary: pdfplumber
         try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_pdfplumber_extract, content),
-                timeout=_EXTRACTION_TIMEOUT_S,
-            )
+            text = await _run_extractor(_pdfplumber_extract, content)
             if _is_usable(text):
                 return text
         except asyncio.TimeoutError:
@@ -132,10 +256,7 @@ async def extract_pdf_text(content: bytes) -> str:
 
         # Fallback: pypdf
         try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_pypdf_extract, content),
-                timeout=_EXTRACTION_TIMEOUT_S,
-            )
+            text = await _run_extractor(_pypdf_extract, content)
             if _is_usable(text):
                 return text
         except asyncio.TimeoutError:
