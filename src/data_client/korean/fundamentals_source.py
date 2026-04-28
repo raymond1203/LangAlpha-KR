@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -196,8 +197,12 @@ def _fetch_performance_from_pykrx(ticker: str) -> dict[str, float | None]:
 
 # OpenDartReader 인스턴스는 corp_code XML(~5MB) 을 첫 호출에 download → 메모리 캐시.
 # /overview latency 보호 위해 모듈 싱글톤 — DART_API_KEY 미설정 시 None 반환.
+# Lock + double-checked init: 동시 /overview 요청이 to_thread 에서 동시에 들어오면
+# init 중인 thread 외 다른 thread 가 init_attempted=True 만 보고 미완성 None 받는
+# race 방지 — 첫 thread 가 OpenDartReader instantiate (수초 소요) 끝낼 때까지 wait.
 _dart_singleton: Any | None = None
 _dart_init_attempted: bool = False
+_dart_init_lock = threading.Lock()
 
 
 def _get_dart_client() -> Any | None:
@@ -205,17 +210,23 @@ def _get_dart_client() -> Any | None:
     global _dart_singleton, _dart_init_attempted
     if _dart_init_attempted:
         return _dart_singleton
-    _dart_init_attempted = True
-    api_key = os.getenv("DART_API_KEY")
-    if not api_key:
-        logger.info("kr_fundamentals.dart.no_api_key")
-        return None
-    try:
-        import OpenDartReader  # noqa: N813 — package name is camelCase
-        _dart_singleton = OpenDartReader(api_key)
-    except Exception:
-        logger.warning("kr_fundamentals.dart.client_init.failed", exc_info=True)
-        _dart_singleton = None
+    with _dart_init_lock:
+        # double-check: 다른 thread 가 lock 안에서 이미 init 끝냈을 수 있음.
+        if _dart_init_attempted:
+            return _dart_singleton
+        api_key = os.getenv("DART_API_KEY")
+        if not api_key:
+            logger.info("kr_fundamentals.dart.no_api_key")
+            _dart_singleton = None
+        else:
+            try:
+                import OpenDartReader  # noqa: N813 — package name is camelCase
+                _dart_singleton = OpenDartReader(api_key)
+            except Exception:
+                logger.warning("kr_fundamentals.dart.client_init.failed", exc_info=True)
+                _dart_singleton = None
+        # init 완전히 끝난 후 flag — 미완성 상태 노출 안 됨.
+        _dart_init_attempted = True
     return _dart_singleton
 
 
@@ -229,8 +240,11 @@ def _row_cumulative_amount(row: pd.Series) -> float | None:
 
     이 정규화로 모든 row 가 "연초부터 누적" 의미를 갖게 되어 차분 logic 단순화.
     """
+    # add_amount = 0 도 valid (해당 분기 누적이 정확히 0 인 항목 — 드물지만 가능).
+    # `_safe_float` 가 None / NaN / 빈 문자열을 None 으로 정규화하므로
+    # is-not-None 만으로 missing 판정 충분.
     add_val = _safe_float(row.get("thstrm_add_amount"))
-    if add_val is not None and add_val != 0:
+    if add_val is not None:
         return add_val
     return _safe_float(row.get("thstrm_amount"))
 
@@ -298,7 +312,9 @@ def _fetch_dart_quarterlies(
         return [], []
 
     today = datetime.now(_KST)
-    years = (today.year - 1, today.year)
+    # 직전 2년 + 당해 — 연초 (예: 1~3월) 에는 직전 해 FY 미공시라 (마감 90일 전)
+    # 직전-1 의 Q4 까지 거슬러 올라가야 quarters[-4:] 가 4개 채워짐.
+    years = (today.year - 2, today.year - 1, today.year)
 
     cumulative: dict[tuple[int, str], dict[str, float | None]] = {}
     for year in years:

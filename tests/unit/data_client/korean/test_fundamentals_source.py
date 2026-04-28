@@ -8,6 +8,7 @@ helper 로 분리해뒀으니 monkeypatch 로 deterministic mock. integration �
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -334,6 +335,126 @@ class TestExtractDartAmount:
             "thstrm_add_amount": float("nan"),
         }])
         assert fs._extract_dart_amount(df_cf, fs._OPERATING_CF_IDS, fs._OPERATING_CF_KEYWORDS, sj_divs=("CF",)) == 33_941_002_000_000.0
+
+    def test_treats_zero_thstrm_add_amount_as_valid(self):
+        """add_amount = 0 도 valid 누적치 — amount 로 fallback 하면 안 됨.
+
+        회귀 방지 — 이전엔 ``add_val != 0`` guard 로 정확히 0 인 cumulative 가
+        falsey 로 취급돼 thstrm_amount (단일 분기) 로 fallback. 차분 logic 이
+        틀어져 다음 분기 계산 결과까지 오염됨.
+        """
+        df = _make_dart_df([{
+            "sj_div": "CF",
+            "account_id": "ifrs-full_CashFlowsFromUsedInInvestingActivities",
+            "account_nm": "투자활동현금흐름",
+            "thstrm_amount": "999",      # 만약 fallback 되면 이 값 반환
+            "thstrm_add_amount": "0",    # cumulative = 0 (정확히 0 인 분기)
+        }])
+        result = fs._extract_dart_amount(df, fs._INVESTING_CF_IDS, fs._INVESTING_CF_KEYWORDS, sj_divs=("CF",))
+        assert result == 0.0
+
+
+def test_fetch_dart_quarterlies_recovers_n_minus_2_q4_when_prior_year_fy_missing(monkeypatch):
+    """연초 (FY 미공시) 시나리오 — 직전-1 Q4 까지 거슬러 quarters[-4:] 4개 확보.
+
+    회귀 방지 — years 가 (N-1, N) 만 fetch 하면 1~3월 (FY 마감 90일 전) 에는
+    직전 해 FY 누락으로 Q4 못 만들고, 결과적으로 quarters 가 3개 (Q1/Q2/Q3) 만
+    돼서 frontend 분기 차트가 비어있는 분기 칸으로 보임.
+    """
+    # 시나리오: today = 2026-02-01 (이른 연초). 2025 FY 아직 미공시.
+    # 2025 Q1/H1/9M 만 공시, 2024 는 모두 공시 완료.
+    full_year = lambda mult=1: _build_finstate_df(  # noqa: E731
+        100 * mult, 10 * mult, 8 * mult, 20 * mult, -15 * mult, -3 * mult,
+    )
+    h1 = lambda mult=1: _build_finstate_df(  # noqa: E731
+        250 * mult, 28 * mult, 22 * mult, 50 * mult, -38 * mult, -8 * mult,
+    )
+    nine_m = lambda mult=1: _build_finstate_df(  # noqa: E731
+        400 * mult, 48 * mult, 38 * mult, 80 * mult, -60 * mult, -13 * mult,
+    )
+    fy = lambda mult=1: _build_finstate_df(  # noqa: E731
+        600 * mult, 75 * mult, 60 * mult, 120 * mult, -90 * mult, -20 * mult,
+    )
+
+    def finstate_all(corp, year, reprt_code):
+        # 2024: 전부 공시
+        if year == 2024:
+            return {"11013": full_year(1), "11012": h1(1), "11014": nine_m(1), "11011": fy(1)}.get(reprt_code)
+        # 2025: Q1/H1/9M 만 공시 (FY 아직 안 나옴)
+        if year == 2025:
+            return {"11013": full_year(2), "11012": h1(2), "11014": nine_m(2)}.get(reprt_code)
+        return None
+
+    fake_dart = MagicMock()
+    fake_dart.finstate_all = finstate_all
+    monkeypatch.setattr(fs, "_get_dart_client", lambda: fake_dart)
+
+    import datetime as _dt
+    class FixedDatetime(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt.datetime(2026, 2, 1, tzinfo=tz)
+    monkeypatch.setattr(fs, "datetime", FixedDatetime)
+
+    fundamentals, _ = fs._fetch_dart_quarterlies("005930")
+
+    # quarters[-4:] = 2024 Q4 + 2025 Q1/Q2/Q3 — 4개 확보
+    periods = [q["period"] for q in fundamentals]
+    assert periods == ["2024 Q4", "2025 Q1", "2025 Q2", "2025 Q3"]
+    # 2024 Q4 = FY - 9M = (600 - 400) = 200
+    assert fundamentals[0]["revenue"] == 200.0
+    # 2025 Q1 = mult 2 → 200
+    assert fundamentals[1]["revenue"] == 200.0
+
+
+def test_get_dart_client_lock_prevents_concurrent_init_returning_none(monkeypatch):
+    """동시 호출 시 init 중인 thread 외 다른 thread 가 미완성 None 받지 않음.
+
+    회귀 방지 — 이전엔 init_attempted 를 OpenDartReader instantiate 전에 set 했고,
+    instantiate 가 수초 걸리는 동안 다른 thread 들이 None 을 받아 fundamentals
+    데이터 누락. Lock + flag-after-init 로 모든 thread 가 같은 결과 봄.
+    """
+    import threading as _threading
+    monkeypatch.setenv("DART_API_KEY", "fake-key")
+    init_call_count = 0
+    init_started = _threading.Event()
+    init_can_finish = _threading.Event()
+
+    class SlowOpenDartReader:
+        def __init__(self, key):
+            nonlocal init_call_count
+            init_call_count += 1
+            init_started.set()
+            init_can_finish.wait(timeout=2)
+
+    import sys
+    fake_module = type(sys)("OpenDartReader")
+    fake_module.__call__ = SlowOpenDartReader
+    # OpenDartReader 는 모듈명도 클래스명도 OpenDartReader — `import OpenDartReader; OpenDartReader(key)`
+    # 패턴이라 모듈을 callable 로 만들기 보다 sys.modules 통째로 mock.
+    sys.modules["OpenDartReader"] = SlowOpenDartReader  # type: ignore[assignment]
+
+    results: list[Any] = []
+
+    def call_get_client():
+        results.append(fs._get_dart_client())
+
+    t1 = _threading.Thread(target=call_get_client)
+    t2 = _threading.Thread(target=call_get_client)
+    t1.start()
+    init_started.wait(timeout=2)  # t1 이 instantiate 진입할 때까지 대기
+    t2.start()  # t2 는 lock 에서 wait 해야 함
+    init_can_finish.set()
+    t1.join(timeout=3)
+    t2.join(timeout=3)
+
+    # init 은 정확히 1번만, 두 thread 모두 같은 instance 받음 (None 없음).
+    assert init_call_count == 1
+    assert all(r is not None for r in results), f"got None during concurrent init: {results}"
+    assert results[0] is results[1]
+
+    # cleanup: sys.modules 복원
+    del sys.modules["OpenDartReader"]
 
 
 # ---------------------------------------------------------------------------
