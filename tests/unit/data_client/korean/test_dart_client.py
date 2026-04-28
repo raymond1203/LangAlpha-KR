@@ -373,3 +373,59 @@ async def test_fetch_finstate_extracted_cache_hit_skips_retry_path(monkeypatch, 
     assert result is not None
     assert result["revenue"] == 42.0
     fake_dart.finstate_all.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_for_same_key_dedupe_to_one_dart_hit(monkeypatch, fake_cache):
+    """Two concurrent callers for the same (stock, year, reprt) → single DART call.
+
+    Regression: ``get_overview`` runs ``_fetch_dart_quarterlies`` and
+    ``_fetch_dart_annuals`` in parallel; they overlap on FY (11011) for the
+    last few years. Without in-flight dedup, both miss Redis on cold cache
+    and dispatch separate DART calls for identical data.
+    """
+    import asyncio as _asyncio
+
+    # threading primitives — safe to set/check from both the worker thread
+    # (to_thread) and the asyncio main loop without cross-loop hops.
+    started = threading.Event()
+    proceed = threading.Event()
+    call_count = 0
+
+    successful_df = _build_finstate_df(100, 10, 8, 20, -15, -3)
+
+    def slow_finstate_all(*_args, **_kwargs):
+        # Runs in a worker thread (to_thread). Signal the test, then block
+        # until the test has launched the second caller and releases us.
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        # Cap at 5s so a regression here surfaces as a test failure, not a
+        # CI hang.
+        proceed.wait(timeout=5.0)
+        return successful_df
+
+    fake_dart = MagicMock()
+    fake_dart.finstate_all = slow_finstate_all
+    monkeypatch.setattr(dc, "_get_dart_client", lambda: fake_dart)
+
+    # Launch two concurrent fetches for the same key.
+    task_a = _asyncio.create_task(dc.fetch_finstate_extracted("005930", 2024, "11011"))
+    # Wait until the first caller has reached DART so task_b is guaranteed
+    # to see the in-flight entry rather than racing the cache. The worker
+    # thread runs in parallel; yield the loop until it sets started.
+    while not started.is_set():
+        await _asyncio.sleep(0.01)
+
+    task_b = _asyncio.create_task(dc.fetch_finstate_extracted("005930", 2024, "11011"))
+    # Give task_b one event-loop iteration to enter and discover the inflight entry.
+    await _asyncio.sleep(0)
+    proceed.set()
+
+    result_a, result_b = await _asyncio.gather(task_a, task_b)
+    assert result_a == result_b
+    assert result_a is not None
+    assert result_a["revenue"] == 100.0
+    assert call_count == 1, f"DART finstate_all called {call_count} times — dedup failed"
+    # In-flight table cleaned up after both callers resolved.
+    assert dc._cache_key("005930", 2024, "11011", "CFS") not in dc._inflight

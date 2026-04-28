@@ -107,11 +107,12 @@ def _get_dart_client() -> Any | None:
 
 
 def reset_singleton_for_test() -> None:
-    """Test-only: clear the cached client so the next call re-inits."""
+    """Test-only: clear the cached client + in-flight table so the next call re-inits."""
     global _dart_singleton, _dart_init_attempted
     with _dart_init_lock:
         _dart_singleton = None
         _dart_init_attempted = False
+    _inflight.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -272,18 +273,27 @@ _EMPTY_EXTRACT: dict[str, float | None] = {
 }
 
 
+# In-flight dedup: concurrent ``fetch_finstate_extracted`` calls for the same
+# (stock, year, reprt, fs_div) share one asyncio.Task. ``get_overview`` runs
+# ``_fetch_dart_quarterlies`` and ``_fetch_dart_annuals`` in parallel, and
+# their FY (11011) requests for the same year would otherwise both MISS the
+# Redis cache and dispatch separate DART hits. The dedup table is module-
+# scoped — see ``reset_singleton_for_test`` for the test reset hook.
+_inflight: dict[str, asyncio.Task[dict[str, float | None] | None]] = {}
+
+
 async def fetch_finstate_extracted(
     stock_code: str,
     year: int,
     reprt_code: str,
     fs_div: str = "CFS",
 ) -> dict[str, float | None] | None:
-    """Return extracted DART values for one (corp, year, reprt) — cached.
+    """Return extracted DART values for one (corp, year, reprt) — cached + deduped.
 
-    Cache layer (Redis, JSON):
-
-    * HIT  → return the six-key dict directly, no DART hit.
-    * MISS → call ``finstate_all`` (with retry), extract, cache, return.
+    * Cache HIT (Redis) → return the six-key dict directly, no DART hit.
+    * Cache MISS, in-flight HIT → await the existing fetch task.
+    * Cache MISS, no in-flight → call ``finstate_all`` (with retry), extract,
+      cache, return.
 
     Returns ``None`` only when the DART client is not configured
     (``DART_API_KEY`` missing). Genuine "no data" answers from DART are
@@ -300,14 +310,30 @@ async def fetch_finstate_extracted(
     if cached is not None and isinstance(cached, dict):
         return cached
 
-    df = await asyncio.to_thread(
-        _call_finstate_all_with_retry, dart, stock_code, year, reprt_code, fs_div,
-    )
-    if df is None:
-        # All retries failed — do NOT cache so the next call retries.
-        return _EMPTY_EXTRACT.copy()
+    # In-flight dedup. Single-loop asyncio: the dict check + insert below run
+    # without yielding, so two concurrent callers that miss the cache will
+    # serialize on the dict and the second sees the first's task.
+    existing = _inflight.get(key)
+    if existing is not None:
+        # ``shield`` so a cancellation in this caller doesn't cancel the
+        # underlying task that another concurrent caller may also be awaiting.
+        return await asyncio.shield(existing)
 
-    extracted = _extract_all(df) if not df.empty else _EMPTY_EXTRACT.copy()
-    has_data = any(v is not None for v in extracted.values())
-    await cache.set(key, extracted, ttl=_ttl_for(year, has_data))
-    return extracted
+    async def _fetch_and_cache() -> dict[str, float | None]:
+        df = await asyncio.to_thread(
+            _call_finstate_all_with_retry, dart, stock_code, year, reprt_code, fs_div,
+        )
+        if df is None:
+            # All retries failed — do NOT cache so the next call retries.
+            return _EMPTY_EXTRACT.copy()
+        extracted = _extract_all(df) if not df.empty else _EMPTY_EXTRACT.copy()
+        has_data = any(v is not None for v in extracted.values())
+        await cache.set(key, extracted, ttl=_ttl_for(year, has_data))
+        return extracted
+
+    task = asyncio.create_task(_fetch_and_cache())
+    _inflight[key] = task
+    try:
+        return await asyncio.shield(task)
+    finally:
+        _inflight.pop(key, None)
