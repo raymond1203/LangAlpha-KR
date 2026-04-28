@@ -540,6 +540,8 @@ async def get_company_overview(symbol: str, user_id: CurrentUserId) -> CompanyOv
                 quarterlyFundamentals=artifact.get("quarterlyFundamentals"),
                 earningsSurprises=artifact.get("earningsSurprises"),
                 cashFlow=artifact.get("cashFlow"),
+                annualFundamentals=artifact.get("annualFundamentals"),
+                annualCashFlow=artifact.get("annualCashFlow"),
                 revenueByProduct=artifact.get("revenueByProduct"),
                 revenueByGeo=artifact.get("revenueByGeo"),
             )

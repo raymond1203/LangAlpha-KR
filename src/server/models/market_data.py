@@ -216,6 +216,8 @@ class CompanyOverviewResponse(BaseModel):
     quarterlyFundamentals: Optional[List[Dict[str, Any]]] = Field(None, description="Quarterly revenue/income data")
     earningsSurprises: Optional[List[Dict[str, Any]]] = Field(None, description="EPS actual vs estimate")
     cashFlow: Optional[List[Dict[str, Any]]] = Field(None, description="Quarterly cash flow data")
+    annualFundamentals: Optional[List[Dict[str, Any]]] = Field(None, description="Annual revenue/income series")
+    annualCashFlow: Optional[List[Dict[str, Any]]] = Field(None, description="Annual cash flow series")
     revenueByProduct: Optional[Dict[str, Any]] = Field(None, description="Revenue breakdown by product")
     revenueByGeo: Optional[Dict[str, Any]] = Field(None, description="Revenue breakdown by geography")
     # FORK (#33): KR ticker (.KS / .KQ) 는 현재 fundamentals source 없음. unsupported=True 면
